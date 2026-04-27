@@ -292,3 +292,26 @@ func MemberAddWildcard(siteID string) string {
 func RoomMemberEvent(roomID string) string {
 	return fmt.Sprintf("chat.room.%s.event.member", roomID)
 }
+
+// --- search-service request/reply builders ---
+
+// SearchMessages builds the concrete subject for a message search request.
+func SearchMessages(account string) string {
+	return fmt.Sprintf("chat.user.%s.request.search.messages", account)
+}
+
+// SearchRooms builds the concrete subject for a room search request.
+func SearchRooms(account string) string {
+	return fmt.Sprintf("chat.user.%s.request.search.rooms", account)
+}
+
+// SearchMessagesPattern is the natsrouter pattern for message search, used
+// during registration to extract `{account}` from incoming subjects.
+func SearchMessagesPattern() string {
+	return "chat.user.{account}.request.search.messages"
+}
+
+// SearchRoomsPattern is the natsrouter pattern for room search.
+func SearchRoomsPattern() string {
+	return "chat.user.{account}.request.search.rooms"
+}

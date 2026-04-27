@@ -206,6 +206,94 @@ func TestAdapter_UpsertTemplate(t *testing.T) {
 	})
 }
 
+func TestAdapter_Search(t *testing.T) {
+	t.Run("single index", func(t *testing.T) {
+		var capturedPath, capturedMethod, capturedBody string
+		ft := &fakeTransport{handler: func(req *http.Request) (*http.Response, error) {
+			capturedMethod = req.Method
+			capturedPath = req.URL.Path
+			capturedBody, _ = func() (string, error) {
+				b, err := io.ReadAll(req.Body)
+				return string(b), err
+			}()
+			assert.Equal(t, "application/json", req.Header.Get("Content-Type"))
+			assert.Equal(t, "true", req.URL.Query().Get("ignore_unavailable"))
+			assert.Equal(t, "true", req.URL.Query().Get("allow_no_indices"))
+			return jsonResponse(200, `{"hits":{"total":{"value":0},"hits":[]}}`), nil
+		}}
+		a := newAdapter(ft)
+		body := json.RawMessage(`{"query":{"match_all":{}}}`)
+		raw, err := a.Search(context.Background(), []string{"spotlight"}, body)
+		require.NoError(t, err)
+		assert.Equal(t, http.MethodPost, capturedMethod)
+		assert.Equal(t, "/spotlight/_search", capturedPath)
+		assert.JSONEq(t, string(body), capturedBody)
+		assert.Contains(t, string(raw), `"hits"`)
+	})
+
+	t.Run("multiple indices joined with comma", func(t *testing.T) {
+		var capturedPath string
+		ft := &fakeTransport{handler: func(req *http.Request) (*http.Response, error) {
+			capturedPath = req.URL.Path
+			return jsonResponse(200, `{"hits":{"total":{"value":0},"hits":[]}}`), nil
+		}}
+		a := newAdapter(ft)
+		_, err := a.Search(context.Background(), []string{"messages-*", "*:messages-*"}, json.RawMessage(`{}`))
+		require.NoError(t, err)
+		assert.Equal(t, "/messages-*,*:messages-*/_search", capturedPath)
+	})
+
+	t.Run("empty indices returns error", func(t *testing.T) {
+		a := newAdapter(&fakeTransport{})
+		_, err := a.Search(context.Background(), nil, json.RawMessage(`{}`))
+		assert.Error(t, err)
+	})
+
+	t.Run("ES error status", func(t *testing.T) {
+		ft := &fakeTransport{handler: func(req *http.Request) (*http.Response, error) {
+			return jsonResponse(500, `{"error":"boom"}`), nil
+		}}
+		a := newAdapter(ft)
+		_, err := a.Search(context.Background(), []string{"spotlight"}, json.RawMessage(`{}`))
+		assert.Error(t, err)
+	})
+}
+
+func TestAdapter_GetDoc(t *testing.T) {
+	t.Run("found", func(t *testing.T) {
+		ft := &fakeTransport{handler: func(req *http.Request) (*http.Response, error) {
+			assert.Equal(t, http.MethodGet, req.Method)
+			assert.Equal(t, "/user-room/_doc/alice", req.URL.Path)
+			return jsonResponse(200, `{"_index":"user-room","_id":"alice","found":true,"_source":{"userAccount":"alice","rooms":["r1"]}}`), nil
+		}}
+		a := newAdapter(ft)
+		raw, found, err := a.GetDoc(context.Background(), "user-room", "alice")
+		require.NoError(t, err)
+		require.True(t, found)
+		assert.Contains(t, string(raw), `"userAccount":"alice"`)
+	})
+
+	t.Run("not found via 404", func(t *testing.T) {
+		ft := &fakeTransport{handler: func(req *http.Request) (*http.Response, error) {
+			return jsonResponse(404, `{"_index":"user-room","_id":"alice","found":false}`), nil
+		}}
+		a := newAdapter(ft)
+		raw, found, err := a.GetDoc(context.Background(), "user-room", "alice")
+		require.NoError(t, err)
+		assert.False(t, found)
+		assert.Nil(t, raw)
+	})
+
+	t.Run("server error", func(t *testing.T) {
+		ft := &fakeTransport{handler: func(req *http.Request) (*http.Response, error) {
+			return jsonResponse(503, `{}`), nil
+		}}
+		a := newAdapter(ft)
+		_, _, err := a.GetDoc(context.Background(), "user-room", "alice")
+		assert.Error(t, err)
+	})
+}
+
 func TestAdapter_GetIndexMapping(t *testing.T) {
 	t.Run("index exists", func(t *testing.T) {
 		ft := &fakeTransport{handler: func(req *http.Request) (*http.Response, error) {

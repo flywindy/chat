@@ -76,6 +76,14 @@ func TestSubjectBuilders(t *testing.T) {
 			"chat.user.alice.request.orgs.sect-eng.members"},
 		{"OrgMembersWildcard", subject.OrgMembersWildcard(),
 			"chat.user.*.request.orgs.*.members"},
+		{"SearchMessages", subject.SearchMessages("alice"),
+			"chat.user.alice.request.search.messages"},
+		{"SearchRooms", subject.SearchRooms("alice"),
+			"chat.user.alice.request.search.rooms"},
+		{"SearchMessagesPattern", subject.SearchMessagesPattern(),
+			"chat.user.{account}.request.search.messages"},
+		{"SearchRoomsPattern", subject.SearchRoomsPattern(),
+			"chat.user.{account}.request.search.rooms"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

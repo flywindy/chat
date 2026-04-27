@@ -59,13 +59,13 @@ This spec covers the `search-service` itself. The `user-room` schema extension i
 | CCS config flag | None | Wildcard alias works whether remote clusters are configured or not; local-only deployments silently resolve the `*:` segment to zero matches. |
 | Restricted-rooms source | ES `user-room` doc (single local GET on cache miss) | Sync-worker companion spec writes `restrictedRooms` into the doc; no Mongo read at query time. |
 | Restricted-rooms cache | Valkey, 5-min TTL, lazy-populate | Shared across replicas; graceful degradation on cache failure. |
-| Room-search restricted handling | Not shown (spotlight MVP skips `hss != nil`) | Per companion spec MVP. Documented gap. |
+| Room-search restricted handling | Restricted rooms are indexed in spotlight like any other room the user belongs to | Room search is a name-typeahead over the user's room memberships; the HSS / restricted-rooms distinction is a MESSAGE-content access-control concern enforced by Clauses A/B at query time, not a room-name discovery concern. `hss <= 0` (nil, `&0`, negative) remains the Go↔painless "unrestricted" sentinel for the message-index routing. |
 
 ---
 
 ## Architecture
 
-```
+```text
 ┌────────┐  NATS request    ┌────────────────┐   Valkey GET/SET    ┌────────┐
 │ client │ ───────────────→ │ search-service │ ←──────────────────→│ Valkey │
 └────────┘ ←─────────────── │  (natsrouter)  │                     └────────┘
@@ -113,8 +113,8 @@ Same as global, except the room-access clause partitions the requested `roomIds`
    - `multi_match` on `roomName` (bool_prefix + AND).
    - Filter: `term userAccount: {account}`.
    - Plus one conditional filter based on `req.scope`:
-     - `"channel"` → `term roomType: p`
-     - `"dm"` → `term roomType: d`
+     - `"channel"` → `term roomType: <model.RoomTypeChannel>` (== `"channel"`)
+     - `"dm"` → `term roomType: <model.RoomTypeDM>` (== `"dm"`)
      - `"all"` → (no additional filter)
      - `"app"` → handler returns `ErrBadRequest("scope=app not supported in MVP")`
 2. ES `POST spotlight/_search?ignore_unavailable=true&allow_no_indices=true` (local-only, no CCS).
@@ -221,8 +221,8 @@ Partition `req.roomIds` using the cached `restrictedRooms` map:
       "filter": [
         { "term": { "userAccount": "{account}" } }
         /* plus ONE of (from req.scope):
-           "channel" → { "term": { "roomType": "p" } }
-           "dm"      → { "term": { "roomType": "d" } }
+           "channel" → { "term": { "roomType": "<model.RoomTypeChannel>" } }  // value: "channel"
+           "dm"      → { "term": { "roomType": "<model.RoomTypeDM>" } }       // value: "dm"
            "all"     → nothing
            "app"     → handler rejects with ErrBadRequest
         */
@@ -324,7 +324,7 @@ All types get `model_test.go` round-trip coverage (nil/empty/full cases).
 
 ## Service Layout (flat, per `CLAUDE.md`)
 
-```
+```text
 search-service/
   main.go                 # config parsing, ES/Valkey/NATS wiring, natsrouter setup, graceful shutdown
   handler.go              # Handler struct + SearchMessages, SearchRooms methods; RegisterHandlers
@@ -378,17 +378,17 @@ Standard nested-prefix pattern via `caarlos0/env`:
 
 ```go
 type ESConfig struct {
-    URL     string `env:"URL" required:"true"`
+    URL     string `env:"URL,required"`
     Backend string `env:"BACKEND" envDefault:"elasticsearch"`
 }
 
 type ValkeyConfig struct {
-    Addr     string `env:"ADDR"     required:"true"`
+    Addr     string `env:"ADDR,required"`
     Password string `env:"PASSWORD" envDefault:""`
 }
 
 type NATSConfig struct {
-    URL       string `env:"URL" required:"true"`
+    URL       string `env:"URL,required"`
     CredsFile string `env:"CREDS_FILE" envDefault:""`
 }
 
@@ -398,6 +398,8 @@ type SearchConfig struct {
     RestrictedRoomsCacheTTL time.Duration `env:"RESTRICTED_ROOMS_CACHE_TTL" envDefault:"5m"`
     RecentWindow            time.Duration `env:"RECENT_WINDOW"              envDefault:"8760h"` // 1y
     RequestTimeout          time.Duration `env:"REQUEST_TIMEOUT"            envDefault:"10s"`
+    UserRoomIndex           string        `env:"USER_ROOM_INDEX"            envDefault:""`
+    MetricsAddr             string        `env:"METRICS_ADDR"               envDefault:":9090"`
 }
 
 type Config struct {
@@ -425,6 +427,8 @@ type Config struct {
 | `SEARCH_RESTRICTED_ROOMS_CACHE_TTL` | `5m` | no | Valkey TTL for per-user restricted-rooms map. |
 | `SEARCH_RECENT_WINDOW` | `8760h` | no | Basic filter window (messages-in-last-year). |
 | `SEARCH_REQUEST_TIMEOUT` | `10s` | no | Per-request upper bound. |
+| `SEARCH_USER_ROOM_INDEX` | `""` | no | Override for the user-room access-control index; empty uses the `user-room` default constant. |
+| `SEARCH_METRICS_ADDR` | `:9090` | no | Listen address for the Prometheus `/metrics` HTTP server. |
 
 No remote-cluster env var. No CCS toggle. The `messages-*,*:messages-*` index pattern is a hardcoded constant in the query builders.
 
@@ -563,7 +567,7 @@ Using `testcontainers-go` (NATS, Elasticsearch, Valkey modules):
 - `TestSearchService_SearchMessages_Restricted` — user-room doc with entries in both `rooms[]` and `restrictedRooms{}`; assert filtering honors HSS bound.
 - `TestSearchService_SearchMessages_ScopedRoomIds` — request subset mix, assert partition.
 - `TestSearchService_SearchMessages_CacheBehavior` — first request triggers prefetch + set, second hits cache only.
-- **`TestSearchService_SearchMessages_CCS_CrossCluster`** — two ES containers on same docker network, `PUT /_cluster/settings { "persistent": { "cluster.remote.remote1.seeds": ["es-remote1:9300"] } }` against local; seed distinct messages in each; assert merged results.
+- **`TestSearchService_SearchMessages_CCS_CrossCluster`** — two ES containers on same docker network, `PUT /_cluster/settings { "persistent": { "cluster.remote.remote1.mode": "proxy", "cluster.remote.remote1.proxy_address": "<remote-host>:9300" } }` against local (proxy mode — see "Production CCS Topology Notes" for why); seed distinct messages in each; assert merged results.
 - `TestSearchService_SearchRooms_HappyPath` — seed spotlight docs, assert shape.
 - `TestSearchService_SearchRooms_Scope_{Channel,DM,All}` — seed docs with mixed `roomType`, assert filtering.
 - `TestSearchService_SearchRooms_AppRejected` — `scope=app` → `ErrBadRequest`.
@@ -584,15 +588,73 @@ Using `testcontainers-go` (NATS, Elasticsearch, Valkey modules):
 
 | Gap | Impact | Follow-up needed |
 |---|---|---|
-| `attachment_text`, `card_data`, `msg` not in message index — only `content` searched | Messages with non-text content not discoverable | Extend `MessageSearchIndex` in search-sync-worker + message-worker event schema. |
-| `hidden` field not indexed | Hidden messages leak into results | Extend message index. |
-| `t=tcard` / `visibleTo` filter logic dropped | User-specific card visibility not enforced | Extend message index; restore filter. |
+| `attachment_text`, `card_data` not in message index — only `content` searched (the Rocket.Chat `msg` field IS `content` in this codebase, so they're the same field, not two gaps) | Messages with non-text content (attachments, card payloads) not discoverable | Extend `MessageSearchIndex` in search-sync-worker + message-worker event schema. The `t=tcard` / `visibleTo` per-user card-visibility filter rides on this same work — once `card_data` is indexed, restore the filter as part of the same PR. |
+| `hidden` messages not evicted from ES | Hidden messages remain searchable until the room is reindexed | Subscribe to a message-hidden/deleted event and issue an ES `_delete_by_query` (or a bulk delete) — design decision is to REMOVE hidden messages from ES rather than indexing a `hidden` field and filtering at query time. |
 | `archived`, `prid`, `botDM` not indexed for room search | Archived/thread-sub/bot-DM rooms not filtered | Extend spotlight index + event payload. |
 | `fname`, `sidebarname` not in spotlight — multi-match on `roomName` only | Old display-name-aware search reduced | Extend spotlight index. |
 | `ls`, `_updatedAt`, `fname` sort not available | Room search sort is score+joinedAt only | Extend spotlight index + indexed fields. |
 | `scope=app` (bot DM) rejected | Clients lose that scope | Index `botDM`, re-enable. |
 | No push invalidation of Valkey cache | Up to 5 min window where a user unsubscribed from a restricted room still sees their messages in search | Subscribe to `chat.user.{account}.event.subscriptions.changed` and delete cache entry. |
-| Spotlight doesn't index restricted rooms | Restricted rooms missing from room search | Separate event-level flag or strategy; see companion sync-worker spec. |
+
+---
+
+## Production CCS Topology Notes
+
+The service code queries the fixed pattern `messages-*,*:messages-*`
+and leaves cluster-wiring as an **ops concern**. How many clusters
+you CCS to and in which mode is decided at the ES `_cluster/settings`
+layer, not in service config. This section captures the decision
+space so the next operator doesn't have to rediscover it.
+
+### Mode per remote — `proxy` vs `sniff`
+
+| | `sniff` (ES default) | `proxy` |
+|---|---|---|
+| **How it works** | Local cluster seeds a connection to the remote, then **discovers** every remote node (usually data + coordinating tier) and opens `node_connections` (default 3) to each. Each subsequent request load-balances across those connections. | Local cluster opens `proxy_socket_connections` (default 18) to the single configured `proxy_address`. No discovery. |
+| **Requires** | Every remote node to advertise a `publish_address` that the local cluster can route to. On k8s that means remote pod IPs reachable from local pods (node-routable pod networking — Calico BGP / AWS VPC CNI / GKE alias IPs). | Only the `proxy_address` (usually an ingress LB / service VIP) to be reachable. |
+| **Pros** | Automatic failover if a remote node dies. Lower p99 (direct connection to the data node, no extra hop). | Single reachable address per remote. No discovery surface. Works through firewalls / NAT / k8s ingress. |
+| **Cons** | Breaks the moment a remote node's publish address isn't routable from the local cluster. No tolerance for cross-cluster network boundaries. | Extra hop (ingress → data node). Single-point bottleneck unless the proxy is itself a load-balancer. |
+
+### Topology path — two common prod shapes
+
+**Path A — k8s ingress gateway in front of each cluster (no cross-cluster pod reachability):**
+- Each k8s cluster has its own ingress gateway terminating external traffic.
+- ES pods are NOT routable from outside their own k8s cluster.
+- **Pick proxy mode.** `proxy_address` = the ingress-exposed address for the remote cluster's transport port (9300). One `_cluster/settings` per remote on the cluster doing the federating.
+- Security: TLS on the ingress, `cluster.remote.<name>.transport.compress` if bandwidth-bound, remote-cluster API keys if auth is needed.
+
+**Path B — node-routable pods (single VPC, Calico BGP / VPC-CNI / equivalent):**
+- Every k8s pod IP is routable from every other k8s cluster in the same VPC.
+- **Sniff mode becomes viable and often preferred** — you get direct node-to-node connections with automatic failover. Latency is lower because there's no ingress hop.
+- Remote ES pods must set `network.publish_host` to their pod IP (via k8s downward API `status.podIP`) so discovery returns addresses the local cluster can actually route to.
+- Security is mandatory here, not optional: there's no ingress boundary between clusters, so **TLS on the transport layer (port 9300) + remote-cluster API keys or cert-based auth** are required. Otherwise any pod in the routable network could connect to remote ES. k8s NetworkPolicies to allow only ES↔ES traffic are strongly advised.
+
+### Federation shape at N clusters (O(N²) problem)
+
+At ~10-12 clusters, CCS config maintenance starts to dominate.
+
+| Shape | `_cluster/settings` to maintain | Trade-off |
+|---|---|---|
+| **Full mesh** | N × (N−1) | Any cluster's search reaches every message. Operationally expensive — updating a remote's address touches (N−1) clusters. |
+| **Hub-and-spoke** | N (at the hub only) | One dedicated search-hub cluster federates all N. `search-service` points at the hub. Single source of truth for CCS config; easier TLS. Hub must be HA'd since it's SPOF for search. |
+| **Per-site service deployments** | K per cluster (K = average remotes that site needs) | Deploy `search-service` near each cluster so a user's home-site is the entry point. Fan-out scope is decided per site. Still O(N²) in the worst case. |
+
+**Recommended default at ~12 clusters: hub-and-spoke + `proxy` mode** (if behind ingresses) **or + `sniff` mode** (if node-routable). One place to edit CCS configs, one place to roll TLS certs, and `search-service` always points at the hub.
+
+### Per-remote operational knobs (set on every remote regardless of mode)
+
+| Setting | Why |
+|---|---|
+| `cluster.remote.<name>.skip_unavailable: true` | **Strongly recommended at any N; critical at N > 2.** Without it, one down remote fails every CCS query fleet-wide. With it, the remote's shards are skipped and the search returns partial results with a `_shards.skipped` count. |
+| `cluster.remote.<name>.transport.ping_schedule` | Detect dead remote connections faster than TCP keepalive. Typical value: `30s`. |
+| Request-side `timeout` / `search_timeout` | Per-search upper bound; prevents one slow cluster from tail-latency-poisoning every query. |
+| TLS on transport (9300) + cert chain between clusters | Mandatory for path B (node-routable), strongly recommended for path A (even when ingress terminates TLS, transport-layer TLS means compromise of one cluster doesn't implicitly let it masquerade as another). |
+
+### What the service guarantees regardless of topology
+
+- **Query shape is fixed**: `messages-*,*:messages-*` with `ignore_unavailable=true&allow_no_indices=true`. No service-side fan-out, no per-cluster config.
+- **Local-only queries degrade gracefully**: when no remote is configured, the `*:messages-*` segment resolves to zero matches and the query returns only local hits — no code path change needed.
+- **Partial-failure tolerance**: if `skip_unavailable=true` is set on each remote at the ES layer, a down remote doesn't fail the request. The service does NOT introspect `_shards.skipped` today — callers with strict-consistency needs would need a follow-up to surface that in the response.
 
 ---
 

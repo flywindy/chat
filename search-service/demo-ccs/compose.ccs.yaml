@@ -1,0 +1,64 @@
+name: chat-ccs-demo
+
+# Demo extension for the local dev stack. Adds a SECOND Elasticsearch
+# cluster (`es-remote`) to the existing `chat-local` network created by
+# docker-local/compose.deps.yaml, then configures the local ES (from
+# `make deps-up`) to Cross-Cluster-Search against it.
+#
+# Run instructions: see README.md in this directory.
+
+services:
+  es-remote:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.17.0
+    container_name: chat-local-es-remote
+    environment:
+      - cluster.name=chat-remote
+      - node.name=es-remote
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+      # Transport port is how the LOCAL cluster reaches this cluster for
+      # CCS. Proxy mode on the local side dials `es-remote:9300` inside
+      # the shared docker network.
+      - transport.host=0.0.0.0
+      - transport.port=9300
+    ports:
+      # HTTP on 9201 (host) → 9200 (container). Keeps 9200 free for the
+      # existing `elasticsearch` deps container.
+      - "9201:9200"
+    volumes:
+      - es-remote-data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:9200/_cluster/health | grep -Eq '\"status\":\"(yellow|green)\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - chat-local
+
+  # One-shot CCS wiring + seed. Lives in the `setup` profile so plain
+  # `docker compose up` ignores it — invoke explicitly with
+  # `--profile setup run --rm setup`.
+  setup:
+    image: curlimages/curl:8.11.1
+    profiles: ["setup"]
+    depends_on:
+      es-remote:
+        condition: service_healthy
+    entrypoint: ["sh", "/setup.sh"]
+    volumes:
+      - ./setup.sh:/setup.sh:ro
+      - ./template.json:/template.json:ro
+      - ./seed-local.ndjson:/seed-local.ndjson:ro
+      - ./seed-remote.ndjson:/seed-remote.ndjson:ro
+      - ./user-room.json:/user-room.json:ro
+    networks:
+      - chat-local
+
+volumes:
+  es-remote-data:
+
+networks:
+  chat-local:
+    external: true

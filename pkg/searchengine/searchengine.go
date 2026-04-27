@@ -58,4 +58,18 @@ type SearchEngine interface {
 	Bulk(ctx context.Context, actions []BulkAction) ([]BulkResult, error)
 	UpsertTemplate(ctx context.Context, name string, body json.RawMessage) error
 	GetIndexMapping(ctx context.Context, index string) (json.RawMessage, error)
+
+	// Search executes a `_search` against the comma-joined list of indices
+	// and returns the raw response body. `ignore_unavailable=true` and
+	// `allow_no_indices=true` are applied automatically so unknown remote
+	// clusters and missing local indices degrade to an empty result set
+	// rather than an error. Callers that need CCS pass patterns like
+	// []string{"messages-*", "*:messages-*"}.
+	Search(ctx context.Context, indices []string, body json.RawMessage) (json.RawMessage, error)
+
+	// GetDoc fetches a single document by index and id. Returns found=false
+	// and a nil body on 404 (doc or index missing); the two cases are
+	// indistinguishable to the caller and are treated uniformly as
+	// "no document" — same convention as GetIndexMapping.
+	GetDoc(ctx context.Context, index, docID string) (json.RawMessage, bool, error)
 }

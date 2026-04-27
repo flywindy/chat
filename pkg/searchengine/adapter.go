@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strings"
 )
 
 type bulkActionMeta struct {
@@ -102,7 +104,10 @@ func (a *httpAdapter) Bulk(ctx context.Context, actions []BulkAction) ([]BulkRes
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return nil, fmt.Errorf("bulk: status %d, read body: %w", resp.StatusCode, readErr)
+		}
 		return nil, fmt.Errorf("bulk: status %d, body: %s", resp.StatusCode, body)
 	}
 
@@ -138,7 +143,10 @@ func (a *httpAdapter) UpsertTemplate(ctx context.Context, name string, body json
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
+		respBody, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return fmt.Errorf("upsert template: status %d, read body: %w", resp.StatusCode, readErr)
+		}
 		return fmt.Errorf("upsert template: status %d, body: %s", resp.StatusCode, respBody)
 	}
 	return nil
@@ -161,7 +169,10 @@ func (a *httpAdapter) GetIndexMapping(ctx context.Context, index string) (json.R
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return nil, fmt.Errorf("get index mapping: status %d, read body: %w", resp.StatusCode, readErr)
+		}
 		return nil, fmt.Errorf("get index mapping: status %d, body: %s", resp.StatusCode, body)
 	}
 
@@ -170,4 +181,77 @@ func (a *httpAdapter) GetIndexMapping(ctx context.Context, index string) (json.R
 		return nil, fmt.Errorf("read mapping response: %w", err)
 	}
 	return body, nil
+}
+
+// Search executes a `_search` against the comma-joined indices with
+// `ignore_unavailable=true&allow_no_indices=true` so unknown remote clusters
+// and missing local indices return empty hits rather than a 404/503.
+func (a *httpAdapter) Search(ctx context.Context, indices []string, body json.RawMessage) (json.RawMessage, error) {
+	if len(indices) == 0 {
+		return nil, fmt.Errorf("search: indices required")
+	}
+	path := fmt.Sprintf("/%s/_search?ignore_unavailable=true&allow_no_indices=true", strings.Join(indices, ","))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, path, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("create search request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := a.transport.Perform(req)
+	if err != nil {
+		return nil, fmt.Errorf("search request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return nil, fmt.Errorf("search: status %d, read body: %w", resp.StatusCode, readErr)
+		}
+		return nil, fmt.Errorf("search: status %d, body: %s", resp.StatusCode, respBody)
+	}
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read search response: %w", err)
+	}
+	return data, nil
+}
+
+// GetDoc fetches a single document by id. Returns (nil, false, nil) on 404.
+//
+// Both `index` and `docID` are URL-path-escaped defensively — ES doc IDs
+// can legally contain `/`, `?`, `#`, or whitespace, and an un-escaped
+// value there would malform the request path. The caller is expected to
+// pass a single index name (not a comma-joined pattern) for this endpoint.
+func (a *httpAdapter) GetDoc(ctx context.Context, index, docID string) (json.RawMessage, bool, error) {
+	path := fmt.Sprintf("/%s/_doc/%s", url.PathEscape(index), url.PathEscape(docID))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return nil, false, fmt.Errorf("create get-doc request: %w", err)
+	}
+
+	resp, err := a.transport.Perform(req)
+	if err != nil {
+		return nil, false, fmt.Errorf("get-doc request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, false, nil
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return nil, false, fmt.Errorf("get-doc: status %d, read body: %w", resp.StatusCode, readErr)
+		}
+		return nil, false, fmt.Errorf("get-doc: status %d, body: %s", resp.StatusCode, respBody)
+	}
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, false, fmt.Errorf("read get-doc response: %w", err)
+	}
+	return data, true, nil
 }

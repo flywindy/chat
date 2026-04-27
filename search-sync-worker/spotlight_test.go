@@ -158,12 +158,12 @@ func TestSpotlightCollection_BuildAction_MemberRemoved(t *testing.T) {
 	assert.Nil(t, action.Doc)
 }
 
-func TestSpotlightCollection_BuildAction_RestrictedRoomSkipped(t *testing.T) {
+func TestSpotlightCollection_BuildAction_RestrictedRoomIndexedLikeAnyOther(t *testing.T) {
+	// See spotlightCollection.BuildAction docstring for the room-name
+	// vs message-content access boundary.
 	coll := newSpotlightCollection("spotlight-site-a-v1-chat")
 	payload := baseInboxMemberEvent()
 	payload.Accounts = []string{"alice", "bob"}
-	// Event-level HistorySharedSince short-circuits the entire bulk —
-	// spotlight keeps MVP skip for restricted rooms; user-room stores them.
 	hss := int64(1735689500000)
 	payload.HistorySharedSince = &hss
 
@@ -171,7 +171,28 @@ func TestSpotlightCollection_BuildAction_RestrictedRoomSkipped(t *testing.T) {
 
 	actions, err := coll.BuildAction(data)
 	require.NoError(t, err)
-	assert.Empty(t, actions, "restricted-room event should produce no actions")
+	require.Len(t, actions, 2, "restricted room must still produce one doc per account")
+
+	docIDs := make([]string, len(actions))
+	for i, a := range actions {
+		docIDs[i] = a.DocID
+		assert.Equal(t, searchengine.ActionIndex, a.Action)
+		assert.Equal(t, "spotlight-site-a-v1-chat", a.Index)
+		// evt.Timestamp → external version propagation. If a future
+		// refactor silently drops Version for the restricted path,
+		// spotlight would lose idempotency under redelivery.
+		assert.Equal(t, int64(100), a.Version)
+		require.NotNil(t, a.Doc, "restricted room must produce a populated doc, not a delete")
+
+		// Confirm the room NAME — the discoverability payload this
+		// whole change is about — actually made it into the indexed
+		// body, not just that an index action was emitted.
+		var body map[string]any
+		require.NoError(t, json.Unmarshal(a.Doc, &body))
+		assert.Equal(t, "r-eng", body["roomId"])
+		assert.Equal(t, "engineering", body["roomName"])
+	}
+	assert.ElementsMatch(t, []string{"alice_r-eng", "bob_r-eng"}, docIDs)
 }
 
 func TestSpotlightCollection_BuildAction_Errors(t *testing.T) {

@@ -81,9 +81,15 @@ func (b *inboxMemberCollection) FilterSubjects(siteID string) []string {
 // InboxMemberEvent payload and validates the common preconditions shared by
 // all inbox-member collections.
 //
-// Callers decide how to handle the event-level restricted-room flag:
-//   - spotlight keeps the MVP skip on `payload.HistorySharedSince != nil`
-//   - user-room routes the event into `restrictedRooms{}` on the doc
+// Callers decide how to handle the event-level restricted-room flag.
+// The Go↔painless contract is "positive hss means restricted" — i.e.
+// `payload.HistorySharedSince != nil && *payload.HistorySharedSince > 0`;
+// a nil pointer OR a leaked `&0`/negative pointer is the intentional
+// "unrestricted" sentinel.
+//   - user-room routes the event into `restrictedRooms{}` on positive
+//     HSS, otherwise into `rooms[]`
+//   - spotlight indexes the room regardless of HSS; HSS is a
+//     message-content access concern, not a room-name discovery one
 func parseMemberEvent(data []byte) (*model.OutboxEvent, *model.InboxMemberEvent, error) {
 	var evt model.OutboxEvent
 	if err := json.Unmarshal(data, &evt); err != nil {

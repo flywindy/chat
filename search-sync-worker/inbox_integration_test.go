@@ -36,9 +36,10 @@ func createInboxStream(t *testing.T, ctx context.Context, js jetstream.JetStream
 }
 
 // buildInboxMemberEvent constructs an InboxMemberEvent payload for tests.
-// `historySharedSince` is nil for unrestricted; non-nil marks the bulk as
-// restricted — user-room routes it into restrictedRooms{}, spotlight skips.
-// `joinedAt` is only meaningful on add events; pass 0 for removes.
+// `historySharedSince` is nil for unrestricted; non-nil with a positive
+// value marks the bulk as restricted. See parseMemberEvent for how each
+// collection consumes the flag. `joinedAt` is only meaningful on add
+// events; pass 0 for removes.
 func buildInboxMemberEvent(
 	roomID, roomName, siteID string,
 	accounts []string,

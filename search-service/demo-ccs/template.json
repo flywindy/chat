@@ -1,0 +1,52 @@
+{
+  "index_patterns": ["messages-*"],
+  "priority": 10,
+  "template": {
+    "settings": {
+      "index": {
+        "number_of_shards": 1,
+        "number_of_replicas": 0,
+        "refresh_interval": "1s"
+      },
+      "analysis": {
+        "analyzer": {
+          "custom_analyzer": {
+            "type": "custom",
+            "tokenizer": "underscore_preserving",
+            "filter": ["underscore_subword", "cjk_bigram", "lowercase"],
+            "char_filter": ["html_strip"]
+          }
+        },
+        "tokenizer": {
+          "underscore_preserving": {
+            "type": "pattern",
+            "pattern": "[\\s,;!?()\\[\\]{}\"'<>]+"
+          }
+        },
+        "filter": {
+          "underscore_subword": {
+            "type": "word_delimiter_graph",
+            "split_on_case_change": false,
+            "split_on_numerics": false,
+            "preserve_original": true
+          }
+        }
+      }
+    },
+    "mappings": {
+      "dynamic": false,
+      "properties": {
+        "messageId":                    { "type": "keyword" },
+        "roomId":                       { "type": "keyword" },
+        "siteId":                       { "type": "keyword" },
+        "userId":                       { "type": "keyword" },
+        "userAccount":                  { "type": "keyword" },
+        "content":                      { "type": "text", "analyzer": "custom_analyzer" },
+        "createdAt":                    { "type": "date" },
+        "threadParentMessageId":        { "type": "keyword" },
+        "threadParentMessageCreatedAt": { "type": "date" },
+        "tshow":                        { "type": "boolean" }
+      }
+    }
+  }
+}

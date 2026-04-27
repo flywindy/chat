@@ -1,0 +1,34 @@
+name: search-service
+
+services:
+  search-service:
+    build:
+      context: ../..
+      dockerfile: search-service/deploy/Dockerfile
+    environment:
+      - NATS_URL=nats://nats:4222
+      - NATS_CREDS_FILE=/etc/nats/backend.creds
+      - SITE_ID=site-local
+      - SEARCH_URL=http://elasticsearch:9200
+      - SEARCH_BACKEND=elasticsearch
+      - VALKEY_ADDR=valkey:6379
+      - VALKEY_PASSWORD=
+      - SEARCH_DOC_COUNTS=25
+      - SEARCH_MAX_DOC_COUNTS=100
+      - SEARCH_RESTRICTED_ROOMS_CACHE_TTL=5m
+      - SEARCH_RECENT_WINDOW=8760h
+      - SEARCH_REQUEST_TIMEOUT=10s
+      - SEARCH_METRICS_ADDR=:9090
+    ports:
+      # Expose /metrics so Prometheus / curl can scrape from the host
+      # during local dev. The listener is bound on 0.0.0.0:9090 inside
+      # the container.
+      - "9090:9090"
+    volumes:
+      - ../../docker-local/backend.creds:/etc/nats/backend.creds:ro
+    networks:
+      - chat-local
+
+networks:
+  chat-local:
+    external: true

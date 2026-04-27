@@ -17,4 +17,5 @@ include:
   - ../notification-worker/deploy/docker-compose.yml
   - ../room-service/deploy/docker-compose.yml
   - ../room-worker/deploy/docker-compose.yml
+  - ../search-service/deploy/docker-compose.yml
   - ../search-sync-worker/deploy/docker-compose.yml

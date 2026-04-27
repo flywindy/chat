@@ -1,0 +1,8 @@
+{"index":{"_index":"messages-2026-04","_id":"m2-remote-1"}}
+{"messageId":"m2-remote-1","roomId":"room2","siteId":"site-remote","userId":"u-alice","userAccount":"alice","content":"hello from remote room2","createdAt":"2026-04-20T11:00:00Z"}
+{"index":{"_index":"messages-2026-04","_id":"m2-remote-2"}}
+{"messageId":"m2-remote-2","roomId":"room2","siteId":"site-remote","userId":"u-dave","userAccount":"dave","content":"alice are you on remote site","createdAt":"2026-04-20T11:01:00Z"}
+{"index":{"_index":"messages-2026-04","_id":"m2-remote-3"}}
+{"messageId":"m2-remote-3","roomId":"room2","siteId":"site-remote","userId":"u-alice","userAccount":"alice","content":"yes running the ccs demo","createdAt":"2026-04-20T11:02:00Z"}
+{"index":{"_index":"messages-2026-04","_id":"m2-remote-4"}}
+{"messageId":"m2-remote-4","roomId":"room2","siteId":"site-remote","userId":"u-alice","userAccount":"alice","content":"test search across clusters","createdAt":"2026-04-20T11:03:00Z"}

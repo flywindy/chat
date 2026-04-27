@@ -1,0 +1,8 @@
+{"index":{"_index":"messages-2026-04","_id":"m1-local-1"}}
+{"messageId":"m1-local-1","roomId":"room1","siteId":"site-local","userId":"u-alice","userAccount":"alice","content":"hello from local room1","createdAt":"2026-04-20T10:00:00Z"}
+{"index":{"_index":"messages-2026-04","_id":"m1-local-2"}}
+{"messageId":"m1-local-2","roomId":"room1","siteId":"site-local","userId":"u-bob","userAccount":"bob","content":"hi alice, are you around","createdAt":"2026-04-20T10:01:00Z"}
+{"index":{"_index":"messages-2026-04","_id":"m1-local-3"}}
+{"messageId":"m1-local-3","roomId":"room1","siteId":"site-local","userId":"u-alice","userAccount":"alice","content":"yes, testing search service","createdAt":"2026-04-20T10:02:00Z"}
+{"index":{"_index":"messages-2026-04","_id":"m1-local-4"}}
+{"messageId":"m1-local-4","roomId":"room1","siteId":"site-local","userId":"u-carol","userAccount":"carol","content":"ccs demo local cluster message","createdAt":"2026-04-20T10:03:00Z"}

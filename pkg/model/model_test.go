@@ -1294,6 +1294,121 @@ func TestRoomsInfoBatchResponseJSON(t *testing.T) {
 	}
 }
 
+func TestSearchMessagesRequestJSON(t *testing.T) {
+	t.Run("full", func(t *testing.T) {
+		req := model.SearchMessagesRequest{
+			SearchText: "hello",
+			RoomIds:    []string{"r1", "r2"},
+			Size:       50,
+			Offset:     25,
+		}
+		data, err := json.Marshal(&req)
+		require.NoError(t, err)
+		var dst model.SearchMessagesRequest
+		require.NoError(t, json.Unmarshal(data, &dst))
+		assert.True(t, reflect.DeepEqual(req, dst))
+	})
+
+	t.Run("global (roomIds omitted when nil)", func(t *testing.T) {
+		req := model.SearchMessagesRequest{SearchText: "hello"}
+		data, err := json.Marshal(&req)
+		require.NoError(t, err)
+		var raw map[string]any
+		require.NoError(t, json.Unmarshal(data, &raw))
+		_, present := raw["roomIds"]
+		assert.False(t, present, "roomIds must be omitted when nil")
+	})
+}
+
+func TestSearchMessagesResponseJSON(t *testing.T) {
+	created := time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC)
+	parent := time.Date(2026, 3, 30, 12, 0, 0, 0, time.UTC)
+	resp := model.SearchMessagesResponse{
+		Total: 3,
+		Results: []model.MessageSearchHit{
+			{
+				MessageID:             "m1",
+				RoomID:                "r1",
+				SiteID:                "site-a",
+				UserID:                "u1",
+				UserAccount:           "alice",
+				Content:               "hello",
+				CreatedAt:             created,
+				ThreadParentMessageID: "p1",
+				ThreadParentCreatedAt: &parent,
+			},
+			{
+				MessageID:   "m2",
+				RoomID:      "r2",
+				SiteID:      "site-b",
+				UserID:      "u2",
+				UserAccount: "bob",
+				Content:     "world",
+				CreatedAt:   created,
+			},
+		},
+	}
+	data, err := json.Marshal(&resp)
+	require.NoError(t, err)
+	var dst model.SearchMessagesResponse
+	require.NoError(t, json.Unmarshal(data, &dst))
+	assert.True(t, reflect.DeepEqual(resp, dst))
+}
+
+func TestMessageSearchHitThreadFieldsOmitted(t *testing.T) {
+	hit := model.MessageSearchHit{
+		MessageID: "m1", RoomID: "r1", SiteID: "site-a",
+		UserID: "u1", UserAccount: "alice", Content: "hi",
+		CreatedAt: time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC),
+	}
+	data, err := json.Marshal(&hit)
+	require.NoError(t, err)
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(data, &raw))
+	_, hasPid := raw["threadParentMessageId"]
+	_, hasPts := raw["threadParentMessageCreatedAt"]
+	assert.False(t, hasPid, "threadParentMessageId must be omitted when empty")
+	assert.False(t, hasPts, "threadParentMessageCreatedAt must be omitted when nil")
+}
+
+func TestSearchRoomsRequestJSON(t *testing.T) {
+	t.Run("full", func(t *testing.T) {
+		req := model.SearchRoomsRequest{
+			SearchText: "general",
+			Scope:      "channel",
+			Size:       25,
+			Offset:     0,
+		}
+		roundTrip(t, &req, &model.SearchRoomsRequest{})
+	})
+
+	t.Run("scope omitted when empty", func(t *testing.T) {
+		req := model.SearchRoomsRequest{SearchText: "x"}
+		data, err := json.Marshal(&req)
+		require.NoError(t, err)
+		var raw map[string]any
+		require.NoError(t, json.Unmarshal(data, &raw))
+		_, present := raw["scope"]
+		assert.False(t, present, "scope must be omitted when empty")
+	})
+}
+
+func TestSearchRoomsResponseJSON(t *testing.T) {
+	joined := time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC)
+	resp := model.SearchRoomsResponse{
+		Total: 2,
+		Results: []model.RoomSearchHit{
+			{RoomID: "r1", RoomName: "general", RoomType: "p", UserAccount: "alice", SiteID: "site-a", JoinedAt: joined},
+			{RoomID: "r2", RoomName: "alice-bob", RoomType: "d", UserAccount: "alice", SiteID: "site-a", JoinedAt: joined},
+		},
+	}
+	data, err := json.Marshal(&resp)
+	require.NoError(t, err)
+	var dst model.SearchRoomsResponse
+	require.NoError(t, json.Unmarshal(data, &dst))
+	assert.True(t, reflect.DeepEqual(resp, dst))
+}
+
 // roundTrip marshals src to JSON, unmarshals into dst, and compares.
 func roundTrip[T any](t *testing.T, src *T, dst *T) {
 	t.Helper()

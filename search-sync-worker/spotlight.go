@@ -44,10 +44,12 @@ func (c *spotlightCollection) TemplateBody() json.RawMessage {
 // event is redelivered, every action 409s uniformly and is treated as a
 // successful idempotent replay.
 //
-// Restricted rooms (HistorySharedSince != nil on the event) short-circuit the
-// entire bulk and return an empty slice. The spotlight index keeps the MVP
-// skip for restricted rooms; user-room (not spotlight) stores restricted-room
-// membership on the per-user ES doc via `restrictedRooms{}`.
+// Restricted rooms are indexed the same as unrestricted rooms. Spotlight
+// is a room-name typeahead over rooms the user belongs to — the HSS /
+// restricted-rooms distinction is a MESSAGE-content access-control
+// concern, enforced at query time by search-service's Clauses A/B against
+// the messages index. Room-name discovery has no such boundary: a user
+// who joined a restricted room must still be able to find it by name.
 func (c *spotlightCollection) BuildAction(data []byte) ([]searchengine.BulkAction, error) {
 	evt, payload, err := parseMemberEvent(data)
 	if err != nil {
@@ -55,12 +57,6 @@ func (c *spotlightCollection) BuildAction(data []byte) ([]searchengine.BulkActio
 	}
 	if payload.RoomID == "" {
 		return nil, fmt.Errorf("build spotlight action: missing roomId")
-	}
-	// Spotlight skips restricted rooms (MVP); user-room stores them.
-	// Mirror user_room.go's `hss > 0` sentinel so a leaked &0 is treated as
-	// unrestricted by both indices.
-	if payload.HistorySharedSince != nil && *payload.HistorySharedSince > 0 {
-		return nil, nil
 	}
 	if len(payload.Accounts) == 0 {
 		return nil, fmt.Errorf("build spotlight action: empty accounts")
