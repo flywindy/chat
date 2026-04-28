@@ -25,6 +25,7 @@ import (
 	"github.com/hmchangw/chat/pkg/natsutil"
 	"github.com/hmchangw/chat/pkg/searchengine"
 	"github.com/hmchangw/chat/pkg/subject"
+	"github.com/hmchangw/chat/pkg/testutil/testimages"
 	"github.com/hmchangw/chat/pkg/valkeyutil"
 )
 
@@ -155,7 +156,7 @@ func startESForCCS(t *testing.T, nw *testcontainers.DockerNetwork, alias, cluste
 
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
-			Image:        "elasticsearch:8.17.0",
+			Image:        testimages.Elasticsearch,
 			ExposedPorts: []string{"9200/tcp", "9300/tcp"},
 			Networks:     []string{nw.Name},
 			NetworkAliases: map[string][]string{
@@ -194,7 +195,7 @@ func startValkey(t *testing.T) string {
 	ctx := context.Background()
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
-			Image:        "valkey/valkey:8-alpine",
+			Image:        testimages.Valkey,
 			ExposedPorts: []string{"6379/tcp"},
 			Cmd:          []string{"valkey-server", "--save", "", "--appendonly", "no"},
 			WaitingFor:   wait.ForLog("Ready to accept connections").WithStartupTimeout(30 * time.Second),
@@ -214,7 +215,7 @@ func startValkey(t *testing.T) string {
 func startNATS(t *testing.T) string {
 	t.Helper()
 	ctx := context.Background()
-	c, err := natsmod.Run(ctx, "nats:2.11-alpine")
+	c, err := natsmod.Run(ctx, testimages.NATS)
 	require.NoError(t, err, "start nats")
 	t.Cleanup(func() { _ = c.Terminate(ctx) })
 

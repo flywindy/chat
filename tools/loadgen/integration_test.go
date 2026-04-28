@@ -21,6 +21,7 @@ import (
 	"github.com/hmchangw/chat/pkg/mongoutil"
 	"github.com/hmchangw/chat/pkg/stream"
 	"github.com/hmchangw/chat/pkg/subject"
+	"github.com/hmchangw/chat/pkg/testutil/testimages"
 )
 
 // setupNATS starts a JetStream-enabled NATS container via the generic
@@ -30,7 +31,7 @@ func setupNATS(t *testing.T) (string, func()) {
 	ctx := context.Background()
 	c, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
-			Image:        "nats:2.11-alpine",
+			Image:        testimages.NATS,
 			Cmd:          []string{"-js"},
 			ExposedPorts: []string{"4222/tcp"},
 			WaitingFor:   wait.ForLog("Server is ready").WithStartupTimeout(30 * time.Second),
@@ -48,7 +49,7 @@ func setupNATS(t *testing.T) (string, func()) {
 func setupMongo(t *testing.T) (string, func()) {
 	t.Helper()
 	ctx := context.Background()
-	c, err := mongodb.Run(ctx, "mongo:8")
+	c, err := mongodb.Run(ctx, testimages.Mongo)
 	require.NoError(t, err)
 	uri, err := c.ConnectionString(ctx)
 	require.NoError(t, err)

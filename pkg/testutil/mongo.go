@@ -13,9 +13,9 @@ import (
 	"github.com/testcontainers/testcontainers-go/modules/mongodb"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
-)
 
-const mongoImage = "mongo:8"
+	"github.com/hmchangw/chat/pkg/testutil/testimages"
+)
 
 var (
 	mongoOnce    sync.Once
@@ -26,7 +26,7 @@ var (
 func ensureMongoClient() (*mongo.Client, error) {
 	mongoOnce.Do(func() {
 		ctx := context.Background()
-		container, err := mongodb.Run(ctx, mongoImage)
+		container, err := mongodb.Run(ctx, testimages.Mongo)
 		if err != nil {
 			mongoInitErr = fmt.Errorf("start mongo: %w", err)
 			return
