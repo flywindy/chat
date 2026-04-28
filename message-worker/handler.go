@@ -26,7 +26,6 @@ func NewHandler(store Store, userStore userstore.UserStore, threadStore ThreadSt
 	return &Handler{store: store, userStore: userStore, threadStore: threadStore}
 }
 
-// HandleJetStreamMsg processes a JetStream message from the MESSAGES_CANONICAL stream.
 func (h *Handler) HandleJetStreamMsg(ctx context.Context, msg jetstream.Msg) {
 	if err := h.processMessage(ctx, msg.Data()); err != nil {
 		slog.Error("process message failed", "error", err)
@@ -94,23 +93,24 @@ func (h *Handler) processMessage(ctx context.Context, data []byte) error {
 	return nil
 }
 
-// handleThreadRoomAndSubscriptions creates the ThreadRoom on first reply and
-// inserts ThreadSubscriptions for the parent author and replier. On subsequent
-// replies it checks whether the replier already has a subscription (inserting
-// if not) and bumps the room's last-message pointer.
-// It returns the threadRoomID so the caller can pass it to SaveThreadMessage.
 func (h *Handler) handleThreadRoomAndSubscriptions(ctx context.Context, msg *model.Message, siteID string) (string, error) {
 	now := msg.CreatedAt
 
+	var parentCreatedAt time.Time
+	if msg.ThreadParentMessageCreatedAt != nil {
+		parentCreatedAt = *msg.ThreadParentMessageCreatedAt
+	}
 	threadRoom := model.ThreadRoom{
-		ID:              idgen.GenerateID(),
-		ParentMessageID: msg.ThreadParentMessageID,
-		RoomID:          msg.RoomID,
-		SiteID:          siteID,
-		LastMsgAt:       now,
-		LastMsgID:       msg.ID,
-		CreatedAt:       now,
-		UpdatedAt:       now,
+		ID:                    idgen.GenerateID(),
+		ParentMessageID:       msg.ThreadParentMessageID,
+		ThreadParentCreatedAt: parentCreatedAt,
+		RoomID:                msg.RoomID,
+		SiteID:                siteID,
+		LastMsgAt:             now,
+		LastMsgID:             msg.ID,
+		ReplyAccounts:         []string{msg.UserAccount},
+		CreatedAt:             now,
+		UpdatedAt:             now,
 	}
 
 	err := h.threadStore.CreateThreadRoom(ctx, &threadRoom)
@@ -124,10 +124,6 @@ func (h *Handler) handleThreadRoomAndSubscriptions(ctx context.Context, msg *mod
 	}
 }
 
-// handleFirstThreadReply runs after the thread room has just been created.
-// It inserts subscriptions for the parent author and, if distinct, for the replier.
-// lastSeenAt is always nil — the subscription is brand-new and the user has not
-// yet "seen" the thread.
 func (h *Handler) handleFirstThreadReply(ctx context.Context, msg *model.Message, siteID, threadRoomID string, now time.Time) error {
 	parentSender, err := h.store.GetMessageSender(ctx, msg.ThreadParentMessageID)
 	if err != nil {
@@ -154,20 +150,26 @@ func (h *Handler) handleFirstThreadReply(ctx context.Context, msg *model.Message
 		}
 	}
 
+	// Requires ThreadParentMessageCreatedAt to address the Cassandra row;
+	// skipped when absent.
+	if msg.ThreadParentMessageCreatedAt != nil {
+		if err := h.store.UpdateParentMessageThreadRoomID(ctx, msg.ThreadParentMessageID, msg.RoomID, *msg.ThreadParentMessageCreatedAt, threadRoomID); err != nil {
+			return fmt.Errorf("stamp thread_room_id on parent message: %w", err)
+		}
+	}
+
 	return nil
 }
 
-// handleSubsequentThreadReply runs when CreateThreadRoom reported an existing room.
-// It upserts subscriptions for both the parent author and the replier — idempotent
-// so redeliveries after a partial first attempt never lose the parent subscription —
-// then bumps the room's last-message pointer.
-// Returns the existing thread room ID so the caller can pass it to SaveThreadMessage.
+// Upserts are idempotent — redeliveries after a partial first attempt never lose
+// the parent subscription.
 func (h *Handler) handleSubsequentThreadReply(ctx context.Context, msg *model.Message, siteID string, now time.Time) (string, error) {
 	existingRoom, err := h.threadStore.GetThreadRoomByParentMessageID(ctx, msg.ThreadParentMessageID)
 	if err != nil {
 		return "", fmt.Errorf("get existing thread room: %w", err)
 	}
 
+	parentFound := true
 	parentSender, err := h.store.GetMessageSender(ctx, msg.ThreadParentMessageID)
 	switch {
 	case err == nil:
@@ -184,6 +186,7 @@ func (h *Handler) handleSubsequentThreadReply(ctx context.Context, msg *model.Me
 			}
 		}
 	case errors.Is(err, errMessageNotFound):
+		parentFound = false
 		slog.Warn("thread reply parent not found — skipping parent subscription upsert",
 			"parentMessageID", msg.ThreadParentMessageID,
 			"replyID", msg.ID)
@@ -196,16 +199,23 @@ func (h *Handler) handleSubsequentThreadReply(ctx context.Context, msg *model.Me
 		return "", fmt.Errorf("get parent message sender: %w", err)
 	}
 
-	if err := h.threadStore.UpdateThreadRoomLastMessage(ctx, existingRoom.ID, msg.ID, now); err != nil {
+	if err := h.threadStore.UpdateThreadRoomLastMessage(ctx, existingRoom.ID, msg.ID, msg.UserAccount, now); err != nil {
 		return "", fmt.Errorf("update thread room last message: %w", err)
+	}
+
+	// Re-stamp handles redelivery: first attempt may have created the thread room
+	// but crashed before the stamp landed. IF EXISTS in the store prevents phantom rows.
+	if parentFound && msg.ThreadParentMessageCreatedAt != nil {
+		if err := h.store.UpdateParentMessageThreadRoomID(ctx, msg.ThreadParentMessageID, msg.RoomID, *msg.ThreadParentMessageCreatedAt, existingRoom.ID); err != nil {
+			return "", fmt.Errorf("stamp thread_room_id on parent message: %w", err)
+		}
 	}
 
 	return existingRoom.ID, nil
 }
 
-// buildThreadSubscription constructs a ThreadSubscription for (threadRoomID, userID).
-// lastSeenAt is always nil — subscriptions are insert-only; the field is never
-// updated by the message worker.
+// lastSeenAt is always nil — subscriptions are insert-only; only the read path
+// (client marking the thread as seen) ever sets this field.
 func (h *Handler) buildThreadSubscription(msg *model.Message, threadRoomID, userID, userAccount, siteID string, now time.Time) *model.ThreadSubscription {
 	return &model.ThreadSubscription{
 		ID:              idgen.GenerateID(),
@@ -221,9 +231,8 @@ func (h *Handler) buildThreadSubscription(msg *model.Message, threadRoomID, user
 	}
 }
 
-// markThreadMentions flips hasMention=true on the thread subscription of every
-// @account mentionee in msg (auto-creating the subscription if absent). The
-// sender is excluded, and @all is ignored at the thread level.
+// Sender and @all are excluded: sender already has a subscription; @all is a
+// broadcast that shouldn't trigger per-user mention state in threads.
 func (h *Handler) markThreadMentions(ctx context.Context, msg *model.Message, threadRoomID, siteID string) error {
 	for i := range msg.Mentions {
 		p := &msg.Mentions[i]

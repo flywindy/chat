@@ -16,6 +16,12 @@ func TestCanModify(t *testing.T) {
 		want    bool
 	}{
 		{
+			name:    "nil message — not allowed",
+			msg:     nil,
+			account: "alice",
+			want:    false,
+		},
+		{
 			name:    "sender matches — allowed",
 			msg:     &models.Message{Sender: models.Participant{Account: "alice"}},
 			account: "alice",

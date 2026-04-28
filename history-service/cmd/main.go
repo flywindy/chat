@@ -60,9 +60,17 @@ func main() {
 	}
 
 	cassRepo := cassrepo.NewRepository(cassSession)
-	mongoRepo := mongorepo.NewSubscriptionRepo(mongoClient.Database(cfg.Mongo.DB))
+	db := mongoClient.Database(cfg.Mongo.DB)
+	subRepo := mongorepo.NewSubscriptionRepo(db)
+	threadRoomRepo := mongorepo.NewThreadRoomRepo(db)
+
+	if err := threadRoomRepo.EnsureIndexes(ctx); err != nil {
+		slog.Error("ensure thread_rooms indexes failed", "error", err)
+		os.Exit(1)
+	}
+
 	pub := publisher.New(nc)
-	svc := service.New(cassRepo, mongoRepo, pub)
+	svc := service.New(cassRepo, subRepo, pub, threadRoomRepo)
 	router := natsrouter.New(nc, "history-service")
 	router.Use(natsrouter.Recovery())
 	router.Use(natsrouter.Logging())

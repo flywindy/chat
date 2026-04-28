@@ -1,6 +1,6 @@
 CREATE TABLE IF NOT EXISTS chat.thread_messages_by_room (
   room_id               TEXT,
-  thread_room_id        TEXT, // TODO: future value from threadRooms collection; currently holds "N/A"
+  thread_room_id        TEXT,
   created_at            TIMESTAMP,
   message_id            TEXT,
   thread_parent_id      TEXT,

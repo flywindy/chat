@@ -28,8 +28,8 @@ var _ ThreadStore = (*threadStoreMongo)(nil)
 
 func newThreadStoreMongo(db *mongo.Database) *threadStoreMongo {
 	return &threadStoreMongo{
-		threadRooms:         db.Collection("threadRooms"),
-		threadSubscriptions: db.Collection("threadSubscriptions"),
+		threadRooms:         db.Collection("thread_rooms"),
+		threadSubscriptions: db.Collection("thread_subscriptions"),
 	}
 }
 
@@ -39,21 +39,30 @@ func (s *threadStoreMongo) EnsureIndexes(ctx context.Context) error {
 		Keys:    bson.D{{Key: "parentMessageId", Value: 1}},
 		Options: options.Index().SetUnique(true),
 	}); err != nil {
-		return fmt.Errorf("ensure threadRooms parentMessageId index: %w", err)
+		return fmt.Errorf("ensure thread_rooms parentMessageId index: %w", err)
 	}
 
+	// Best-effort: drop the legacy (threadRoomId, userId) unique index so the new
+	// (threadRoomId, userAccount) index can be created without a key conflict.
+	// The collection or index may not exist (fresh deploy / test container) — ignore all errors.
+	_ = s.threadSubscriptions.Indexes().DropOne(ctx, "threadRoomId_1_userId_1") //nolint:errcheck
+
 	if _, err := s.threadSubscriptions.Indexes().CreateOne(ctx, mongo.IndexModel{
-		Keys:    bson.D{{Key: "threadRoomId", Value: 1}, {Key: "userId", Value: 1}},
+		Keys:    bson.D{{Key: "threadRoomId", Value: 1}, {Key: "userAccount", Value: 1}},
 		Options: options.Index().SetUnique(true),
 	}); err != nil {
-		return fmt.Errorf("ensure threadSubscriptions (threadRoomId,userId) index: %w", err)
+		return fmt.Errorf("ensure thread_subscriptions (threadRoomId,userAccount) index: %w", err)
 	}
 
 	return nil
 }
 
 func (s *threadStoreMongo) CreateThreadRoom(ctx context.Context, room *model.ThreadRoom) error {
-	_, err := s.threadRooms.InsertOne(ctx, room)
+	toInsert := *room
+	if toInsert.ReplyAccounts == nil {
+		toInsert.ReplyAccounts = []string{}
+	}
+	_, err := s.threadRooms.InsertOne(ctx, &toInsert)
 	if err != nil {
 		if mongo.IsDuplicateKeyError(err) {
 			return fmt.Errorf("insert thread room: %w", errThreadRoomExists)
@@ -81,10 +90,10 @@ func (s *threadStoreMongo) InsertThreadSubscription(ctx context.Context, sub *mo
 	return nil
 }
 
-// UpsertThreadSubscription inserts sub if no document exists for (threadRoomId, userId);
+// UpsertThreadSubscription inserts sub if no document exists for (threadRoomId, userAccount);
 // otherwise it is a no-op. $setOnInsert ensures existing subscriptions are never overwritten.
 func (s *threadStoreMongo) UpsertThreadSubscription(ctx context.Context, sub *model.ThreadSubscription) error {
-	filter := bson.M{"threadRoomId": sub.ThreadRoomID, "userId": sub.UserID}
+	filter := bson.M{"threadRoomId": sub.ThreadRoomID, "userAccount": sub.UserAccount}
 	update := bson.M{"$setOnInsert": sub}
 	if _, err := s.threadSubscriptions.UpdateOne(ctx, filter, update, options.UpdateOne().SetUpsert(true)); err != nil {
 		return fmt.Errorf("upsert thread subscription: %w", err)
@@ -92,12 +101,11 @@ func (s *threadStoreMongo) UpsertThreadSubscription(ctx context.Context, sub *mo
 	return nil
 }
 
-// MarkThreadSubscriptionMention sets hasMention=true on the (threadRoomID,userID)
-// subscription, creating it from sub when absent. Fields in $setOnInsert apply only
-// on insert; hasMention and updatedAt live in $set so both new and existing rows
-// end up with hasMention=true and a fresh updatedAt.
+// MarkThreadSubscriptionMention sets hasMention=true on the (threadRoomId, userAccount)
+// subscription. $setOnInsert / $set split: on insert all fields are written; on update
+// only hasMention and updatedAt change so existing subscription state is preserved.
 func (s *threadStoreMongo) MarkThreadSubscriptionMention(ctx context.Context, sub *model.ThreadSubscription) error {
-	filter := bson.M{"threadRoomId": sub.ThreadRoomID, "userId": sub.UserID}
+	filter := bson.M{"threadRoomId": sub.ThreadRoomID, "userAccount": sub.UserAccount}
 	update := bson.M{
 		"$setOnInsert": bson.M{
 			"_id":             sub.ID,
@@ -121,13 +129,14 @@ func (s *threadStoreMongo) MarkThreadSubscriptionMention(ctx context.Context, su
 	return nil
 }
 
-func (s *threadStoreMongo) UpdateThreadRoomLastMessage(ctx context.Context, threadRoomID string, lastMsgID string, lastMsgAt time.Time) error {
+func (s *threadStoreMongo) UpdateThreadRoomLastMessage(ctx context.Context, threadRoomID, lastMsgID, replierAccount string, lastMsgAt time.Time) error {
 	_, err := s.threadRooms.UpdateOne(ctx, bson.M{"_id": threadRoomID}, bson.M{
 		"$set": bson.M{
 			"lastMsgAt": lastMsgAt,
 			"lastMsgId": lastMsgID,
 			"updatedAt": lastMsgAt,
 		},
+		"$addToSet": bson.M{"replyAccounts": replierAccount},
 	})
 	if err != nil {
 		return fmt.Errorf("update thread room last message: %w", err)

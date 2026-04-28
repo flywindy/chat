@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"time"
 
 	"github.com/gocql/gocql"
 
@@ -80,11 +82,6 @@ func (s *CassandraStore) SaveMessage(ctx context.Context, msg *model.Message, se
 	return nil
 }
 
-// SaveThreadMessage inserts a thread reply into messages_by_id and thread_messages_by_room,
-// then increments tcount on the parent message in both messages_by_id and messages_by_room.
-// threadRoomID is the ID of the ThreadRoom document that anchors this thread (created or
-// fetched by handleThreadRoomAndSubscriptions before this call).
-// If any operation fails the error is returned immediately; JetStream will redeliver the message.
 func (s *CassandraStore) SaveThreadMessage(ctx context.Context, msg *model.Message, sender *cassParticipant, siteID string, threadRoomID string) error {
 	if err := s.cassSession.Query(
 		`INSERT INTO messages_by_id
@@ -201,6 +198,33 @@ func (s *CassandraStore) incrementParentTcount(ctx context.Context, msg *model.M
 		return fmt.Errorf("cas tcount in messages_by_room for parent %s: %w", parentID, err)
 	}
 
+	return nil
+}
+
+// IF EXISTS prevents phantom rows: without it a bare UPDATE on a missing row would
+// materialise a partial Cassandra row containing only thread_room_id.
+func (s *CassandraStore) UpdateParentMessageThreadRoomID(ctx context.Context, parentMessageID, roomID string, parentCreatedAt time.Time, threadRoomID string) error {
+	applied, err := s.cassSession.Query(
+		`UPDATE messages_by_id SET thread_room_id = ? WHERE message_id = ? AND created_at = ? IF EXISTS`,
+		threadRoomID, parentMessageID, parentCreatedAt,
+	).WithContext(ctx).ScanCAS()
+	if err != nil {
+		return fmt.Errorf("set thread_room_id on parent %s in messages_by_id: %w", parentMessageID, err)
+	}
+	if !applied {
+		slog.Warn("parent row absent in messages_by_id; thread_room_id not stamped", "messageID", parentMessageID)
+	}
+
+	applied, err = s.cassSession.Query(
+		`UPDATE messages_by_room SET thread_room_id = ? WHERE room_id = ? AND created_at = ? AND message_id = ? IF EXISTS`,
+		threadRoomID, roomID, parentCreatedAt, parentMessageID,
+	).WithContext(ctx).ScanCAS()
+	if err != nil {
+		return fmt.Errorf("set thread_room_id on parent %s in messages_by_room: %w", parentMessageID, err)
+	}
+	if !applied {
+		slog.Warn("parent row absent in messages_by_room; thread_room_id not stamped", "messageID", parentMessageID, "roomID", roomID)
+	}
 	return nil
 }
 

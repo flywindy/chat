@@ -12,28 +12,22 @@ import (
 
 const subscriptionsCollection = "subscriptions"
 
-// SubscriptionRepo implements service.SubscriptionRepository using MongoDB.
 type SubscriptionRepo struct {
 	subscriptions *Collection[model.Subscription]
 }
 
-// NewSubscriptionRepo creates a new MongoDB subscription repository.
 func NewSubscriptionRepo(db *mongo.Database) *SubscriptionRepo {
 	return &SubscriptionRepo{
 		subscriptions: NewCollection[model.Subscription](db.Collection(subscriptionsCollection)),
 	}
 }
 
-// GetSubscription returns the full subscription for a user in a room.
-// Returns (nil, nil) when the user is not subscribed.
+// GetSubscription returns the full subscription for a user in a room, or (nil, nil) when not subscribed.
 func (r *SubscriptionRepo) GetSubscription(ctx context.Context, account, roomID string) (*model.Subscription, error) {
 	return r.subscriptions.FindOne(ctx, bson.M{"u.account": account, "roomId": roomID})
 }
 
-// GetHistorySharedSince returns the HistorySharedSince timestamp for a subscription.
-// Returns (nil, true, nil) when subscribed but no HSS is set (owner — full history access).
-// Returns (&t, true, nil) when subscribed with a restriction.
-// Returns (nil, false, nil) when not subscribed.
+// GetHistorySharedSince returns (nil, true, nil) = full access; (&t, true, nil) = restricted; (nil, false, nil) = not subscribed.
 func (r *SubscriptionRepo) GetHistorySharedSince(ctx context.Context, account, roomID string) (*time.Time, bool, error) {
 	sub, err := r.subscriptions.FindOne(ctx,
 		bson.M{"u.account": account, "roomId": roomID},

@@ -7,14 +7,12 @@ import (
 	"github.com/gocql/gocql"
 )
 
-// Cursor is an opaque pagination token wrapping Cassandra's PageState.
-// It is base64-encoded for safe transport in JSON and URLs.
+// Cursor wraps Cassandra's PageState as a base64-encoded pagination token.
 type Cursor struct {
 	state []byte
 }
 
-// NewCursor decodes a base64-encoded cursor string.
-// An empty string returns a zero cursor (first page).
+// NewCursor decodes a base64-encoded cursor string; empty string returns the first-page cursor.
 func NewCursor(encoded string) (*Cursor, error) {
 	if encoded == "" {
 		return &Cursor{}, nil
@@ -26,8 +24,7 @@ func NewCursor(encoded string) (*Cursor, error) {
 	return &Cursor{state: state}, nil
 }
 
-// Encode returns the base64 representation of the cursor.
-// Returns empty string for a zero cursor (no more pages).
+// Encode returns the base64 cursor string, or empty string when there are no more pages.
 func (c *Cursor) Encode() string {
 	if len(c.state) == 0 {
 		return ""
@@ -35,19 +32,14 @@ func (c *Cursor) Encode() string {
 	return base64.StdEncoding.EncodeToString(c.state)
 }
 
-// Raw returns the underlying Cassandra PageState bytes.
-func (c *Cursor) Raw() []byte {
-	return c.state
-}
+func (c *Cursor) Raw() []byte { return c.state }
 
-// Page is a generic paginated result from Cassandra.
 type Page[T any] struct {
 	Data       []T    `json:"data"`
 	NextCursor string `json:"nextCursor,omitempty"`
 	HasNext    bool   `json:"hasNext"`
 }
 
-// PageRequest represents a pagination request from the client.
 type PageRequest struct {
 	Cursor   *Cursor
 	PageSize int
@@ -58,9 +50,7 @@ const (
 	maxPageSize     = 100
 )
 
-// ParsePageRequest creates a PageRequest from a cursor string and page size.
-// Returns a valid PageRequest with defaults applied for invalid/missing values.
-// Default page size is 50, max is 100.
+// ParsePageRequest validates and normalises cursor+pageSize. Default 50, max 100.
 func ParsePageRequest(cursorStr string, pageSize int) (PageRequest, error) {
 	cursor, err := NewCursor(cursorStr)
 	if err != nil {
@@ -75,34 +65,27 @@ func ParsePageRequest(cursorStr string, pageSize int) (PageRequest, error) {
 	return PageRequest{Cursor: cursor, PageSize: pageSize}, nil
 }
 
-// QueryBuilder wraps a *gocql.Query with pagination support.
-// Use NewQueryBuilder to create, then chain WithCursor and WithPageSize,
-// and call Fetch to execute.
 type QueryBuilder struct {
 	query    *gocql.Query
 	cursor   *Cursor
 	pageSize int
 }
 
-// NewQueryBuilder wraps an existing gocql.Query with pagination.
 func NewQueryBuilder(q *gocql.Query) *QueryBuilder {
 	return &QueryBuilder{query: q, pageSize: defaultPageSize}
 }
 
-// WithCursor sets the pagination cursor for resuming from a previous page.
 func (b *QueryBuilder) WithCursor(cursor *Cursor) *QueryBuilder {
 	b.cursor = cursor
 	return b
 }
 
-// WithPageSize sets the number of results per page.
 func (b *QueryBuilder) WithPageSize(size int) *QueryBuilder {
 	b.pageSize = size
 	return b
 }
 
-// Fetch executes the query and passes the iterator to the callback for scanning.
-// The caller controls the scan loop. Returns the encoded next cursor and any error.
+// Fetch executes the query; scan is called with the page iterator. Returns the encoded next-page cursor.
 func (b *QueryBuilder) Fetch(scan func(iter *gocql.Iter)) (string, error) {
 	if b.query == nil {
 		return "", fmt.Errorf("execute paged query: nil query")

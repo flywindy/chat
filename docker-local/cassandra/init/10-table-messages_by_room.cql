@@ -2,7 +2,7 @@ CREATE TABLE IF NOT EXISTS chat.messages_by_room (
   room_id                  TEXT,
   created_at               TIMESTAMP,
   message_id               TEXT,
-  thread_room_id           TEXT, // TODO: future value from threadRooms collection; currently holds "N/A"
+  thread_room_id           TEXT,
   sender                   FROZEN<"Participant">,
   target_user              FROZEN<"Participant">,
   msg                      TEXT,
@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS chat.messages_by_room (
   tshow                    BOOLEAN, // means from thread [also sent to channel]
   tcount                   INT,     // reply thread count
   thread_parent_id         TEXT,
-  thread_parent_created_at TIMESTAMP, // for FE to query thread parent message
+  thread_parent_created_at TIMESTAMP, // for FE to query thread parent message when also sent to channel (tshow=true)
   quoted_parent_message    FROZEN<"QuotedParentMessage">,
   visible_to               TEXT,
   unread                   BOOLEAN,

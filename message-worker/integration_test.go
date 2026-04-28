@@ -426,7 +426,7 @@ func TestHandler_Integration_ThreadReply(t *testing.T) {
 
 	t.Run("thread room created", func(t *testing.T) {
 		var room model.ThreadRoom
-		err := db.Collection("threadRooms").FindOne(ctx, bson.M{
+		err := db.Collection("thread_rooms").FindOne(ctx, bson.M{
 			"parentMessageId": "msg-parent",
 		}).Decode(&room)
 		require.NoError(t, err)
@@ -437,7 +437,7 @@ func TestHandler_Integration_ThreadReply(t *testing.T) {
 	})
 
 	t.Run("parent author subscribed", func(t *testing.T) {
-		count, err := db.Collection("threadSubscriptions").CountDocuments(ctx, bson.M{
+		count, err := db.Collection("thread_subscriptions").CountDocuments(ctx, bson.M{
 			"userId":          "u-parent",
 			"parentMessageId": "msg-parent",
 		})
@@ -446,7 +446,7 @@ func TestHandler_Integration_ThreadReply(t *testing.T) {
 	})
 
 	t.Run("replier subscribed", func(t *testing.T) {
-		count, err := db.Collection("threadSubscriptions").CountDocuments(ctx, bson.M{
+		count, err := db.Collection("thread_subscriptions").CountDocuments(ctx, bson.M{
 			"userId":          "u-replier",
 			"parentMessageId": "msg-parent",
 		})
@@ -474,7 +474,7 @@ func TestHandler_Integration_ThreadReply(t *testing.T) {
 
 	t.Run("thread room lastMsgId updated", func(t *testing.T) {
 		var room model.ThreadRoom
-		err := db.Collection("threadRooms").FindOne(ctx, bson.M{
+		err := db.Collection("thread_rooms").FindOne(ctx, bson.M{
 			"parentMessageId": "msg-parent",
 		}).Decode(&room)
 		require.NoError(t, err)
@@ -482,7 +482,7 @@ func TestHandler_Integration_ThreadReply(t *testing.T) {
 	})
 
 	t.Run("still only two subscriptions after second reply", func(t *testing.T) {
-		count, err := db.Collection("threadSubscriptions").CountDocuments(ctx, bson.M{
+		count, err := db.Collection("thread_subscriptions").CountDocuments(ctx, bson.M{
 			"parentMessageId": "msg-parent",
 		})
 		require.NoError(t, err)
@@ -535,7 +535,7 @@ func TestHandler_Integration_ThreadReplyWithMention(t *testing.T) {
 
 	t.Run("bob auto-subscribed with hasMention=true", func(t *testing.T) {
 		var got model.ThreadSubscription
-		err := db.Collection("threadSubscriptions").FindOne(ctx, bson.M{
+		err := db.Collection("thread_subscriptions").FindOne(ctx, bson.M{
 			"parentMessageId": "msg-parent-mention",
 			"userId":          "u-bob",
 		}).Decode(&got)
@@ -547,7 +547,7 @@ func TestHandler_Integration_ThreadReplyWithMention(t *testing.T) {
 
 	t.Run("parent author subscribed with hasMention=false (not mentioned)", func(t *testing.T) {
 		var got model.ThreadSubscription
-		err := db.Collection("threadSubscriptions").FindOne(ctx, bson.M{
+		err := db.Collection("thread_subscriptions").FindOne(ctx, bson.M{
 			"parentMessageId": "msg-parent-mention",
 			"userId":          "u-parent",
 		}).Decode(&got)
@@ -557,7 +557,7 @@ func TestHandler_Integration_ThreadReplyWithMention(t *testing.T) {
 
 	t.Run("replier subscribed with hasMention=false (sender excluded)", func(t *testing.T) {
 		var got model.ThreadSubscription
-		err := db.Collection("threadSubscriptions").FindOne(ctx, bson.M{
+		err := db.Collection("thread_subscriptions").FindOne(ctx, bson.M{
 			"parentMessageId": "msg-parent-mention",
 			"userId":          "u-replier",
 		}).Decode(&got)
@@ -566,7 +566,7 @@ func TestHandler_Integration_ThreadReplyWithMention(t *testing.T) {
 	})
 
 	t.Run("three thread subscriptions total", func(t *testing.T) {
-		count, err := db.Collection("threadSubscriptions").CountDocuments(ctx, bson.M{
+		count, err := db.Collection("thread_subscriptions").CountDocuments(ctx, bson.M{
 			"parentMessageId": "msg-parent-mention",
 		})
 		require.NoError(t, err)
@@ -657,13 +657,13 @@ func TestThreadStoreMongo_InsertThreadSubscription(t *testing.T) {
 		require.NoError(t, err)
 
 		var got model.ThreadSubscription
-		err = db.Collection("threadSubscriptions").FindOne(ctx, bson.M{
+		err = db.Collection("thread_subscriptions").FindOne(ctx, bson.M{
 			"threadRoomId": "tr-1",
-			"userId":       "u-1",
+			"userAccount":  "alice",
 		}).Decode(&got)
 		require.NoError(t, err)
 		assert.Equal(t, "ts-1", got.ID)
-		assert.Equal(t, "alice", got.UserAccount)
+		assert.Equal(t, "u-1", got.UserID)
 		assert.Nil(t, got.LastSeenAt, "lastSeenAt should be nil on insert")
 		assert.Equal(t, now, got.CreatedAt.UTC().Truncate(time.Millisecond))
 	})
@@ -673,9 +673,10 @@ func TestThreadStoreMongo_InsertThreadSubscription(t *testing.T) {
 			ID:           "ts-dup",
 			ThreadRoomID: "tr-1",
 			UserID:       "u-1",
+			UserAccount:  "alice",
 		}
 		err := store.InsertThreadSubscription(ctx, dup)
-		require.Error(t, err, "second insert with same (threadRoomId, userId) must fail")
+		require.Error(t, err, "second insert with same (threadRoomId, userAccount) must fail")
 	})
 }
 
@@ -704,9 +705,9 @@ func TestThreadStoreMongo_MarkThreadSubscriptionMention(t *testing.T) {
 		require.NoError(t, store.MarkThreadSubscriptionMention(ctx, sub))
 
 		var got model.ThreadSubscription
-		err := db.Collection("threadSubscriptions").FindOne(ctx, bson.M{
+		err := db.Collection("thread_subscriptions").FindOne(ctx, bson.M{
 			"threadRoomId": "tr-mk-1",
-			"userId":       "u-mk-new",
+			"userAccount":  "bob",
 		}).Decode(&got)
 		require.NoError(t, err)
 		assert.Equal(t, "ts-new-1", got.ID)
@@ -748,9 +749,9 @@ func TestThreadStoreMongo_MarkThreadSubscriptionMention(t *testing.T) {
 		require.NoError(t, store.MarkThreadSubscriptionMention(ctx, mention))
 
 		var got model.ThreadSubscription
-		err := db.Collection("threadSubscriptions").FindOne(ctx, bson.M{
+		err := db.Collection("thread_subscriptions").FindOne(ctx, bson.M{
 			"threadRoomId": "tr-mk-2",
-			"userId":       "u-mk-existing",
+			"userAccount":  "alice",
 		}).Decode(&got)
 		require.NoError(t, err)
 		assert.Equal(t, "ts-existing-1", got.ID, "original _id preserved on update")
@@ -775,9 +776,9 @@ func TestThreadStoreMongo_MarkThreadSubscriptionMention(t *testing.T) {
 		require.NoError(t, store.MarkThreadSubscriptionMention(ctx, sub))
 		require.NoError(t, store.MarkThreadSubscriptionMention(ctx, sub))
 
-		count, err := db.Collection("threadSubscriptions").CountDocuments(ctx, bson.M{
+		count, err := db.Collection("thread_subscriptions").CountDocuments(ctx, bson.M{
 			"threadRoomId": "tr-mk-3",
-			"userId":       "u-mk-idem",
+			"userAccount":  "charlie",
 		})
 		require.NoError(t, err)
 		assert.Equal(t, int64(1), count, "second upsert must not create a second row")
@@ -804,13 +805,14 @@ func TestThreadStoreMongo_UpdateThreadRoomLastMessage(t *testing.T) {
 	require.NoError(t, store.CreateThreadRoom(ctx, room))
 
 	later := now.Add(10 * time.Minute)
-	err := store.UpdateThreadRoomLastMessage(ctx, "tr-update", "msg-5", later)
+	err := store.UpdateThreadRoomLastMessage(ctx, "tr-update", "msg-5", "bob", later)
 	require.NoError(t, err)
 
 	got, err := store.GetThreadRoomByParentMessageID(ctx, "msg-parent-update")
 	require.NoError(t, err)
 	assert.Equal(t, "msg-5", got.LastMsgID)
 	assert.Equal(t, later, got.LastMsgAt.UTC().Truncate(time.Millisecond))
+	assert.Contains(t, got.ReplyAccounts, "bob", "replier account should be added to ReplyAccounts")
 }
 
 func TestCassandraStore_SaveThreadMessage_IncrementsParentTcount(t *testing.T) {

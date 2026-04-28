@@ -76,6 +76,10 @@ func TestSubjectBuilders(t *testing.T) {
 			"chat.user.alice.request.orgs.sect-eng.members"},
 		{"OrgMembersWildcard", subject.OrgMembersWildcard(),
 			"chat.user.*.request.orgs.*.members"},
+		{"MsgThreadPattern", subject.MsgThreadPattern("site-a"),
+			"chat.user.{account}.request.room.{roomID}.site-a.msg.thread"},
+		{"MsgThreadParentPattern", subject.MsgThreadParentPattern("site-a"),
+			"chat.user.{account}.request.room.{roomID}.site-a.msg.thread.parent"},
 		{"SearchMessages", subject.SearchMessages("alice"),
 			"chat.user.alice.request.search.messages"},
 		{"SearchRooms", subject.SearchRooms("alice"),
@@ -199,6 +203,10 @@ func TestWildcardPatterns(t *testing.T) {
 			"chat.user.*.request.room.*.site-a.member.add"},
 		{"RoomsInfoBatchSubscribe", subject.RoomsInfoBatchSubscribe("site-a"),
 			"chat.server.request.room.site-a.info.batch"},
+		{"MsgThreadWild", subject.MsgThreadWildcard("site-a"),
+			"chat.user.*.request.room.*.site-a.msg.thread"},
+		{"MsgThreadParentWild", subject.MsgThreadParentWildcard("site-a"),
+			"chat.user.*.request.room.*.site-a.msg.thread.parent"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -102,6 +102,25 @@ func TestQuotedParentMessage_JSON_Minimal(t *testing.T) {
 	assert.Nil(t, got.Mentions)
 	assert.Nil(t, got.Attachments)
 	assert.Empty(t, got.MessageLink)
+	assert.Empty(t, got.ThreadParentID)
+	assert.Nil(t, got.ThreadParentCreatedAt)
+}
+
+func TestQuotedParentMessage_JSON_WithThreadParent(t *testing.T) {
+	parentAt := time.Date(2026, 1, 10, 8, 0, 0, 0, time.UTC)
+	q := QuotedParentMessage{
+		MessageID:             "reply-1",
+		RoomID:                "r1",
+		Sender:                Participant{ID: "u1", Account: "alice"},
+		CreatedAt:             time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC),
+		Msg:                   "a thread reply",
+		ThreadParentID:        "parent-msg-1",
+		ThreadParentCreatedAt: &parentAt,
+	}
+	got := roundTrip(t, q)
+	assert.Equal(t, "parent-msg-1", got.ThreadParentID)
+	require.NotNil(t, got.ThreadParentCreatedAt)
+	assert.Equal(t, parentAt, *got.ThreadParentCreatedAt)
 }
 
 func TestMessage_JSON(t *testing.T) {

@@ -51,7 +51,10 @@ CREATE TYPE IF NOT EXISTS "QuotedParentMessage"(
   msg TEXT,
   mentions SET<FROZEN<"Participant">>,
   attachments LIST<BLOB>,
-  message_link TEXT
+  message_link TEXT,
+  thread_parent_id TEXT,          -- set by message-worker when quoted message is a TShow reply
+  thread_parent_created_at TIMESTAMP  -- actual CreatedAt of the thread parent; used by history-service
+                                      -- to enforce access-window checks without a Cassandra round-trip
 );
 ```
 ### Table
@@ -61,7 +64,7 @@ CREATE TABLE IF NOT EXISTS messages_by_room(
   room_id TEXT,
   created_at TIMESTAMP,
   message_id TEXT,
-  thread_room_id TEXT, // todo in future, value will come from threadRooms collection, currently it hold a value "N/A"
+  thread_room_id TEXT,
   sender FROZEN<"Participant">,
   target_user FROZEN<"Participant">,
   msg TEXT,
@@ -73,7 +76,7 @@ CREATE TABLE IF NOT EXISTS messages_by_room(
   tshow BOOLEAN, // means from thread [also send to channel]
   tcount INT, // message reply thread count
   thread_parent_id TEXT,
-  thread_parent_created_at TIMESTAMP, // for FE to query thread parent message 
+  thread_parent_created_at TIMESTAMP, // for FE to query thread parent message when also sent to channel (tshow=true)
   quoted_parent_message FROZEN<"QuotedParentMessage">,
   visible_to TEXT,
   unread BOOLEAN,
@@ -91,7 +94,7 @@ CREATE TABLE IF NOT EXISTS messages_by_room(
 ```cql
 CREATE TABLE IF NOT EXISTS thread_messages_by_room(
   room_id TEXT,
-  thread_room_id TEXT, // todo in future, value will come from threadRooms collection, currently it hold a value "N/A"
+  thread_room_id TEXT,
   created_at TIMESTAMP,
   message_id TEXT,
   thread_parent_id TEXT,
@@ -149,7 +152,7 @@ CREATE TABLE IF NOT EXISTS pinned_messages_by_room(
 CREATE TABLE IF NOT EXISTS messages_by_id(
   message_id TEXT,
   room_id TEXT,
-  thread_room_id TEXT, // todo in future, value will come from threadRooms collection, currently it hold a value "N/A"
+  thread_room_id TEXT,
   sender FROZEN<"Participant">,
   target_user FROZEN<"Participant">,
   msg TEXT,

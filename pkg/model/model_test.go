@@ -70,14 +70,16 @@ func TestRoomJSON_NilTimestampsOmitted(t *testing.T) {
 
 func TestThreadRoomJSON(t *testing.T) {
 	tr := model.ThreadRoom{
-		ID:              "tr-1",
-		ParentMessageID: "msg-parent",
-		RoomID:          "r1",
-		SiteID:          "site-a",
-		LastMsgAt:       time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC),
-		LastMsgID:       "msg-2",
-		CreatedAt:       time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
-		UpdatedAt:       time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC),
+		ID:                    "tr-1",
+		ParentMessageID:       "msg-parent",
+		RoomID:                "r1",
+		SiteID:                "site-a",
+		ThreadParentCreatedAt: time.Date(2025, 12, 31, 23, 0, 0, 0, time.UTC),
+		LastMsgAt:             time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC),
+		LastMsgID:             "msg-2",
+		ReplyAccounts:         []string{"alice", "bob"},
+		CreatedAt:             time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		UpdatedAt:             time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC),
 	}
 	roundTrip(t, &tr, &model.ThreadRoom{})
 }

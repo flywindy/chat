@@ -15,6 +15,7 @@ type Store interface {
 	SaveMessage(ctx context.Context, msg *model.Message, sender *cassParticipant, siteID string) error
 	SaveThreadMessage(ctx context.Context, msg *model.Message, sender *cassParticipant, siteID string, threadRoomID string) error
 	GetMessageSender(ctx context.Context, messageID string) (*cassParticipant, error)
+	UpdateParentMessageThreadRoomID(ctx context.Context, parentMessageID, roomID string, parentCreatedAt time.Time, threadRoomID string) error
 }
 
 // ThreadStore defines MongoDB operations for thread room and subscription management.
@@ -24,5 +25,5 @@ type ThreadStore interface {
 	InsertThreadSubscription(ctx context.Context, sub *model.ThreadSubscription) error
 	UpsertThreadSubscription(ctx context.Context, sub *model.ThreadSubscription) error
 	MarkThreadSubscriptionMention(ctx context.Context, sub *model.ThreadSubscription) error
-	UpdateThreadRoomLastMessage(ctx context.Context, threadRoomID string, lastMsgID string, lastMsgAt time.Time) error
+	UpdateThreadRoomLastMessage(ctx context.Context, threadRoomID, lastMsgID, replierAccount string, lastMsgAt time.Time) error
 }

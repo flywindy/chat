@@ -1,7 +1,7 @@
 CREATE TABLE IF NOT EXISTS chat.messages_by_id (
   message_id               TEXT,
   room_id                  TEXT,
-  thread_room_id           TEXT, // TODO: future value from threadRooms collection; currently holds "N/A"
+  thread_room_id           TEXT,
   sender                   FROZEN<"Participant">,
   target_user              FROZEN<"Participant">,
   msg                      TEXT,

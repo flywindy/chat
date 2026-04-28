@@ -53,9 +53,20 @@ type QuotedParentMessage struct {
 	Mentions    []Participant `json:"mentions,omitempty"    cql:"mentions"`
 	Attachments [][]byte      `json:"attachments,omitempty" cql:"attachments"`
 	MessageLink string        `json:"messageLink,omitempty" cql:"message_link"`
+	// ThreadParentID and ThreadParentCreatedAt are populated by message-worker when
+	// the quoted message is a TShow reply. They embed the thread parent's identity and
+	// actual CreatedAt so history-service can enforce access-window checks without a
+	// Cassandra round-trip at read time.
+	ThreadParentID        string     `json:"threadParentId,omitempty"        cql:"thread_parent_id"`
+	ThreadParentCreatedAt *time.Time `json:"threadParentCreatedAt,omitempty" cql:"thread_parent_created_at"`
 }
 
-// Message represents a message row in the Cassandra message tables (messages_by_room, messages_by_id).
+// Message represents a message row in the Cassandra message tables
+// (messages_by_room, messages_by_id, thread_messages_by_room).
+//
+// Row mapping is driven by the hard-coded column lists and positional Scan
+// calls in cassrepo (baseScanDest / threadMessageScanDest) — gocql reflection
+// never touches this struct directly, so no cql tags are needed here.
 type Message struct {
 	RoomID                string                   `json:"roomId"`
 	CreatedAt             time.Time                `json:"createdAt"`

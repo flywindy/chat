@@ -6,13 +6,14 @@ import (
 
 	"github.com/hmchangw/chat/history-service/internal/cassrepo"
 	"github.com/hmchangw/chat/history-service/internal/models"
+	"github.com/hmchangw/chat/history-service/internal/mongorepo"
+	pkgmodel "github.com/hmchangw/chat/pkg/model"
 	"github.com/hmchangw/chat/pkg/natsrouter"
 	"github.com/hmchangw/chat/pkg/subject"
 )
 
-//go:generate mockgen -destination=mocks/mock_repository.go -package=mocks . MessageRepository,SubscriptionRepository,EventPublisher
+//go:generate mockgen -destination=mocks/mock_repository.go -package=mocks . MessageRepository,SubscriptionRepository,EventPublisher,ThreadRoomRepository
 
-// MessageRepository defines Cassandra-backed message operations.
 type MessageRepository interface {
 	GetMessagesBefore(ctx context.Context, roomID string, before time.Time, q cassrepo.PageRequest) (cassrepo.Page[models.Message], error)
 	GetMessagesBetweenDesc(ctx context.Context, roomID string, since, before time.Time, q cassrepo.PageRequest) (cassrepo.Page[models.Message], error)
@@ -25,9 +26,10 @@ type MessageRepository interface {
 	// Returns the updated_at value now persisted (the deletedAt argument when
 	// applied; the existing value when a concurrent delete won the race).
 	SoftDeleteMessage(ctx context.Context, msg *models.Message, deletedAt time.Time) (actualDeletedAt time.Time, applied bool, err error)
+	GetThreadMessages(ctx context.Context, roomID, threadRoomID string, q cassrepo.PageRequest) (cassrepo.Page[models.Message], error)
+	GetMessagesByIDs(ctx context.Context, messageIDs []string) ([]models.Message, error)
 }
 
-// SubscriptionRepository defines MongoDB-backed subscription lookups.
 type SubscriptionRepository interface {
 	GetHistorySharedSince(ctx context.Context, account, roomID string) (*time.Time, bool, error)
 }
@@ -38,21 +40,26 @@ type EventPublisher interface {
 	Publish(ctx context.Context, subject string, data []byte) error
 }
 
-// HistoryService handles message history queries and (starting with this PR) mutations.
-// Transport-agnostic.
+type ThreadRoomRepository interface {
+	GetThreadRooms(ctx context.Context, roomID string, accessSince *time.Time, req mongorepo.OffsetPageRequest) (mongorepo.OffsetPage[pkgmodel.ThreadRoom], error)
+	GetFollowingThreadRooms(ctx context.Context, roomID, account string, accessSince *time.Time, req mongorepo.OffsetPageRequest) (mongorepo.OffsetPage[pkgmodel.ThreadRoom], error)
+	GetUnreadThreadRooms(ctx context.Context, roomID, account string, accessSince *time.Time, req mongorepo.OffsetPageRequest) (mongorepo.OffsetPage[pkgmodel.ThreadRoom], error)
+}
+
+// HistoryService handles message history queries and mutations. Transport-agnostic.
 type HistoryService struct {
 	messages      MessageRepository
 	subscriptions SubscriptionRepository
 	publisher     EventPublisher
+	threadRooms   ThreadRoomRepository
 }
 
 // New creates a HistoryService with the given repositories and event publisher.
-func New(msgs MessageRepository, subs SubscriptionRepository, pub EventPublisher) *HistoryService {
-	return &HistoryService{messages: msgs, subscriptions: subs, publisher: pub}
+func New(msgs MessageRepository, subs SubscriptionRepository, pub EventPublisher, threadRooms ThreadRoomRepository) *HistoryService {
+	return &HistoryService{messages: msgs, subscriptions: subs, publisher: pub, threadRooms: threadRooms}
 }
 
-// RegisterHandlers wires all NATS endpoints for the history service.
-// Panics if any subscription fails (startup-only, fatal if broken).
+// RegisterHandlers wires all NATS endpoints. Panics on subscription failure (fatal at startup).
 func (s *HistoryService) RegisterHandlers(r *natsrouter.Router, siteID string) {
 	natsrouter.Register(r, subject.MsgHistoryPattern(siteID), s.LoadHistory)
 	natsrouter.Register(r, subject.MsgNextPattern(siteID), s.LoadNextMessages)
@@ -60,4 +67,6 @@ func (s *HistoryService) RegisterHandlers(r *natsrouter.Router, siteID string) {
 	natsrouter.Register(r, subject.MsgGetPattern(siteID), s.GetMessageByID)
 	natsrouter.Register(r, subject.MsgEditPattern(siteID), s.EditMessage)
 	natsrouter.Register(r, subject.MsgDeletePattern(siteID), s.DeleteMessage)
+	natsrouter.Register(r, subject.MsgThreadPattern(siteID), s.GetThreadMessages)
+	natsrouter.Register(r, subject.MsgThreadParentPattern(siteID), s.GetThreadParentMessages)
 }

@@ -56,6 +56,7 @@ func (s *HistoryService) LoadHistory(c *natsrouter.Context, req models.LoadHisto
 		return nil, natsrouter.ErrInternal("failed to load message history")
 	}
 
+	redactUnavailableQuotes(page.Data, accessSince)
 	return &models.LoadHistoryResponse{Messages: page.Data}, nil
 }
 
@@ -96,6 +97,7 @@ func (s *HistoryService) LoadNextMessages(c *natsrouter.Context, req models.Load
 		return nil, natsrouter.ErrInternal("failed to load messages")
 	}
 
+	redactUnavailableQuotes(page.Data, accessSince)
 	return &models.LoadNextMessagesResponse{
 		Messages:   page.Data,
 		NextCursor: page.NextCursor,
@@ -127,12 +129,13 @@ func (s *HistoryService) LoadSurroundingMessages(c *natsrouter.Context, req mode
 	if limit > maxPageSize {
 		limit = maxPageSize
 	}
-	// Split limit-1 (excluding central message) across before and after.
-	// before gets the larger half on odd splits.
+	// Split limit-1 across before/after; before gets the larger half on odd splits.
 	remaining := limit - 1
 	if remaining <= 0 {
+		only := *centralMsg
+		redactUnavailableQuote(&only, accessSince)
 		return &models.LoadSurroundingMessagesResponse{
-			Messages: []models.Message{*centralMsg},
+			Messages: []models.Message{only},
 		}, nil
 	}
 	beforeCount := (remaining + 1) / 2
@@ -147,7 +150,6 @@ func (s *HistoryService) LoadSurroundingMessages(c *natsrouter.Context, req mode
 		return nil, err
 	}
 
-	// Before-page: messages older than central, newest-first.
 	var beforePage cassrepo.Page[models.Message]
 	if accessSince == nil {
 		beforePage, err = s.messages.GetMessagesBefore(c, roomID, centralMsg.CreatedAt, beforePageReq)
@@ -159,7 +161,6 @@ func (s *HistoryService) LoadSurroundingMessages(c *natsrouter.Context, req mode
 		return nil, natsrouter.ErrInternal("failed to load surrounding messages")
 	}
 
-	// After-page: messages newer than central, oldest-first.
 	afterPage, err := s.messages.GetMessagesAfter(c, roomID, centralMsg.CreatedAt, afterPageReq)
 	if err != nil {
 		slog.Error("loading surrounding messages", "error", err, "roomID", roomID, "direction", "after")
@@ -174,6 +175,7 @@ func (s *HistoryService) LoadSurroundingMessages(c *natsrouter.Context, req mode
 	messages = append(messages, *centralMsg)
 	messages = append(messages, afterPage.Data...)
 
+	redactUnavailableQuotes(messages, accessSince)
 	return &models.LoadSurroundingMessagesResponse{
 		Messages:   messages,
 		MoreBefore: beforePage.HasNext,
@@ -199,6 +201,7 @@ func (s *HistoryService) GetMessageByID(c *natsrouter.Context, req models.GetMes
 		return nil, natsrouter.ErrForbidden("message is outside access window")
 	}
 
+	redactUnavailableQuote(msg, accessSince)
 	return msg, nil
 }
 
@@ -210,13 +213,12 @@ func (s *HistoryService) EditMessage(c *natsrouter.Context, req models.EditMessa
 	account := c.Param("account")
 	roomID := c.Param("roomID")
 
-	// 1. Subscription gate — non-subscribers cannot probe messageID -> roomID mappings.
 	if _, err := s.getAccessSince(c, account, roomID); err != nil {
 		return nil, err
 	}
 
-	// 2. Hydrate. findMessage returns ErrNotFound for missing IDs and for
-	// messages that belong to a different room (same error, no leak).
+	// findMessage returns ErrNotFound for missing IDs and for messages that belong
+	// to a different room (same error, no leak).
 	msg, err := s.findMessage(c, roomID, req.MessageID)
 	if err != nil {
 		return nil, err
@@ -230,12 +232,10 @@ func (s *HistoryService) EditMessage(c *natsrouter.Context, req models.EditMessa
 		return nil, natsrouter.ErrNotFound("message not found")
 	}
 
-	// 3. Sender gate.
 	if !canModify(msg, account) {
 		return nil, natsrouter.ErrForbidden("only the sender can edit")
 	}
 
-	// 4. Content validation.
 	if strings.TrimSpace(req.NewMsg) == "" {
 		return nil, natsrouter.ErrBadRequest("newMsg must not be empty")
 	}
@@ -243,14 +243,13 @@ func (s *HistoryService) EditMessage(c *natsrouter.Context, req models.EditMessa
 		return nil, natsrouter.ErrBadRequest("newMsg exceeds maximum size")
 	}
 
-	// 5. Persist.
 	editedAt := time.Now().UTC()
 	if err := s.messages.UpdateMessageContent(c, msg, req.NewMsg, editedAt); err != nil {
 		slog.Error("edit: update content", "error", err, "messageID", req.MessageID)
 		return nil, natsrouter.ErrInternal("failed to edit message")
 	}
 
-	// 6. Publish live event (best-effort — publish failure is logged, not returned).
+	// Publish live event (best-effort — publish failure is logged, not returned).
 	editedAtMs := editedAt.UnixMilli()
 	evt := models.MessageEditedEvent{
 		Type:      "message_edited",
@@ -285,25 +284,21 @@ func (s *HistoryService) DeleteMessage(c *natsrouter.Context, req models.DeleteM
 	account := c.Param("account")
 	roomID := c.Param("roomID")
 
-	// 1. Subscription gate.
 	if _, err := s.getAccessSince(c, account, roomID); err != nil {
 		return nil, err
 	}
 
-	// 2. Hydrate. findMessage does the roomID-match check and ErrNotFound handling.
 	msg, err := s.findMessage(c, roomID, req.MessageID)
 	if err != nil {
 		return nil, err
 	}
 
-	// 3. Sender gate.
 	if !canModify(msg, account) {
 		return nil, natsrouter.ErrForbidden("only the sender can delete")
 	}
 
-	// 4. Already-deleted short-circuit. Echo the current updated_at as the
-	// DeletedAt. Prevents tcount double-decrement on caller retry and avoids
-	// duplicate message_deleted events.
+	// Already-deleted short-circuit: echo the current updated_at as the DeletedAt.
+	// Prevents tcount double-decrement on caller retry and avoids duplicate events.
 	if msg.Deleted {
 		var deletedAtMs int64
 		if msg.UpdatedAt != nil {
@@ -315,9 +310,6 @@ func (s *HistoryService) DeleteMessage(c *natsrouter.Context, req models.DeleteM
 		}, nil
 	}
 
-	// 5. Persist via LWT. The repo's CAS gates the mirror-table UPDATEs and
-	// parent-tcount decrement so two concurrent deletes can't double-decrement
-	// the parent.
 	deletedAt := time.Now().UTC()
 	actualDeletedAt, applied, err := s.messages.SoftDeleteMessage(c, msg, deletedAt)
 	if err != nil {
@@ -334,7 +326,7 @@ func (s *HistoryService) DeleteMessage(c *natsrouter.Context, req models.DeleteM
 		}, nil
 	}
 
-	// 6. Publish live event (best-effort).
+	// Publish live event (best-effort).
 	deletedAtMs := actualDeletedAt.UnixMilli()
 	evt := models.MessageDeletedEvent{
 		Type:      "message_deleted",
