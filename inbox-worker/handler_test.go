@@ -190,6 +190,9 @@ func TestHandleEvent_MemberAdded(t *testing.T) {
 	if len(sub.Roles) != 1 || sub.Roles[0] != model.RoleMember {
 		t.Errorf("subscription Roles = %v, want [%q]", sub.Roles, model.RoleMember)
 	}
+	if sub.RoomType != model.RoomTypeChannel {
+		t.Errorf("subscription RoomType = %q, want %q", sub.RoomType, model.RoomTypeChannel)
+	}
 	if sub.ID == "" {
 		t.Error("subscription ID should be non-empty (generated UUID)")
 	}

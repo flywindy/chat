@@ -153,6 +153,7 @@ func (h *Handler) handleCreateRoom(ctx context.Context, data []byte) ([]byte, er
 		ID:                 idgen.GenerateUUIDv7(),
 		User:               model.SubscriptionUser{ID: req.CreatedBy, Account: req.CreatedByAccount},
 		RoomID:             room.ID,
+		RoomType:           req.Type,
 		SiteID:             req.SiteID,
 		Roles:              []model.Role{model.RoleOwner},
 		HistorySharedSince: &now,

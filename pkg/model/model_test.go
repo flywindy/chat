@@ -386,6 +386,7 @@ func TestSubscriptionJSON(t *testing.T) {
 		ID:                 "s1",
 		User:               model.SubscriptionUser{ID: "u1", Account: "alice"},
 		RoomID:             "r1",
+		RoomType:           model.RoomTypeChannel,
 		SiteID:             "site-a",
 		Roles:              []model.Role{model.RoleOwner},
 		HistorySharedSince: &hss,
@@ -413,6 +414,12 @@ func TestRoomTypeValues(t *testing.T) {
 	}
 	if model.RoomTypeDM != "dm" {
 		t.Errorf("RoomTypeDM = %q", model.RoomTypeDM)
+	}
+	if model.RoomTypeBotDM != "botDM" {
+		t.Errorf("RoomTypeBotDM = %q", model.RoomTypeBotDM)
+	}
+	if model.RoomTypeDiscussion != "discussion" {
+		t.Errorf("RoomTypeDiscussion = %q", model.RoomTypeDiscussion)
 	}
 }
 

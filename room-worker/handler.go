@@ -239,12 +239,14 @@ func (h *Handler) processRemoveIndividual(ctx context.Context, req *model.Remove
 
 	now := time.Now().UTC()
 
-	// Subscription update event
+	// Subscription update event. RoomType is fixed to channel: room-service
+	// rejects member.remove for any other room kind.
 	subEvt := model.SubscriptionUpdateEvent{
 		UserID: user.ID,
 		Subscription: model.Subscription{
-			RoomID: req.RoomID,
-			User:   model.SubscriptionUser{ID: user.ID, Account: req.Account},
+			RoomID:   req.RoomID,
+			RoomType: model.RoomTypeChannel,
+			User:     model.SubscriptionUser{ID: user.ID, Account: req.Account},
 		},
 		Action:    "removed",
 		Timestamp: now.UnixMilli(),
@@ -372,8 +374,9 @@ func (h *Handler) processRemoveOrg(ctx context.Context, req *model.RemoveMemberR
 		}
 		subEvt := model.SubscriptionUpdateEvent{
 			Subscription: model.Subscription{
-				RoomID: req.RoomID,
-				User:   model.SubscriptionUser{Account: m.Account},
+				RoomID:   req.RoomID,
+				RoomType: model.RoomTypeChannel,
+				User:     model.SubscriptionUser{Account: m.Account},
 			},
 			Action:    "removed",
 			Timestamp: now.UnixMilli(),
@@ -516,10 +519,13 @@ func (h *Handler) processAddMembers(ctx context.Context, data []byte) (err error
 			slog.Warn("user not found for account", "account", account)
 			continue
 		}
+		// RoomType is fixed to channel: room-service rejects member.add for
+		// any other room kind.
 		sub := &model.Subscription{
 			ID:       idgen.GenerateUUIDv7(),
 			User:     model.SubscriptionUser{ID: user.ID, Account: user.Account},
 			RoomID:   req.RoomID,
+			RoomType: model.RoomTypeChannel,
 			SiteID:   room.SiteID,
 			Roles:    []model.Role{model.RoleMember},
 			JoinedAt: acceptedAt,

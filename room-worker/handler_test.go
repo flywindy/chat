@@ -410,6 +410,15 @@ func TestHandler_ProcessRemoveMember_SelfLeave_IndividualOnly(t *testing.T) {
 	assert.True(t, subjSet[subject.SubscriptionUpdate(account)], "expected subscription update published")
 	assert.True(t, subjSet[subject.MemberEvent(roomID)], "expected member event published")
 
+	for _, p := range published {
+		if p.subj != subject.SubscriptionUpdate(account) {
+			continue
+		}
+		var evt model.SubscriptionUpdateEvent
+		require.NoError(t, json.Unmarshal(p.data, &evt))
+		assert.Equal(t, model.RoomTypeChannel, evt.Subscription.RoomType, "subscription update should carry RoomType")
+	}
+
 	// Verify timestamps on all events
 	for _, p := range published {
 		var raw map[string]json.RawMessage
@@ -633,6 +642,7 @@ func TestHandler_ProcessAddMembers(t *testing.T) {
 			assert.Len(t, subs, 2)
 			for _, s := range subs {
 				assert.Equal(t, "site-a", s.SiteID)
+				assert.Equal(t, model.RoomTypeChannel, s.RoomType)
 				assert.Equal(t, []model.Role{model.RoleMember}, s.Roles)
 				require.NotNil(t, s.HistorySharedSince)
 				assert.Equal(t, s.JoinedAt, *s.HistorySharedSince)

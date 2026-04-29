@@ -50,6 +50,9 @@ func TestHandler_CreateRoom(t *testing.T) {
 	if capturedSub == nil || capturedSub.User.Account != "alice" {
 		t.Errorf("expected owner subscription with Account=alice, got %+v", capturedSub)
 	}
+	if capturedSub != nil && capturedSub.RoomType != model.RoomTypeChannel {
+		t.Errorf("expected owner subscription RoomType=%q, got %q", model.RoomTypeChannel, capturedSub.RoomType)
+	}
 }
 
 func TestHandler_UpdateRole_Success(t *testing.T) {
