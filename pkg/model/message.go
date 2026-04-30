@@ -1,20 +1,25 @@
 package model
 
-import "time"
+import (
+	"time"
+
+	"github.com/hmchangw/chat/pkg/model/cassandra"
+)
 
 type Message struct {
-	ID                           string        `json:"id"                                     bson:"_id"`
-	RoomID                       string        `json:"roomId"                                 bson:"roomId"`
-	UserID                       string        `json:"userId"                                 bson:"userId"`
-	UserAccount                  string        `json:"userAccount"                            bson:"userAccount"`
-	Content                      string        `json:"content"                                bson:"content"`
-	Mentions                     []Participant `json:"mentions,omitempty"                     bson:"mentions,omitempty"`
-	CreatedAt                    time.Time     `json:"createdAt"                              bson:"createdAt"`
-	ThreadParentMessageID        string        `json:"threadParentMessageId,omitempty"        bson:"threadParentMessageId,omitempty"`
-	ThreadParentMessageCreatedAt *time.Time    `json:"threadParentMessageCreatedAt,omitempty" bson:"threadParentMessageCreatedAt,omitempty"`
-	TShow                        bool          `json:"tshow,omitempty"                        bson:"tshow,omitempty"`
-	Type                         string        `json:"type,omitempty"                         bson:"type,omitempty"`
-	SysMsgData                   []byte        `json:"sysMsgData,omitempty"                   bson:"sysMsgData,omitempty"`
+	ID                           string                         `json:"id"                                     bson:"_id"`
+	RoomID                       string                         `json:"roomId"                                 bson:"roomId"`
+	UserID                       string                         `json:"userId"                                 bson:"userId"`
+	UserAccount                  string                         `json:"userAccount"                            bson:"userAccount"`
+	Content                      string                         `json:"content"                                bson:"content"`
+	Mentions                     []Participant                  `json:"mentions,omitempty"                     bson:"mentions,omitempty"`
+	CreatedAt                    time.Time                      `json:"createdAt"                              bson:"createdAt"`
+	ThreadParentMessageID        string                         `json:"threadParentMessageId,omitempty"        bson:"threadParentMessageId,omitempty"`
+	ThreadParentMessageCreatedAt *time.Time                     `json:"threadParentMessageCreatedAt,omitempty" bson:"threadParentMessageCreatedAt,omitempty"`
+	TShow                        bool                           `json:"tshow,omitempty"                        bson:"tshow,omitempty"`
+	Type                         string                         `json:"type,omitempty"                         bson:"type,omitempty"`
+	SysMsgData                   []byte                         `json:"sysMsgData,omitempty"                   bson:"sysMsgData,omitempty"`
+	QuotedParentMessage          *cassandra.QuotedParentMessage `json:"quotedParentMessage,omitempty"          bson:"quotedParentMessage,omitempty"`
 }
 
 type SendMessageRequest struct {
@@ -23,4 +28,5 @@ type SendMessageRequest struct {
 	RequestID                    string `json:"requestId"`
 	ThreadParentMessageID        string `json:"threadParentMessageId,omitempty"`
 	ThreadParentMessageCreatedAt *int64 `json:"threadParentMessageCreatedAt,omitempty"`
+	QuotedParentMessageID        string `json:"quotedParentMessageId,omitempty"`
 }

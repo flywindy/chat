@@ -17,6 +17,7 @@ import (
 
 	"github.com/hmchangw/chat/pkg/idgen"
 	"github.com/hmchangw/chat/pkg/model"
+	"github.com/hmchangw/chat/pkg/model/cassandra"
 	"github.com/hmchangw/chat/pkg/natsutil"
 	"github.com/hmchangw/chat/pkg/subject"
 )
@@ -362,7 +363,7 @@ func TestHandler_processMessage_RejectsInvalidThreadParentMessageID(t *testing.T
 		return &jetstream.PubAck{}, nil
 	}
 	reply := func(ctx context.Context, msg *nats.Msg) error { return nil }
-	h := NewHandler(store, pub, reply, "site1")
+	h := NewHandler(store, pub, reply, "site1", nil)
 
 	parentTs := int64(1000)
 	req := model.SendMessageRequest{
@@ -390,7 +391,7 @@ func TestHandler_processMessage_PropagatesRequestIDOnCanonicalPublish(t *testing
 	}
 	reply := func(ctx context.Context, msg *nats.Msg) error { return nil }
 
-	h := NewHandler(store, pub, reply, "site1")
+	h := NewHandler(store, pub, reply, "site1", nil)
 
 	ctx := natsutil.WithRequestID(context.Background(), "req-mg-test-id")
 	req := model.SendMessageRequest{ID: idgen.GenerateMessageID(), Content: "hello"}
@@ -400,4 +401,306 @@ func TestHandler_processMessage_PropagatesRequestIDOnCanonicalPublish(t *testing
 	require.NoError(t, err)
 	require.NotNil(t, capturedHeader, "publish must propagate header from ctx")
 	assert.Equal(t, "req-mg-test-id", capturedHeader.Get(natsutil.RequestIDHeader))
+}
+
+func TestHandler_ProcessMessage_WithQuote(t *testing.T) {
+	validID := idgen.GenerateMessageID()
+	validContent := "great point!"
+	validSiteID := "site-a"
+	validRoomID := "room-1"
+	validAccount := "alice"
+	parentMessageID := idgen.GenerateMessageID()
+
+	sub := &model.Subscription{
+		User:   model.SubscriptionUser{ID: "u1", Account: validAccount},
+		RoomID: validRoomID,
+		Roles:  []model.Role{model.RoleMember},
+	}
+
+	threadID := idgen.GenerateMessageID()
+	threadParentTS := time.Date(2026, 1, 1, 8, 0, 0, 0, time.UTC)
+
+	// mainRoomSnapshot represents a parent that lives in the main room
+	// (not inside any thread): ThreadParentID == "".
+	mainRoomSnapshot := &cassandra.QuotedParentMessage{
+		MessageID:   parentMessageID,
+		RoomID:      validRoomID,
+		Sender:      cassandra.Participant{ID: "u-bob", Account: "bob", EngName: "Bob Chen"},
+		CreatedAt:   time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC),
+		Msg:         "the original message",
+		MessageLink: "http://localhost:3000/" + validRoomID + "/" + parentMessageID,
+	}
+
+	// inThreadSnapshot represents a parent that is itself a reply inside thread T.
+	inThreadSnapshot := &cassandra.QuotedParentMessage{
+		MessageID:             parentMessageID,
+		RoomID:                validRoomID,
+		Sender:                cassandra.Participant{ID: "u-bob", Account: "bob", EngName: "Bob Chen"},
+		CreatedAt:             time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC),
+		Msg:                   "a reply inside thread T",
+		MessageLink:           "http://localhost:3000/" + validRoomID + "/" + parentMessageID,
+		ThreadParentID:        threadID,
+		ThreadParentCreatedAt: &threadParentTS,
+	}
+
+	// inDifferentThreadSnapshot is in thread T'.
+	inDifferentThreadSnapshot := &cassandra.QuotedParentMessage{
+		MessageID:             parentMessageID,
+		RoomID:                validRoomID,
+		Sender:                cassandra.Participant{ID: "u-bob", Account: "bob", EngName: "Bob Chen"},
+		CreatedAt:             time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC),
+		Msg:                   "a reply inside thread T'",
+		MessageLink:           "http://localhost:3000/" + validRoomID + "/" + parentMessageID,
+		ThreadParentID:        "different-thread-uuid",
+		ThreadParentCreatedAt: &threadParentTS,
+	}
+
+	tests := []struct {
+		name          string
+		buildData     func() []byte
+		setupStore    func(s *MockStore)
+		setupFetcher  func(f *MockParentMessageFetcher)
+		setupPub      func() (publishFunc, *[]publishedMsg)
+		wantErr       bool
+		assertMessage func(t *testing.T, msg model.Message)
+	}{
+		{
+			name: "main-room msg quoting main-room parent — snapshot embedded",
+			buildData: func() []byte {
+				req := model.SendMessageRequest{
+					ID:                    validID,
+					Content:               validContent,
+					QuotedParentMessageID: parentMessageID,
+				}
+				data, _ := json.Marshal(req)
+				return data
+			},
+			setupStore: func(s *MockStore) {
+				s.EXPECT().GetSubscription(gomock.Any(), validAccount, validRoomID).Return(sub, nil)
+			},
+			setupFetcher: func(f *MockParentMessageFetcher) {
+				f.EXPECT().
+					FetchQuotedParent(gomock.Any(), validAccount, validRoomID, validSiteID, parentMessageID).
+					Return(mainRoomSnapshot, nil)
+			},
+			setupPub: func() (publishFunc, *[]publishedMsg) {
+				var published []publishedMsg
+				return makePublishFunc(&published, nil), &published
+			},
+			assertMessage: func(t *testing.T, msg model.Message) {
+				require.NotNil(t, msg.QuotedParentMessage)
+				assert.Equal(t, parentMessageID, msg.QuotedParentMessage.MessageID)
+				assert.Equal(t, "the original message", msg.QuotedParentMessage.Msg)
+				assert.Equal(t, "bob", msg.QuotedParentMessage.Sender.Account)
+				assert.Equal(t, mainRoomSnapshot.MessageLink, msg.QuotedParentMessage.MessageLink)
+				assert.Empty(t, msg.QuotedParentMessage.ThreadParentID)
+			},
+		},
+		{
+			name: "fetcher error — request fails",
+			buildData: func() []byte {
+				req := model.SendMessageRequest{
+					ID:                    validID,
+					Content:               validContent,
+					QuotedParentMessageID: parentMessageID,
+				}
+				data, _ := json.Marshal(req)
+				return data
+			},
+			setupStore: func(s *MockStore) {
+				s.EXPECT().GetSubscription(gomock.Any(), validAccount, validRoomID).Return(sub, nil)
+			},
+			setupFetcher: func(f *MockParentMessageFetcher) {
+				f.EXPECT().
+					FetchQuotedParent(gomock.Any(), validAccount, validRoomID, validSiteID, parentMessageID).
+					Return(nil, fmt.Errorf("history response error: not found"))
+			},
+			setupPub: func() (publishFunc, *[]publishedMsg) {
+				return makePublishFunc(nil, nil), nil
+			},
+			wantErr: true,
+		},
+		{
+			name: "thread T msg quoting another reply in thread T — snapshot embedded",
+			buildData: func() []byte {
+				return []byte(fmt.Sprintf(
+					`{"id":%q,"content":%q,"requestId":"req-1","threadParentMessageId":%q,"threadParentMessageCreatedAt":%d,"quotedParentMessageId":%q}`,
+					validID, validContent, threadID, threadParentTS.UnixMilli(), parentMessageID,
+				))
+			},
+			setupStore: func(s *MockStore) {
+				s.EXPECT().GetSubscription(gomock.Any(), validAccount, validRoomID).Return(sub, nil)
+			},
+			setupFetcher: func(f *MockParentMessageFetcher) {
+				f.EXPECT().
+					FetchQuotedParent(gomock.Any(), validAccount, validRoomID, validSiteID, parentMessageID).
+					Return(inThreadSnapshot, nil)
+			},
+			setupPub: func() (publishFunc, *[]publishedMsg) {
+				var published []publishedMsg
+				return makePublishFunc(&published, nil), &published
+			},
+			assertMessage: func(t *testing.T, msg model.Message) {
+				assert.Equal(t, threadID, msg.ThreadParentMessageID)
+				require.NotNil(t, msg.QuotedParentMessage)
+				assert.Equal(t, parentMessageID, msg.QuotedParentMessage.MessageID)
+				assert.Equal(t, threadID, msg.QuotedParentMessage.ThreadParentID)
+			},
+		},
+		{
+			name: "main-room msg quoting a thread reply — request fails (cross-thread)",
+			buildData: func() []byte {
+				req := model.SendMessageRequest{
+					ID:                    validID,
+					Content:               validContent,
+					QuotedParentMessageID: parentMessageID,
+				}
+				data, _ := json.Marshal(req)
+				return data
+			},
+			setupStore: func(s *MockStore) {
+				s.EXPECT().GetSubscription(gomock.Any(), validAccount, validRoomID).Return(sub, nil)
+			},
+			setupFetcher: func(f *MockParentMessageFetcher) {
+				f.EXPECT().
+					FetchQuotedParent(gomock.Any(), validAccount, validRoomID, validSiteID, parentMessageID).
+					Return(inThreadSnapshot, nil)
+			},
+			setupPub: func() (publishFunc, *[]publishedMsg) {
+				return makePublishFunc(nil, nil), nil
+			},
+			wantErr: true,
+		},
+		{
+			name: "thread T msg quoting main-room parent — request fails (strict)",
+			buildData: func() []byte {
+				return []byte(fmt.Sprintf(
+					`{"id":%q,"content":%q,"requestId":"req-1","threadParentMessageId":%q,"threadParentMessageCreatedAt":%d,"quotedParentMessageId":%q}`,
+					validID, validContent, threadID, threadParentTS.UnixMilli(), parentMessageID,
+				))
+			},
+			setupStore: func(s *MockStore) {
+				s.EXPECT().GetSubscription(gomock.Any(), validAccount, validRoomID).Return(sub, nil)
+			},
+			setupFetcher: func(f *MockParentMessageFetcher) {
+				f.EXPECT().
+					FetchQuotedParent(gomock.Any(), validAccount, validRoomID, validSiteID, parentMessageID).
+					Return(mainRoomSnapshot, nil)
+			},
+			setupPub: func() (publishFunc, *[]publishedMsg) {
+				return makePublishFunc(nil, nil), nil
+			},
+			wantErr: true,
+		},
+		{
+			name: "thread T msg quoting reply in different thread T' — request fails",
+			buildData: func() []byte {
+				return []byte(fmt.Sprintf(
+					`{"id":%q,"content":%q,"requestId":"req-1","threadParentMessageId":%q,"threadParentMessageCreatedAt":%d,"quotedParentMessageId":%q}`,
+					validID, validContent, threadID, threadParentTS.UnixMilli(), parentMessageID,
+				))
+			},
+			setupStore: func(s *MockStore) {
+				s.EXPECT().GetSubscription(gomock.Any(), validAccount, validRoomID).Return(sub, nil)
+			},
+			setupFetcher: func(f *MockParentMessageFetcher) {
+				f.EXPECT().
+					FetchQuotedParent(gomock.Any(), validAccount, validRoomID, validSiteID, parentMessageID).
+					Return(inDifferentThreadSnapshot, nil)
+			},
+			setupPub: func() (publishFunc, *[]publishedMsg) {
+				return makePublishFunc(nil, nil), nil
+			},
+			wantErr: true,
+		},
+		{
+			name: "no quote field — fetcher not called",
+			buildData: func() []byte {
+				req := model.SendMessageRequest{ID: validID, Content: validContent}
+				data, _ := json.Marshal(req)
+				return data
+			},
+			setupStore: func(s *MockStore) {
+				s.EXPECT().GetSubscription(gomock.Any(), validAccount, validRoomID).Return(sub, nil)
+			},
+			setupFetcher: func(f *MockParentMessageFetcher) {
+				// no EXPECT — gomock will fail the test if FetchQuotedParent is called
+			},
+			setupPub: func() (publishFunc, *[]publishedMsg) {
+				var published []publishedMsg
+				return makePublishFunc(&published, nil), &published
+			},
+			assertMessage: func(t *testing.T, msg model.Message) {
+				assert.Nil(t, msg.QuotedParentMessage)
+			},
+		},
+		{
+			name: "fetcher returns (nil, nil) — request fails (defensive guard)",
+			buildData: func() []byte {
+				req := model.SendMessageRequest{
+					ID:                    validID,
+					Content:               validContent,
+					QuotedParentMessageID: parentMessageID,
+				}
+				data, _ := json.Marshal(req)
+				return data
+			},
+			setupStore: func(s *MockStore) {
+				s.EXPECT().GetSubscription(gomock.Any(), validAccount, validRoomID).Return(sub, nil)
+			},
+			setupFetcher: func(f *MockParentMessageFetcher) {
+				f.EXPECT().
+					FetchQuotedParent(gomock.Any(), validAccount, validRoomID, validSiteID, parentMessageID).
+					Return(nil, nil)
+			},
+			setupPub: func() (publishFunc, *[]publishedMsg) {
+				return makePublishFunc(nil, nil), nil
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			store := NewMockStore(ctrl)
+			fetcher := NewMockParentMessageFetcher(ctrl)
+			tc.setupStore(store)
+			tc.setupFetcher(fetcher)
+
+			pub, publishedPtr := tc.setupPub()
+
+			h := &Handler{
+				store:         store,
+				publish:       pub,
+				siteID:        validSiteID,
+				parentFetcher: fetcher,
+			}
+
+			data, err := h.processMessage(context.Background(), validAccount, validRoomID, validSiteID, tc.buildData())
+
+			if tc.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, data)
+
+			var msg model.Message
+			require.NoError(t, json.Unmarshal(data, &msg))
+			tc.assertMessage(t, msg)
+
+			// Also verify the snapshot reaches the canonical event.
+			require.NotNil(t, publishedPtr)
+			require.Len(t, *publishedPtr, 1)
+			var evt model.MessageEvent
+			require.NoError(t, json.Unmarshal((*publishedPtr)[0].data, &evt))
+			if msg.QuotedParentMessage != nil {
+				require.NotNil(t, evt.Message.QuotedParentMessage)
+				assert.Equal(t, msg.QuotedParentMessage.MessageID, evt.Message.QuotedParentMessage.MessageID)
+			} else {
+				assert.Nil(t, evt.Message.QuotedParentMessage)
+			}
+		})
+	}
 }

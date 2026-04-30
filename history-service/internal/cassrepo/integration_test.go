@@ -132,6 +132,7 @@ func setupCassandra(t *testing.T) *gocql.Session {
 
 	cluster := gocql.NewCluster(host)
 	cluster.Consistency = gocql.One
+	cluster.DisableInitialHostLookup = true
 	cluster.Keyspace = keyspace
 	ksSession, err := cluster.CreateSession()
 	require.NoError(t, err)

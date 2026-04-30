@@ -77,17 +77,23 @@ func TestCardAction_JSON_Minimal(t *testing.T) {
 }
 
 func TestQuotedParentMessage_JSON(t *testing.T) {
+	threadParent := time.Date(2026, 1, 14, 9, 0, 0, 0, time.UTC)
 	q := QuotedParentMessage{
-		MessageID:   "m1",
-		RoomID:      "r1",
-		Sender:      Participant{ID: "u1", Account: "alice"},
-		CreatedAt:   time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC),
-		Msg:         "original message",
-		Mentions:    []Participant{{ID: "u2", Account: "bob"}},
-		Attachments: [][]byte{[]byte("file1")},
-		MessageLink: "https://chat.example.com/r1/m1",
+		MessageID:             "m1",
+		RoomID:                "r1",
+		Sender:                Participant{ID: "u1", Account: "alice"},
+		CreatedAt:             time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC),
+		Msg:                   "original message",
+		Mentions:              []Participant{{ID: "u2", Account: "bob"}},
+		Attachments:           [][]byte{[]byte("file1")},
+		MessageLink:           "https://chat.example.com/r1/m1",
+		ThreadParentID:        "thread-parent-uuid",
+		ThreadParentCreatedAt: &threadParent,
 	}
-	roundTrip(t, q)
+	got := roundTrip(t, q)
+	assert.Equal(t, "thread-parent-uuid", got.ThreadParentID)
+	require.NotNil(t, got.ThreadParentCreatedAt)
+	assert.Equal(t, threadParent, *got.ThreadParentCreatedAt)
 }
 
 func TestQuotedParentMessage_JSON_Minimal(t *testing.T) {

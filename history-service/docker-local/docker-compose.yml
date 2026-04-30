@@ -65,7 +65,7 @@ services:
         CREATE TYPE IF NOT EXISTS chat."File" (id TEXT, name TEXT, type TEXT);
         CREATE TYPE IF NOT EXISTS chat."Card" (template TEXT, data BLOB);
         CREATE TYPE IF NOT EXISTS chat."CardAction" (verb TEXT, text TEXT, card_id TEXT, display_text TEXT, hide_exec_log BOOLEAN, card_tmid TEXT, data BLOB);
-        CREATE TYPE IF NOT EXISTS chat."QuotedParentMessage" (message_id TEXT, room_id TEXT, sender FROZEN<"Participant">, created_at TIMESTAMP, msg TEXT, mentions SET<FROZEN<"Participant">>, attachments LIST<BLOB>, message_link TEXT);
+        CREATE TYPE IF NOT EXISTS chat."QuotedParentMessage" (message_id TEXT, room_id TEXT, sender FROZEN<"Participant">, created_at TIMESTAMP, msg TEXT, mentions SET<FROZEN<"Participant">>, attachments LIST<BLOB>, message_link TEXT, thread_parent_id TEXT, thread_parent_created_at TIMESTAMP);
         CREATE TABLE IF NOT EXISTS chat.messages_by_room (
           room_id TEXT,
           created_at TIMESTAMP,

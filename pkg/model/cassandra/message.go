@@ -44,6 +44,11 @@ type CardAction struct {
 }
 
 // QuotedParentMessage maps to the Cassandra "QuotedParentMessage" UDT.
+//
+// ThreadParentID and ThreadParentCreatedAt capture the parent message's
+// thread context (when the parent was itself a thread reply). Used by
+// gatekeeper to enforce same-thread-context quoting and by clients to
+// render thread-aware quote previews.
 type QuotedParentMessage struct {
 	MessageID   string        `json:"messageId"             cql:"message_id"`
 	RoomID      string        `json:"roomId"                cql:"room_id"`

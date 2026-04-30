@@ -30,6 +30,7 @@ type config struct {
 	MongoUsername string          `env:"MONGO_USERNAME"  envDefault:""`
 	MongoPassword string          `env:"MONGO_PASSWORD"  envDefault:""`
 	MaxWorkers    int             `env:"MAX_WORKERS"     envDefault:"100"`
+	ChatBaseURL   string          `env:"CHAT_BASE_URL"   envDefault:"http://localhost:3000"`
 	Bootstrap     bootstrapConfig `envPrefix:"BOOTSTRAP_"`
 }
 
@@ -82,7 +83,8 @@ func main() {
 		}
 		return nil
 	}
-	handler := NewHandler(store, pub, reply, cfg.SiteID)
+	parentFetcher := newHistoryParentFetcher(nc, cfg.ChatBaseURL)
+	handler := NewHandler(store, pub, reply, cfg.SiteID, parentFetcher)
 
 	if err := bootstrapStreams(ctx, js, cfg.SiteID, cfg.Bootstrap.Enabled); err != nil {
 		slog.Error("bootstrap streams failed", "error", err)

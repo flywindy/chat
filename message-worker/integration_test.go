@@ -16,6 +16,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 
 	"github.com/hmchangw/chat/pkg/model"
+	"github.com/hmchangw/chat/pkg/model/cassandra"
 	"github.com/hmchangw/chat/pkg/testutil"
 	"github.com/hmchangw/chat/pkg/userstore"
 )
@@ -24,20 +25,41 @@ func setupCassandra(t *testing.T) *gocql.Session {
 	t.Helper()
 	keyspace, adminSession, host := testutil.CassandraKeyspace(t, "message_worker_test")
 	stmts := []string{
-		fmt.Sprintf(`CREATE TYPE IF NOT EXISTS %s."Participant" (id TEXT, eng_name TEXT, company_name TEXT, app_id TEXT, app_name TEXT, is_bot BOOLEAN, account TEXT)`, keyspace),
+		fmt.Sprintf(`CREATE TYPE IF NOT EXISTS %s."Participant" (
+			id           TEXT,
+			eng_name     TEXT,
+			company_name TEXT,
+			app_id       TEXT,
+			app_name     TEXT,
+			is_bot       BOOLEAN,
+			account      TEXT
+		)`, keyspace),
+		fmt.Sprintf(`CREATE TYPE IF NOT EXISTS %s."QuotedParentMessage" (
+			message_id               TEXT,
+			room_id                  TEXT,
+			sender                   FROZEN<"Participant">,
+			created_at               TIMESTAMP,
+			msg                      TEXT,
+			mentions                 SET<FROZEN<"Participant">>,
+			attachments              LIST<BLOB>,
+			message_link             TEXT,
+			thread_parent_id         TEXT,
+			thread_parent_created_at TIMESTAMP
+		)`, keyspace),
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s.messages_by_room (
-			room_id       TEXT,
-			created_at    TIMESTAMP,
-			message_id    TEXT,
-			sender        FROZEN<"Participant">,
-			msg           TEXT,
-			site_id       TEXT,
-			updated_at    TIMESTAMP,
-			mentions      SET<FROZEN<"Participant">>,
-			tcount        INT,
-			tshow         BOOLEAN,
-			type          TEXT,
-			sys_msg_data  BLOB,
+			room_id               TEXT,
+			created_at            TIMESTAMP,
+			message_id            TEXT,
+			sender                FROZEN<"Participant">,
+			msg                   TEXT,
+			site_id               TEXT,
+			updated_at            TIMESTAMP,
+			mentions              SET<FROZEN<"Participant">>,
+			tcount                INT,
+			tshow                 BOOLEAN,
+			type                  TEXT,
+			sys_msg_data          BLOB,
+			quoted_parent_message FROZEN<"QuotedParentMessage">,
 			PRIMARY KEY ((room_id), created_at, message_id)
 		) WITH CLUSTERING ORDER BY (created_at DESC, message_id DESC)`, keyspace),
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s.messages_by_id (
@@ -56,22 +78,24 @@ func setupCassandra(t *testing.T) *gocql.Session {
 			tshow                    BOOLEAN,
 			type                     TEXT,
 			sys_msg_data             BLOB,
+			quoted_parent_message    FROZEN<"QuotedParentMessage">,
 			PRIMARY KEY (message_id, created_at)
 		) WITH CLUSTERING ORDER BY (created_at DESC)`, keyspace),
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s.thread_messages_by_room (
-			room_id          TEXT,
-			thread_room_id   TEXT,
-			created_at       TIMESTAMP,
-			message_id       TEXT,
-			thread_parent_id TEXT,
-			sender           FROZEN<"Participant">,
-			msg              TEXT,
-			site_id          TEXT,
-			updated_at       TIMESTAMP,
-			mentions         SET<FROZEN<"Participant">>,
-			tshow            BOOLEAN,
-			type             TEXT,
-			sys_msg_data     BLOB,
+			room_id               TEXT,
+			thread_room_id        TEXT,
+			created_at            TIMESTAMP,
+			message_id            TEXT,
+			thread_parent_id      TEXT,
+			sender                FROZEN<"Participant">,
+			msg                   TEXT,
+			site_id               TEXT,
+			updated_at            TIMESTAMP,
+			mentions              SET<FROZEN<"Participant">>,
+			tshow                 BOOLEAN,
+			type                  TEXT,
+			sys_msg_data          BLOB,
+			quoted_parent_message FROZEN<"QuotedParentMessage">,
 			PRIMARY KEY ((room_id), thread_room_id, created_at, message_id)
 		) WITH CLUSTERING ORDER BY (thread_room_id DESC, created_at DESC, message_id DESC)`, keyspace),
 	}
@@ -79,10 +103,11 @@ func setupCassandra(t *testing.T) *gocql.Session {
 		require.NoError(t, adminSession.Query(stmt).Exec())
 	}
 
-	// Return a session whose default keyspace is the isolated one so tests
-	// can write plain `FROM messages_by_room` queries.
+	// adminSession is keyspace-unscoped; open a session pinned to our isolated
+	// keyspace so test queries can use unqualified table names.
 	cluster := gocql.NewCluster(host)
 	cluster.Consistency = gocql.One
+	cluster.DisableInitialHostLookup = true
 	cluster.Keyspace = keyspace
 	ksSession, err := cluster.CreateSession()
 	require.NoError(t, err)
@@ -919,5 +944,159 @@ func TestCassandraStore_SaveThreadMessage_IncrementsParentTcount(t *testing.T) {
 		).Scan(&tcount)
 		require.NoError(t, err)
 		assert.Equal(t, 2, tcount)
+	})
+}
+
+func TestCassandraStore_SaveMessage_WithQuotedParent(t *testing.T) {
+	cassSession := setupCassandra(t)
+	store := NewCassandraStore(cassSession)
+	ctx := context.Background()
+
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	parentCreatedAt := now.Add(-time.Hour).Truncate(time.Millisecond)
+	threadParentCreatedAt := now.Add(-2 * time.Hour).Truncate(time.Millisecond)
+
+	sender := &cassParticipant{
+		ID: "u-1", EngName: "Alice Wang", CompanyName: "愛麗絲", Account: "alice",
+	}
+	snapshot := &cassandra.QuotedParentMessage{
+		MessageID: "parent-msg-uuid",
+		RoomID:    "r-1",
+		Sender:    cassandra.Participant{ID: "u-bob", Account: "bob", EngName: "Bob Chen"},
+		CreatedAt: parentCreatedAt,
+		Msg:       "the original message",
+		Mentions: []cassandra.Participant{
+			{ID: "u-carol", Account: "carol", EngName: "Carol Lee"},
+		},
+		MessageLink:           "http://localhost:3000/r-1/parent-msg-uuid",
+		ThreadParentID:        "thread-parent-uuid",
+		ThreadParentCreatedAt: &threadParentCreatedAt,
+	}
+	msg := &model.Message{
+		ID:                  "m-quote-1",
+		RoomID:              "r-1",
+		UserID:              "u-1",
+		UserAccount:         "alice",
+		Content:             "great point!",
+		CreatedAt:           now,
+		QuotedParentMessage: snapshot,
+	}
+
+	require.NoError(t, store.SaveMessage(ctx, msg, sender, "site-a"))
+
+	t.Run("messages_by_room round-trips QuotedParentMessage including thread context", func(t *testing.T) {
+		var got cassandra.QuotedParentMessage
+		err := cassSession.Query(
+			`SELECT quoted_parent_message FROM messages_by_room WHERE room_id = ? AND created_at = ? AND message_id = ?`,
+			"r-1", now, "m-quote-1",
+		).Scan(&got)
+		require.NoError(t, err)
+		assert.Equal(t, "parent-msg-uuid", got.MessageID)
+		assert.Equal(t, "r-1", got.RoomID)
+		assert.Equal(t, "the original message", got.Msg)
+		assert.Equal(t, "bob", got.Sender.Account)
+		assert.Equal(t, "Bob Chen", got.Sender.EngName)
+		assert.Equal(t, parentCreatedAt, got.CreatedAt.UTC().Truncate(time.Millisecond))
+		assert.Equal(t, "http://localhost:3000/r-1/parent-msg-uuid", got.MessageLink)
+		require.Len(t, got.Mentions, 1)
+		assert.Equal(t, "carol", got.Mentions[0].Account)
+		assert.Equal(t, "thread-parent-uuid", got.ThreadParentID)
+		require.NotNil(t, got.ThreadParentCreatedAt)
+		assert.Equal(t, threadParentCreatedAt, got.ThreadParentCreatedAt.UTC().Truncate(time.Millisecond))
+	})
+
+	t.Run("messages_by_id round-trips QuotedParentMessage including thread context", func(t *testing.T) {
+		var got cassandra.QuotedParentMessage
+		err := cassSession.Query(
+			`SELECT quoted_parent_message FROM messages_by_id WHERE message_id = ? AND created_at = ?`,
+			"m-quote-1", now,
+		).Scan(&got)
+		require.NoError(t, err)
+		assert.Equal(t, "parent-msg-uuid", got.MessageID)
+		assert.Equal(t, "the original message", got.Msg)
+		assert.Equal(t, "thread-parent-uuid", got.ThreadParentID)
+		require.NotNil(t, got.ThreadParentCreatedAt)
+		assert.Equal(t, threadParentCreatedAt, got.ThreadParentCreatedAt.UTC().Truncate(time.Millisecond))
+	})
+}
+
+func TestCassandraStore_SaveMessage_NilQuotedParent(t *testing.T) {
+	cassSession := setupCassandra(t)
+	store := NewCassandraStore(cassSession)
+	ctx := context.Background()
+
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	sender := &cassParticipant{ID: "u-1", Account: "alice"}
+	msg := &model.Message{
+		ID:          "m-no-quote",
+		RoomID:      "r-1",
+		UserID:      "u-1",
+		UserAccount: "alice",
+		Content:     "plain message",
+		CreatedAt:   now,
+		// QuotedParentMessage intentionally nil — verifies gocql marshals nil
+		// pointer as a null UDT (the open question from the spec).
+	}
+
+	require.NoError(t, store.SaveMessage(ctx, msg, sender, "site-a"))
+
+	var got *cassandra.QuotedParentMessage
+	err := cassSession.Query(
+		`SELECT quoted_parent_message FROM messages_by_id WHERE message_id = ? AND created_at = ?`,
+		"m-no-quote", now,
+	).Scan(&got)
+	require.NoError(t, err)
+	assert.Nil(t, got, "nil pointer must round-trip as null UDT")
+}
+
+func TestCassandraStore_SaveThreadMessage_WithQuotedParent(t *testing.T) {
+	cassSession := setupCassandra(t)
+	store := NewCassandraStore(cassSession)
+	ctx := context.Background()
+
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	parentCreatedAt := now.Add(-time.Hour).Truncate(time.Millisecond)
+
+	sender := &cassParticipant{ID: "u-1", Account: "alice"}
+	snapshot := &cassandra.QuotedParentMessage{
+		MessageID: "parent-msg-uuid",
+		RoomID:    "r-1",
+		Sender:    cassandra.Participant{ID: "u-bob", Account: "bob"},
+		CreatedAt: parentCreatedAt,
+		Msg:       "original",
+	}
+	msg := &model.Message{
+		ID:                    "m-thread-quote",
+		RoomID:                "r-1",
+		UserID:                "u-1",
+		UserAccount:           "alice",
+		Content:               "thread reply with quote",
+		CreatedAt:             now,
+		ThreadParentMessageID: "thread-parent-uuid",
+		QuotedParentMessage:   snapshot,
+	}
+
+	const threadRoomID = "tr-quote-1"
+	require.NoError(t, store.SaveThreadMessage(ctx, msg, sender, "site-a", threadRoomID))
+
+	t.Run("thread_messages_by_room round-trips QuotedParentMessage", func(t *testing.T) {
+		var got cassandra.QuotedParentMessage
+		err := cassSession.Query(
+			`SELECT quoted_parent_message FROM thread_messages_by_room WHERE room_id = ? AND thread_room_id = ? AND created_at = ? AND message_id = ?`,
+			"r-1", threadRoomID, now, "m-thread-quote",
+		).Scan(&got)
+		require.NoError(t, err)
+		assert.Equal(t, "parent-msg-uuid", got.MessageID)
+		assert.Equal(t, "original", got.Msg)
+	})
+
+	t.Run("messages_by_id round-trips QuotedParentMessage for thread message", func(t *testing.T) {
+		var got cassandra.QuotedParentMessage
+		err := cassSession.Query(
+			`SELECT quoted_parent_message FROM messages_by_id WHERE message_id = ? AND created_at = ?`,
+			"m-thread-quote", now,
+		).Scan(&got)
+		require.NoError(t, err)
+		assert.Equal(t, "parent-msg-uuid", got.MessageID)
 	})
 }

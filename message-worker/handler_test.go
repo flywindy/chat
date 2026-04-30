@@ -15,6 +15,7 @@ import (
 	"go.uber.org/mock/gomock"
 
 	"github.com/hmchangw/chat/pkg/model"
+	"github.com/hmchangw/chat/pkg/model/cassandra"
 )
 
 func ptrTime(t time.Time) *time.Time { return &t }
@@ -955,4 +956,64 @@ func TestHandler_HandleJetStreamMsg(t *testing.T) {
 			assert.Equal(t, tt.wantNak, fakeMsg.naked, "naked")
 		})
 	}
+}
+
+func TestHandler_ProcessMessage_Quote(t *testing.T) {
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	user := &model.User{
+		ID:          "u-1",
+		Account:     "alice",
+		SiteID:      "site-a",
+		EngName:     "Alice Wang",
+		ChineseName: "愛麗絲",
+	}
+	expectedSender := cassParticipant{
+		ID:          user.ID,
+		EngName:     user.EngName,
+		CompanyName: user.ChineseName,
+		Account:     "alice",
+	}
+
+	snapshot := &cassandra.QuotedParentMessage{
+		MessageID:   "parent-msg-uuid",
+		RoomID:      "r1",
+		Sender:      cassandra.Participant{ID: "u-bob", Account: "bob", EngName: "Bob Chen"},
+		CreatedAt:   time.Date(2026, 1, 1, 11, 0, 0, 0, time.UTC),
+		Msg:         "the original message",
+		MessageLink: "http://localhost:3000/r1/parent-msg-uuid",
+	}
+
+	quotedMsg := model.Message{
+		ID:                  "msg-quote-1",
+		RoomID:              "r1",
+		UserID:              "u-1",
+		UserAccount:         "alice",
+		Content:             "great point!",
+		CreatedAt:           now,
+		QuotedParentMessage: snapshot,
+	}
+	quotedEvt := model.MessageEvent{Message: quotedMsg, SiteID: "site-a", Timestamp: now.UnixMilli()}
+	quotedData, err := json.Marshal(quotedEvt)
+	require.NoError(t, err)
+
+	t.Run("quote snapshot reaches SaveMessage unchanged", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		store := NewMockStore(ctrl)
+		userStore := NewMockUserStore(ctrl)
+		threadStore := NewMockThreadStore(ctrl)
+
+		userStore.EXPECT().FindUserByID(gomock.Any(), "u-1").Return(user, nil)
+		store.EXPECT().
+			SaveMessage(gomock.Any(), &quotedMsg, &expectedSender, "site-a").
+			DoAndReturn(func(_ context.Context, m *model.Message, _ *cassParticipant, _ string) error {
+				require.NotNil(t, m.QuotedParentMessage, "QuotedParentMessage must be forwarded")
+				assert.Equal(t, "parent-msg-uuid", m.QuotedParentMessage.MessageID)
+				assert.Equal(t, "the original message", m.QuotedParentMessage.Msg)
+				return nil
+			})
+
+		h := NewHandler(store, userStore, threadStore)
+		err := h.processMessage(context.Background(), quotedData)
+		require.NoError(t, err)
+	})
 }

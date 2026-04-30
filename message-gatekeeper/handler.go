@@ -13,6 +13,7 @@ import (
 
 	"github.com/hmchangw/chat/pkg/idgen"
 	"github.com/hmchangw/chat/pkg/model"
+	"github.com/hmchangw/chat/pkg/model/cassandra"
 	"github.com/hmchangw/chat/pkg/natsutil"
 	"github.com/hmchangw/chat/pkg/subject"
 )
@@ -41,15 +42,16 @@ type publishFunc func(ctx context.Context, msg *nats.Msg, opts ...jetstream.Publ
 // Handler processes messages from the MESSAGES stream and validates them
 // before publishing to MESSAGES_CANONICAL.
 type Handler struct {
-	store   Store
-	publish publishFunc
-	reply   replyFunc
-	siteID  string
+	store         Store
+	publish       publishFunc
+	reply         replyFunc
+	siteID        string
+	parentFetcher ParentMessageFetcher
 }
 
 // NewHandler constructs a new Handler with the given dependencies.
-func NewHandler(store Store, publish publishFunc, reply replyFunc, siteID string) *Handler {
-	return &Handler{store: store, publish: publish, reply: reply, siteID: siteID}
+func NewHandler(store Store, publish publishFunc, reply replyFunc, siteID string, parentFetcher ParentMessageFetcher) *Handler {
+	return &Handler{store: store, publish: publish, reply: reply, siteID: siteID, parentFetcher: parentFetcher}
 }
 
 // HandleJetStreamMsg processes a JetStream message from the MESSAGES stream.
@@ -163,6 +165,11 @@ func (h *Handler) processMessage(ctx context.Context, account, roomID, siteID st
 		threadParentCreatedAt = &t
 	}
 
+	quotedSnapshot, err := h.resolveQuoteSnapshot(ctx, account, roomID, siteID, req.QuotedParentMessageID, req.ThreadParentMessageID)
+	if err != nil {
+		return nil, err
+	}
+
 	msg := model.Message{
 		ID:                           req.ID,
 		RoomID:                       roomID,
@@ -172,6 +179,7 @@ func (h *Handler) processMessage(ctx context.Context, account, roomID, siteID st
 		CreatedAt:                    now,
 		ThreadParentMessageID:        req.ThreadParentMessageID,
 		ThreadParentMessageCreatedAt: threadParentCreatedAt,
+		QuotedParentMessage:          quotedSnapshot,
 	}
 
 	// Publish MessageEvent to MESSAGES_CANONICAL
@@ -188,4 +196,28 @@ func (h *Handler) processMessage(ctx context.Context, account, roomID, siteID st
 	}
 
 	return json.Marshal(msg)
+}
+
+// resolveQuoteSnapshot fetches the quoted parent and returns its snapshot.
+// The strict same-conversation-context rule rejects cross-thread quotes:
+// main-room messages may only quote main-room parents, and thread-T messages
+// may only quote other thread-T messages — including the thread's own parent.
+func (h *Handler) resolveQuoteSnapshot(ctx context.Context, account, roomID, siteID, quotedParentMessageID, newMessageThreadID string) (*cassandra.QuotedParentMessage, error) {
+	if quotedParentMessageID == "" {
+		return nil, nil
+	}
+	snap, err := h.parentFetcher.FetchQuotedParent(ctx, account, roomID, siteID, quotedParentMessageID)
+	switch {
+	case err != nil:
+		return nil, fmt.Errorf("fetch quoted parent %s: %w", quotedParentMessageID, err)
+	case snap == nil:
+		// Treat the fetcher's contract violation as a hard failure rather than
+		// silently dereferencing snap.ThreadParentID below.
+		return nil, fmt.Errorf("fetch quoted parent %s: fetcher returned nil snapshot", quotedParentMessageID)
+	case snap.ThreadParentID != newMessageThreadID:
+		return nil, fmt.Errorf("quoted parent %s thread context mismatch: parent thread %q, new message thread %q",
+			quotedParentMessageID, snap.ThreadParentID, newMessageThreadID)
+	default:
+		return snap, nil
+	}
 }

@@ -12,6 +12,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 
 	"github.com/hmchangw/chat/pkg/model"
+	"github.com/hmchangw/chat/pkg/model/cassandra"
 )
 
 func TestUserJSON(t *testing.T) {
@@ -1437,6 +1438,102 @@ func TestChannelRefJSONBSON(t *testing.T) {
 		var dst model.ChannelRef
 		require.NoError(t, bson.Unmarshal(data, &dst))
 		assert.Equal(t, src, dst)
+	})
+}
+
+func TestSendMessageRequest_QuotedParentMessageID_JSON(t *testing.T) {
+	t.Run("with quotedParentMessageId", func(t *testing.T) {
+		r := model.SendMessageRequest{
+			ID:                    "msg-uuid-1",
+			Content:               "great point!",
+			RequestID:             "req-1",
+			QuotedParentMessageID: "parent-msg-uuid",
+		}
+		data, err := json.Marshal(&r)
+		require.NoError(t, err)
+
+		var raw map[string]any
+		require.NoError(t, json.Unmarshal(data, &raw))
+		assert.Equal(t, "parent-msg-uuid", raw["quotedParentMessageId"])
+
+		var dst model.SendMessageRequest
+		require.NoError(t, json.Unmarshal(data, &dst))
+		assert.Equal(t, "parent-msg-uuid", dst.QuotedParentMessageID)
+	})
+
+	t.Run("quotedParentMessageId omitted when empty", func(t *testing.T) {
+		r := model.SendMessageRequest{
+			ID:        "msg-uuid-1",
+			Content:   "hello",
+			RequestID: "req-1",
+		}
+		data, err := json.Marshal(&r)
+		require.NoError(t, err)
+		var raw map[string]any
+		require.NoError(t, json.Unmarshal(data, &raw))
+		_, present := raw["quotedParentMessageId"]
+		assert.False(t, present, "quotedParentMessageId should be omitted when empty")
+	})
+}
+
+func TestMessage_QuotedParentMessage_JSON(t *testing.T) {
+	parentTS := time.Date(2026, 1, 1, 11, 0, 0, 0, time.UTC)
+	threadParentTS := time.Date(2026, 1, 1, 8, 0, 0, 0, time.UTC)
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+
+	t.Run("populated snapshot round-trips", func(t *testing.T) {
+		m := model.Message{
+			ID: "m1", RoomID: "r1", UserID: "u1", UserAccount: "alice",
+			Content:   "great point!",
+			CreatedAt: now,
+			QuotedParentMessage: &cassandra.QuotedParentMessage{
+				MessageID: "parent-msg-uuid",
+				RoomID:    "r1",
+				Sender: cassandra.Participant{
+					ID:      "u-bob",
+					EngName: "Bob Chen",
+					Account: "bob",
+				},
+				CreatedAt:             parentTS,
+				Msg:                   "the original message",
+				Mentions:              []cassandra.Participant{{ID: "u-carol", Account: "carol", EngName: "Carol Lee"}},
+				MessageLink:           "http://localhost:3000/r1/parent-msg-uuid",
+				ThreadParentID:        "thread-parent-uuid",
+				ThreadParentCreatedAt: &threadParentTS,
+			},
+		}
+		data, err := json.Marshal(&m)
+		require.NoError(t, err)
+
+		var dst model.Message
+		require.NoError(t, json.Unmarshal(data, &dst))
+		require.NotNil(t, dst.QuotedParentMessage)
+		assert.Equal(t, "parent-msg-uuid", dst.QuotedParentMessage.MessageID)
+		assert.Equal(t, "r1", dst.QuotedParentMessage.RoomID)
+		assert.Equal(t, "the original message", dst.QuotedParentMessage.Msg)
+		assert.Equal(t, "bob", dst.QuotedParentMessage.Sender.Account)
+		assert.Equal(t, "Bob Chen", dst.QuotedParentMessage.Sender.EngName)
+		assert.Equal(t, parentTS, dst.QuotedParentMessage.CreatedAt.UTC())
+		assert.Equal(t, "http://localhost:3000/r1/parent-msg-uuid", dst.QuotedParentMessage.MessageLink)
+		require.Len(t, dst.QuotedParentMessage.Mentions, 1)
+		assert.Equal(t, "carol", dst.QuotedParentMessage.Mentions[0].Account)
+		assert.Equal(t, "thread-parent-uuid", dst.QuotedParentMessage.ThreadParentID)
+		require.NotNil(t, dst.QuotedParentMessage.ThreadParentCreatedAt)
+		assert.Equal(t, threadParentTS, dst.QuotedParentMessage.ThreadParentCreatedAt.UTC())
+	})
+
+	t.Run("quotedParentMessage omitted when nil", func(t *testing.T) {
+		m := model.Message{
+			ID: "m1", RoomID: "r1", UserID: "u1", UserAccount: "alice",
+			Content:   "hello",
+			CreatedAt: now,
+		}
+		data, err := json.Marshal(&m)
+		require.NoError(t, err)
+		var raw map[string]any
+		require.NoError(t, json.Unmarshal(data, &raw))
+		_, present := raw["quotedParentMessage"]
+		assert.False(t, present, "quotedParentMessage should be omitted when nil")
 	})
 }
 
