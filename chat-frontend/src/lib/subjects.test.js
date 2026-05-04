@@ -1,5 +1,14 @@
 import { describe, it, expect } from 'vitest'
-import { userRoomEvent, roomEvent, memberAdd, memberRemove, memberRoleUpdate } from './subjects'
+import {
+  userRoomEvent,
+  roomEvent,
+  memberAdd,
+  memberRemove,
+  memberRoleUpdate,
+  searchRooms,
+  searchMessages,
+  msgSurrounding,
+} from './subjects'
 
 describe('subjects', () => {
   it('userRoomEvent builds the per-user room event subject', () => {
@@ -25,6 +34,20 @@ describe('subjects', () => {
   it('memberRoleUpdate builds the role-update request subject', () => {
     expect(memberRoleUpdate('alice', 'r1', 'site-A')).toBe(
       'chat.user.alice.request.room.r1.site-A.member.role-update'
+    )
+  })
+
+  it('searchRooms builds the search rooms request subject', () => {
+    expect(searchRooms('alice')).toBe('chat.user.alice.request.search.rooms')
+  })
+
+  it('searchMessages builds the search messages request subject', () => {
+    expect(searchMessages('alice')).toBe('chat.user.alice.request.search.messages')
+  })
+
+  it('msgSurrounding builds the surrounding-messages request subject', () => {
+    expect(msgSurrounding('alice', 'r1', 'site-A')).toBe(
+      'chat.user.alice.request.room.r1.site-A.msg.surrounding'
     )
   })
 })

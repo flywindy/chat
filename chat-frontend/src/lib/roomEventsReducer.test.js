@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { initialState, roomEventsReducer } from './roomEventsReducer'
+import { BUFFER_MODE, initialState, roomEventsReducer } from './roomEventsReducer'
 
 function room(id, overrides = {}) {
   return {
@@ -305,5 +305,133 @@ describe('roomEventsReducer: history and active room', () => {
   it('ROOMS_FAILED stores the error message', () => {
     const next = roomEventsReducer(initialState, { type: 'ROOMS_FAILED', error: 'boom' })
     expect(next.roomsError).toBe('boom')
+  })
+})
+
+describe('roomEventsReducer: buffer mode (jump-to-message)', () => {
+  it('emptyRoomState defaults bufferMode=live with no pending messages or focus', () => {
+    const next = roomEventsReducer(initialState, {
+      type: 'MESSAGE_RECEIVED',
+      event: newMessageEvent(),
+    })
+    expect(next.roomState.a.bufferMode).toBe(BUFFER_MODE.LIVE)
+    expect(next.roomState.a.pendingLiveMessages).toEqual([])
+    expect(next.roomState.a.focusMessageId).toBe(null)
+  })
+
+  it('REPLACE_ROOM_BUFFER swaps messages, sets historical mode + focus', () => {
+    const surrounding = [
+      { id: 'm10', roomId: 'a', content: 'before', createdAt: '2026-04-17T11:00:00Z', sender: { account: 'bob' } },
+      { id: 'm11', roomId: 'a', content: 'hit',    createdAt: '2026-04-17T11:01:00Z', sender: { account: 'bob' } },
+      { id: 'm12', roomId: 'a', content: 'after',  createdAt: '2026-04-17T11:02:00Z', sender: { account: 'bob' } },
+    ]
+    const next = roomEventsReducer(initialState, {
+      type: 'REPLACE_ROOM_BUFFER',
+      roomId: 'a',
+      messages: surrounding,
+      focusMessageId: 'm11',
+    })
+    expect(next.roomState.a.messages.map((m) => m.id)).toEqual(['m10', 'm11', 'm12'])
+    expect(next.roomState.a.bufferMode).toBe(BUFFER_MODE.HISTORICAL)
+    expect(next.roomState.a.focusMessageId).toBe('m11')
+    expect(next.roomState.a.hasLoadedHistory).toBe(true)
+    expect(next.roomState.a.pendingLiveMessages).toEqual([])
+  })
+
+  it('MESSAGE_RECEIVED in historical mode buffers into pendingLiveMessages and does not touch messages', () => {
+    const seeded = roomEventsReducer(initialState, {
+      type: 'REPLACE_ROOM_BUFFER',
+      roomId: 'a',
+      messages: [
+        { id: 'm1', roomId: 'a', content: 'old', createdAt: '2026-04-17T10:00:00Z', sender: { account: 'bob' } },
+      ],
+      focusMessageId: 'm1',
+    })
+    const next = roomEventsReducer(seeded, {
+      type: 'MESSAGE_RECEIVED',
+      event: newMessageEvent({
+        message: { id: 'mLive', roomId: 'a', content: 'live', createdAt: '2026-04-17T12:00:00Z', sender: { account: 'bob' } },
+        lastMsgId: 'mLive',
+      }),
+    })
+    expect(next.roomState.a.messages.map((m) => m.id)).toEqual(['m1'])
+    expect(next.roomState.a.pendingLiveMessages.map((m) => m.id)).toEqual(['mLive'])
+    expect(next.roomState.a.bufferMode).toBe(BUFFER_MODE.HISTORICAL)
+  })
+
+  it('MESSAGE_RECEIVED in historical mode dedupes pendingLiveMessages by id', () => {
+    let s = roomEventsReducer(initialState, {
+      type: 'REPLACE_ROOM_BUFFER',
+      roomId: 'a',
+      messages: [],
+      focusMessageId: null,
+    })
+    s = roomEventsReducer(s, {
+      type: 'MESSAGE_RECEIVED',
+      event: newMessageEvent({
+        message: { id: 'mLive', roomId: 'a', content: 'live', createdAt: '2026-04-17T12:00:00Z', sender: { account: 'bob' } },
+      }),
+    })
+    s = roomEventsReducer(s, {
+      type: 'MESSAGE_RECEIVED',
+      event: newMessageEvent({
+        message: { id: 'mLive', roomId: 'a', content: 'live', createdAt: '2026-04-17T12:00:00Z', sender: { account: 'bob' } },
+      }),
+    })
+    expect(s.roomState.a.pendingLiveMessages.map((m) => m.id)).toEqual(['mLive'])
+  })
+
+  it('RESET_TO_LIVE_TAIL merges pending into messages, clears pending + focus, flips back to live', () => {
+    let s = roomEventsReducer(initialState, {
+      type: 'REPLACE_ROOM_BUFFER',
+      roomId: 'a',
+      messages: [
+        { id: 'm1', roomId: 'a', content: 'old', createdAt: '2026-04-17T10:00:00Z', sender: { account: 'bob' } },
+      ],
+      focusMessageId: 'm1',
+    })
+    s = roomEventsReducer(s, {
+      type: 'MESSAGE_RECEIVED',
+      event: newMessageEvent({
+        message: { id: 'mLive', roomId: 'a', content: 'live', createdAt: '2026-04-17T12:00:00Z', sender: { account: 'bob' } },
+      }),
+    })
+    const next = roomEventsReducer(s, { type: 'RESET_TO_LIVE_TAIL', roomId: 'a' })
+    expect(next.roomState.a.messages.map((m) => m.id)).toEqual(['m1', 'mLive'])
+    expect(next.roomState.a.pendingLiveMessages).toEqual([])
+    expect(next.roomState.a.focusMessageId).toBe(null)
+    expect(next.roomState.a.bufferMode).toBe(BUFFER_MODE.LIVE)
+  })
+
+  it('RESET_TO_LIVE_TAIL dedupes pending vs existing messages', () => {
+    let s = roomEventsReducer(initialState, {
+      type: 'REPLACE_ROOM_BUFFER',
+      roomId: 'a',
+      messages: [
+        { id: 'm1', roomId: 'a', content: 'old', createdAt: '2026-04-17T10:00:00Z', sender: { account: 'bob' } },
+      ],
+      focusMessageId: 'm1',
+    })
+    // Inject a pending message that already exists in messages (defensive)
+    s = {
+      ...s,
+      roomState: {
+        ...s.roomState,
+        a: {
+          ...s.roomState.a,
+          pendingLiveMessages: [
+            { id: 'm1', roomId: 'a', content: 'dup', createdAt: '2026-04-17T10:00:00Z', sender: { account: 'bob' } },
+          ],
+        },
+      },
+    }
+    const next = roomEventsReducer(s, { type: 'RESET_TO_LIVE_TAIL', roomId: 'a' })
+    expect(next.roomState.a.messages.map((m) => m.id)).toEqual(['m1'])
+  })
+
+  it('RESET_TO_LIVE_TAIL on an unknown room is a safe no-op-ish', () => {
+    const next = roomEventsReducer(initialState, { type: 'RESET_TO_LIVE_TAIL', roomId: 'missing' })
+    // Either no change to state or an empty roomState.missing in live mode is acceptable.
+    expect(next.roomState.missing?.bufferMode ?? BUFFER_MODE.LIVE).toBe(BUFFER_MODE.LIVE)
   })
 })

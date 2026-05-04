@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, act, waitFor } from '@testing-library/react'
 import { NatsContext } from './NatsContext'
 import { RoomEventsProvider, useRoomEvents, useRoomSummaries } from './RoomEventsContext'
+import { BUFFER_MODE } from '../lib/roomEventsReducer'
+// jumpToMessage / resetToLiveTail tests — see suite below
 
 function mockNats({ request, subscribe, user = { account: 'alice', siteId: 'site-A' } } = {}) {
   return {
@@ -368,5 +370,143 @@ describe('RoomEventsProvider subscriptions', () => {
 
     // Bob's state should be empty — the stale alice dispatch must not have gone through
     expect(bobMessages).toEqual([])
+  })
+})
+
+describe('RoomEventsProvider jumpToMessage / resetToLiveTail', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('jumpToMessage requests msg.surrounding using the room siteId and replaces the buffer', async () => {
+    const rooms = [
+      { id: 'r1', name: 'general', type: 'channel', siteId: 'site-B', userCount: 2, lastMsgAt: null },
+    ]
+    const surrounding = [
+      { id: 'm10', roomId: 'r1', content: 'before', createdAt: '2026-04-17T11:00:00Z', sender: { account: 'bob' } },
+      { id: 'm11', roomId: 'r1', content: 'hit',    createdAt: '2026-04-17T11:01:00Z', sender: { account: 'bob' } },
+      { id: 'm12', roomId: 'r1', content: 'after',  createdAt: '2026-04-17T11:02:00Z', sender: { account: 'bob' } },
+    ]
+    const request = vi.fn().mockImplementation((subject) => {
+      if (subject.endsWith('.rooms.list')) return Promise.resolve({ rooms })
+      if (subject.includes('.msg.surrounding')) {
+        return Promise.resolve({ messages: surrounding })
+      }
+      throw new Error('unexpected subject: ' + subject)
+    })
+    const nats = mockNats({ request })
+
+    function Probe() {
+      const { messages, focusMessageId, bufferMode, jumpToMessage } = useRoomEvents('r1')
+      return (
+        <div>
+          <button onClick={() => jumpToMessage('m11').catch(() => {})}>jump</button>
+          <div data-testid="messages">{messages.map((m) => m.id).join(',')}</div>
+          <div data-testid="focus">{focusMessageId ?? ''}</div>
+          <div data-testid="mode">{bufferMode}</div>
+        </div>
+      )
+    }
+
+    render(wrap(<Probe />, nats))
+    // Wait for rooms list to load so summary is present (so jumpToMessage uses room siteId)
+    await waitFor(() =>
+      expect(request).toHaveBeenCalledWith('chat.user.alice.request.rooms.list', {})
+    )
+
+    await act(async () => {
+      screen.getByText('jump').click()
+    })
+
+    await waitFor(() =>
+      expect(request).toHaveBeenCalledWith(
+        'chat.user.alice.request.room.r1.site-B.msg.surrounding',
+        { messageId: 'm11' }
+      )
+    )
+
+    await waitFor(() =>
+      expect(screen.getByTestId('messages').textContent).toBe('m10,m11,m12')
+    )
+    expect(screen.getByTestId('focus').textContent).toBe('m11')
+    expect(screen.getByTestId('mode').textContent).toBe(BUFFER_MODE.HISTORICAL)
+  })
+
+  it('exposes pendingCount when in historical mode and live messages arrive', async () => {
+    const rooms = [
+      { id: 'r1', name: 'general', type: 'channel', siteId: 'site-A', userCount: 2, lastMsgAt: null },
+    ]
+    const handlers = new Map()
+    const request = vi.fn().mockImplementation((subject) => {
+      if (subject.endsWith('.rooms.list')) return Promise.resolve({ rooms })
+      if (subject.includes('.msg.surrounding')) {
+        return Promise.resolve({
+          messages: [
+            { id: 'old', roomId: 'r1', content: 'old', createdAt: '2026-04-17T10:00:00Z', sender: { account: 'bob' } },
+          ],
+        })
+      }
+      throw new Error('unexpected subject: ' + subject)
+    })
+    const subscribe = vi.fn().mockImplementation((subject, cb) => {
+      handlers.set(subject, cb)
+      return { unsubscribe: vi.fn() }
+    })
+    const nats = mockNats({ request, subscribe })
+
+    function Probe() {
+      const { pendingCount, bufferMode, jumpToMessage, resetToLiveTail, messages } = useRoomEvents('r1')
+      return (
+        <div>
+          <button onClick={() => jumpToMessage('old').catch(() => {})}>jump</button>
+          <button onClick={() => resetToLiveTail()}>reset</button>
+          <div data-testid="pending">{pendingCount}</div>
+          <div data-testid="mode">{bufferMode}</div>
+          <div data-testid="messages">{messages.map((m) => m.id).join(',')}</div>
+        </div>
+      )
+    }
+
+    render(wrap(<Probe />, nats))
+    await waitFor(() => expect(handlers.has('chat.room.r1.event')).toBe(true))
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+
+    await act(async () => {
+      screen.getByText('jump').click()
+      await Promise.resolve()
+    })
+    await waitFor(() => expect(screen.getByTestId('mode').textContent).toBe(BUFFER_MODE.HISTORICAL))
+
+    act(() => {
+      handlers.get('chat.room.r1.event')({
+        type: 'new_message',
+        roomId: 'r1',
+        mentions: [],
+        mentionAll: false,
+        lastMsgAt: '2026-04-17T12:00:00Z',
+        lastMsgId: 'live1',
+        message: { id: 'live1', roomId: 'r1', content: 'live!', createdAt: '2026-04-17T12:00:00Z', sender: { account: 'bob' } },
+      })
+    })
+    await waitFor(() => expect(screen.getByTestId('pending').textContent).toBe('1'))
+    expect(screen.getByTestId('messages').textContent).toBe('old')
+
+    act(() => {
+      screen.getByText('reset').click()
+    })
+    await waitFor(() => expect(screen.getByTestId('mode').textContent).toBe(BUFFER_MODE.LIVE))
+    expect(screen.getByTestId('messages').textContent).toBe('old,live1')
+    expect(screen.getByTestId('pending').textContent).toBe('0')
+  })
+
+  it('useRoomSummaries exposes jumpToMessage', async () => {
+    const nats = mockNats()
+    let captured
+    function Probe() {
+      const { jumpToMessage } = useRoomSummaries()
+      captured = jumpToMessage
+      return null
+    }
+    render(wrap(<Probe />, nats))
+    await waitFor(() => expect(nats.request).toHaveBeenCalled())
+    expect(typeof captured).toBe('function')
   })
 })

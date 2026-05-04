@@ -26,8 +26,10 @@ profile.cov
 go.work
 go.work.sum
 
-# env file
+# env files (Vite picks up .env.local automatically; never commit)
 .env
+.env.local
+.env.*.local
 
 # Build output
 bin/

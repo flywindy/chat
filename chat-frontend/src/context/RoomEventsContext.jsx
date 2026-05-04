@@ -1,8 +1,9 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useRef } from 'react'
 import { useNats } from './NatsContext'
-import { initialState, roomEventsReducer } from '../lib/roomEventsReducer'
+import { BUFFER_MODE, initialState, roomEventsReducer } from '../lib/roomEventsReducer'
 import {
   msgHistory,
+  msgSurrounding,
   roomEvent,
   roomsGet,
   roomsList,
@@ -143,9 +144,40 @@ export function RoomEventsProvider({ children }) {
     dispatch({ type: 'SET_ACTIVE_ROOM', roomId })
   }, [])
 
+  const jumpToMessage = useCallback(
+    async (roomId, messageId) => {
+      if (!user || !roomId || !messageId) return
+      const summary = stateRef.current.summaries.find((r) => r.id === roomId)
+      const siteId = summary?.siteId ?? user.siteId
+      const gen = generationRef.current
+      try {
+        const resp = await request(msgSurrounding(user.account, roomId, siteId), { messageId })
+        if (generationRef.current !== gen) return
+        const messages = resp.messages ?? []
+        dispatch({
+          type: 'REPLACE_ROOM_BUFFER',
+          roomId,
+          messages,
+          focusMessageId: messageId,
+        })
+      } catch (err) {
+        if (generationRef.current === gen) {
+          dispatch({ type: 'HISTORY_FAILED', roomId, error: err.message })
+        }
+        throw err
+      }
+    },
+    [user, request]
+  )
+
+  const resetToLiveTail = useCallback((roomId) => {
+    if (!roomId) return
+    dispatch({ type: 'RESET_TO_LIVE_TAIL', roomId })
+  }, [])
+
   const value = useMemo(
-    () => ({ state, loadHistory, setActiveRoom }),
-    [state, loadHistory, setActiveRoom]
+    () => ({ state, loadHistory, setActiveRoom, jumpToMessage, resetToLiveTail }),
+    [state, loadHistory, setActiveRoom, jumpToMessage, resetToLiveTail]
   )
 
   return <RoomEventsContext.Provider value={value}>{children}</RoomEventsContext.Provider>
@@ -158,25 +190,36 @@ function useRoomEventsInternal() {
 }
 
 export function useRoomEvents(roomId) {
-  const { state, loadHistory } = useRoomEventsInternal()
+  const { state, loadHistory, jumpToMessage, resetToLiveTail } = useRoomEventsInternal()
   const room = state.roomState[roomId]
   const load = useCallback(() => loadHistory(roomId), [loadHistory, roomId])
+  const jump = useCallback(
+    (messageId) => jumpToMessage(roomId, messageId),
+    [jumpToMessage, roomId]
+  )
+  const reset = useCallback(() => resetToLiveTail(roomId), [resetToLiveTail, roomId])
   return useMemo(
     () => ({
       messages: room?.messages ?? [],
       hasLoadedHistory: !!room?.hasLoadedHistory,
       historyError: room?.historyError ?? null,
       loadHistory: load,
+      bufferMode: room?.bufferMode ?? BUFFER_MODE.LIVE,
+      pendingCount: room?.pendingLiveMessages?.length ?? 0,
+      focusMessageId: room?.focusMessageId ?? null,
+      jumpToMessage: jump,
+      resetToLiveTail: reset,
     }),
-    [room, load]
+    [room, load, jump, reset]
   )
 }
 
 export function useRoomSummaries() {
-  const { state, setActiveRoom } = useRoomEventsInternal()
+  const { state, setActiveRoom, jumpToMessage } = useRoomEventsInternal()
   return {
     summaries: state.summaries,
     setActiveRoom,
+    jumpToMessage,
     error: state.roomsError,
   }
 }

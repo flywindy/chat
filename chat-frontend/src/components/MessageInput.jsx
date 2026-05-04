@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { v4 as uuidv4 } from 'uuid'
 import { useNats } from '../context/NatsContext'
 import { msgSend } from '../lib/subjects'
+import { generateMessageID } from '../lib/idgen'
 
 export default function MessageInput({ room }) {
   const { user, publish } = useNats()
@@ -13,8 +14,12 @@ export default function MessageInput({ room }) {
 
     const account = user.account
     const siteId = user.siteId
+    // Message.ID must be a 20-char base62 string per pkg/idgen.IsValidMessageID;
+    // message-gatekeeper drops anything else (including UUIDs). requestId
+    // remains a hyphenated UUID — it's used for X-Request-ID propagation, not
+    // for the message identity.
     publish(msgSend(account, room.id, siteId), {
-      id: uuidv4(),
+      id: generateMessageID(),
       content: text.trim(),
       requestId: uuidv4(),
     })

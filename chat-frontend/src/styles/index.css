@@ -228,7 +228,7 @@ body {
   margin-top: 0.25rem;
   line-height: 1.4;
   white-space: pre-wrap;
-  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .message-loading,
@@ -241,6 +241,41 @@ body {
 
 .message-error {
   color: #f38ba8;
+}
+
+.jump-latest-pill {
+  padding: 0.75rem;
+  margin: 0.5rem;
+  background: #5865f2;
+  border-radius: 24px;
+  text-align: center;
+}
+
+.jump-latest-pill button {
+  background: none;
+  border: none;
+  color: white;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.jump-latest-pill button:hover {
+  text-decoration: underline;
+}
+
+/* Jump-to-message flash highlight */
+@keyframes flash-jump {
+  0% {
+    background-color: rgba(88, 101, 242, 0.2);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+.message.flash-jump {
+  animation: flash-jump 2s ease-out;
 }
 
 /* Message Input */
@@ -419,6 +454,7 @@ body {
 }
 
 .chat-header {
+  position: relative;
   display: flex;
   align-items: center;
   padding: 0.5rem 1rem;
@@ -591,4 +627,380 @@ body {
 
 .manage-members-footer {
   margin-top: 0.75rem;
+}
+
+/* Header search bar — Teams-style centered overlay. Absolute positioning
+ * keeps it anchored to the header center regardless of how wide the title
+ * or right-side controls grow. */
+.chat-header-search {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 480px;
+  max-width: 50%;
+  z-index: 1;
+}
+
+.search-bar-wrap {
+  position: relative;
+  width: 100%;
+}
+
+.search-bar {
+  width: 100%;
+  padding: 0.4rem 0.75rem;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: #f2f3f5;
+  font-size: 13px;
+  outline: none;
+  transition: background 120ms ease, border-color 120ms ease;
+  box-sizing: border-box;
+}
+
+.search-bar::placeholder {
+  color: #949ba4;
+}
+
+.search-bar:hover {
+  background: rgba(255, 255, 255, 0.09);
+}
+
+.search-bar:focus {
+  background: #1e1f22;
+  border-color: #5865f2;
+}
+
+.search-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  background: #2b2d31;
+  border: 1px solid #3f4147;
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.32);
+  overflow: hidden;
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.search-result {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  cursor: pointer;
+  color: #dbdee1;
+  font-size: 13px;
+}
+
+.search-result:hover,
+.search-result.active {
+  background: #404249;
+  color: #f2f3f5;
+}
+
+.search-result .result-type {
+  color: #949ba4;
+  font-weight: 600;
+  width: 1rem;
+  flex-shrink: 0;
+}
+
+.search-result .result-name {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.search-footer {
+  display: flex;
+  justify-content: space-between;
+  padding: 0.4rem 0.75rem;
+  font-size: 11px;
+  color: #949ba4;
+  border-top: 1px solid #3f4147;
+  background: #232529;
+}
+
+/* Full-pane search results (Enter from header search). Mirrors the
+ * sidebar/message-area aesthetic so it blends with the chat container
+ * instead of standing out as a "white panel". */
+.search-results-pane {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  background: #2b2d31;
+  color: #dbdee1;
+  overflow: hidden;
+}
+
+.search-results-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid #3f4147;
+  background: #1e1f22;
+}
+
+.search-results-header h2 {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0;
+  color: #f2f3f5;
+}
+
+.search-results-close {
+  background: transparent;
+  border: 1px solid #4e5058;
+  border-radius: 4px;
+  color: #b5bac1;
+  padding: 0.2rem 0.5rem;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.search-results-close:hover {
+  background: #404249;
+  color: #f2f3f5;
+}
+
+.search-results-tabs {
+  display: flex;
+  gap: 0.25rem;
+  padding: 0 1rem;
+  border-bottom: 1px solid #3f4147;
+  background: #232529;
+}
+
+.search-results-tabs .tab {
+  background: transparent;
+  border: none;
+  color: #b5bac1;
+  padding: 0.55rem 0.85rem;
+  font-size: 13px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+
+.search-results-tabs .tab:hover {
+  color: #dbdee1;
+}
+
+.search-results-tabs .tab.active {
+  color: #f2f3f5;
+  border-bottom-color: #5865f2;
+}
+
+.search-results-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.5rem 0.75rem;
+}
+
+.search-results-content .loading,
+.search-results-content .empty {
+  padding: 1.5rem;
+  text-align: center;
+  color: #949ba4;
+  font-size: 13px;
+}
+
+.search-results-content .result-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding: 0.6rem 0.75rem;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  color: #dbdee1;
+  font-size: 13px;
+  font-family: inherit;
+  text-align: left;
+  background: transparent;
+  width: 100%;
+}
+
+.search-results-content .result-item:hover,
+.search-results-content .result-item:focus-visible {
+  background: #404249;
+  outline: none;
+}
+
+.search-error {
+  padding: 1rem;
+  margin: 0.5rem;
+  border-radius: 4px;
+  color: #f38ba8;
+  background: rgba(243, 139, 168, 0.08);
+  font-size: 13px;
+}
+
+.search-results-content .room-results .result-item {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.search-results-content .room-results .result-type {
+  color: #949ba4;
+  font-weight: 600;
+  width: 1rem;
+  flex-shrink: 0;
+}
+
+.search-results-content .msg-content {
+  color: #f2f3f5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.search-results-content .msg-meta {
+  color: #949ba4;
+  font-size: 11px;
+}
+
+/* In-room search (Ctrl+F): Teams-style right rail. The host wrapper uses
+ * flexbox so MessageArea + MessageInput stay full-width on the left and
+ * the panel slots in as a fixed-width column on the right. */
+.chat-main-with-side-panel {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.chat-main-content {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+.in-room-search {
+  width: 420px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: #2b2d31;
+  border-left: 1px solid #3f4147;
+  color: #dbdee1;
+}
+
+.in-room-search-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid #3f4147;
+  background: #1e1f22;
+}
+
+.in-room-search-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #f2f3f5;
+}
+
+.in-room-search-close {
+  background: transparent;
+  border: 1px solid #4e5058;
+  border-radius: 4px;
+  color: #b5bac1;
+  padding: 0.1rem 0.5rem;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.in-room-search-close:hover {
+  background: #404249;
+  color: #f2f3f5;
+}
+
+.in-room-search-input-wrap {
+  padding: 0.75rem;
+  border-bottom: 1px solid #3f4147;
+}
+
+.in-room-search-input {
+  width: 100%;
+  padding: 0.4rem 0.75rem;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: #f2f3f5;
+  font-size: 13px;
+  outline: none;
+  transition: background 120ms ease, border-color 120ms ease;
+  box-sizing: border-box;
+}
+
+.in-room-search-input::placeholder {
+  color: #949ba4;
+}
+
+.in-room-search-input:hover {
+  background: rgba(255, 255, 255, 0.09);
+}
+
+.in-room-search-input:focus {
+  background: #1e1f22;
+  border-color: #5865f2;
+}
+
+.in-room-search-meta {
+  padding: 0.4rem 1rem;
+  font-size: 11px;
+  color: #949ba4;
+  background: #232529;
+  border-bottom: 1px solid #3f4147;
+}
+
+.in-room-search-results {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.4rem;
+}
+
+.in-room-search-empty {
+  padding: 1rem;
+  text-align: center;
+  color: #949ba4;
+  font-size: 13px;
+}
+
+.in-room-search-result {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding: 0.55rem 0.75rem;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.in-room-search-result:hover {
+  background: #404249;
+}
+
+.in-room-search-result-content {
+  color: #f2f3f5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.in-room-search-result-meta {
+  color: #949ba4;
+  font-size: 11px;
 }

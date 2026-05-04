@@ -50,6 +50,11 @@ services:
       - "9042:9042"
     environment:
       - CASSANDRA_CLUSTER_NAME=chat-dev
+      # Cap heap so the local stack fits in 8GB Docker; default ~2GB OOMs.
+      - MAX_HEAP_SIZE=512M
+      - HEAP_NEWSIZE=128M
+    # 1GB OOMs mid-init — JVM off-heap pushes total to ~1.5× heap.
+    mem_limit: 1500m
     volumes:
       - cassandra-data:/var/lib/cassandra
     healthcheck:
@@ -57,7 +62,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
-      start_period: 30s
+      start_period: 60s
     networks:
       - chat-local
 
@@ -109,13 +114,14 @@ services:
     networks:
       - chat-local
 
-  # Kibana is a dev-only convenience — point a browser at http://localhost:5601
-  # to browse indexes, run queries against the `messages-*`, `spotlight`, and
-  # `user-room` indexes, and tail documents as search-sync-worker fills them.
-  # Security is disabled to match the local ES setup.
+  # Kibana is a dev-only convenience for browsing ES indexes at
+  # http://localhost:5601. It's heavy (~1GB RAM) and OOMs first under memory
+  # pressure, so it's behind the "debug" profile — `make deps-up` skips it.
+  # Bring up with: docker compose -f docker-local/compose.deps.yaml --profile debug up -d kibana
   kibana:
     image: docker.elastic.co/kibana/kibana:8.17.0
     container_name: chat-local-kibana
+    profiles: ["debug"]
     ports:
       - "5601:5601"
     environment:
@@ -124,11 +130,11 @@ services:
     depends_on:
       elasticsearch:
         condition: service_healthy
-    # `curl` is NOT shipped in the kibana:8.17.0 image — use wget, which is
-    # present. `start_period: 60s` covers Kibana's 30-60s boot before the
-    # first /api/status succeeds so the 10 retries don't exhaust early.
+    # `kibana:8.17.0` ships /usr/bin/curl but not wget. `start_period: 60s`
+    # covers Kibana's 30-60s boot before the first /api/status succeeds so
+    # the 10 retries don't exhaust early.
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:5601/api/status | grep -q '\"level\":\"available\"'"]
+      test: ["CMD-SHELL", "curl -fs http://localhost:5601/api/status | grep -q '\"level\":\"available\"'"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -157,8 +163,10 @@ services:
   keycloak:
     image: quay.io/keycloak/keycloak:26.0
     container_name: chat-local-keycloak
+    # Host 8180 chosen because 9090 collides with search-service's Prometheus
+    # metrics port. Browse the admin UI at http://localhost:8180.
     ports:
-      - "9090:8080"
+      - "8180:8080"
     environment:
       KC_BOOTSTRAP_ADMIN_USERNAME: admin
       KC_BOOTSTRAP_ADMIN_PASSWORD: admin

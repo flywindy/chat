@@ -1,6 +1,7 @@
 import { createContext, useContext, useRef, useState, useCallback } from 'react'
 import { connect as natsConnect, StringCodec, jwtAuthenticator } from 'nats.ws'
 import { createUser } from 'nkeys.js'
+import { AUTH_URL, NATS_URL } from '../lib/runtimeConfig'
 
 export const NatsContext = createContext(null)
 
@@ -12,24 +13,34 @@ export function NatsProvider({ children }) {
   const [user, setUser] = useState(null)
   const [error, setError] = useState(null)
 
-  const authUrl = import.meta.env.VITE_AUTH_URL || ''
-  const natsUrl = import.meta.env.VITE_NATS_URL || 'ws://localhost:4223'
+  const authUrl = AUTH_URL
+  const natsUrl = NATS_URL
 
-  const connectToNats = useCallback(async (account, siteId) => {
+  // connectToNats accepts an opts object with one of two shapes:
+  //   { mode: 'dev', account, siteId } — dev login by account name
+  //   { mode: 'sso', ssoToken, siteId } — production login via OIDC access token
+  const connectToNats = useCallback(async (opts) => {
     setError(null)
+
+    const { mode, account, ssoToken, siteId } = opts || {}
 
     const nkey = createUser()
     const natsPublicKey = nkey.getPublicKey()
 
+    const body =
+      mode === 'sso'
+        ? { ssoToken, natsPublicKey }
+        : { account, natsPublicKey }
+
     const authResp = await fetch(`${authUrl}/auth`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ account, natsPublicKey }),
+      body: JSON.stringify(body),
     })
 
     if (!authResp.ok) {
-      const body = await authResp.json().catch(() => ({}))
-      throw new Error(body.error || `Auth failed: ${authResp.status}`)
+      const errBody = await authResp.json().catch(() => ({}))
+      throw new Error(errBody.error || `Auth failed: ${authResp.status}`)
     }
 
     const { natsJwt, user: userInfo } = await authResp.json()

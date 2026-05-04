@@ -12,6 +12,8 @@ services:
         required: false
     environment:
       - PORT=8080
+      # Bypass OIDC; accept any account name. Flip to false to test OIDC.
+      - DEV_MODE=${DEV_MODE:-true}
       - NATS_JWT_EXPIRY=2h
       - OIDC_ISSUER_URL=http://keycloak:8080/realms/chatapp
       - OIDC_AUDIENCE=nats-chat

@@ -9,6 +9,10 @@ export function msgHistory(account, roomId, siteId) {
   return `chat.user.${account}.request.room.${roomId}.${siteId}.msg.history`
 }
 
+export function msgSurrounding(account, roomId, siteId) {
+  return `chat.user.${account}.request.room.${roomId}.${siteId}.msg.surrounding`
+}
+
 export function roomEvent(roomId) {
   return `chat.room.${roomId}.event`
 }
@@ -47,4 +51,12 @@ export function memberRemove(account, roomId, siteId) {
 
 export function memberRoleUpdate(account, roomId, siteId) {
   return `chat.user.${account}.request.room.${roomId}.${siteId}.member.role-update`
+}
+
+export function searchRooms(account) {
+  return `chat.user.${account}.request.search.rooms`
+}
+
+export function searchMessages(account) {
+  return `chat.user.${account}.request.search.messages`
 }

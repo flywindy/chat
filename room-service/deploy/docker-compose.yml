@@ -1,18 +1,6 @@
 name: room-service
 
 services:
-  valkey:
-    image: valkey/valkey:8-alpine
-    ports:
-      - "6379:6379"
-    healthcheck:
-      test: ["CMD", "valkey-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
-    networks:
-      - chat-local
-
   room-service:
     build:
       context: ../..
@@ -30,9 +18,6 @@ services:
       - BOOTSTRAP_STREAMS=true
     volumes:
       - ../../docker-local/backend.creds:/etc/nats/backend.creds:ro
-    depends_on:
-      valkey:
-        condition: service_healthy
     networks:
       - chat-local
 

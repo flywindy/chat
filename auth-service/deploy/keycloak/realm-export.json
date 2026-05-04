@@ -30,10 +30,12 @@
       "standardFlowEnabled": true,
       "implicitFlowEnabled": false,
       "redirectUris": [
-        "http://localhost:3000/*"
+        "http://localhost:3000/*",
+        "http://localhost:5173/*"
       ],
       "webOrigins": [
-        "http://localhost:3000"
+        "http://localhost:3000",
+        "http://localhost:5173"
       ],
       "protocol": "openid-connect",
       "attributes": {
@@ -62,24 +64,6 @@
   ],
   "users": [
     {
-      "username": "testuser",
-      "email": "testuser@example.com",
-      "firstName": "Test",
-      "lastName": "User",
-      "enabled": true,
-      "emailVerified": true,
-      "credentials": [
-        {
-          "type": "password",
-          "value": "testuser",
-          "temporary": false
-        }
-      ],
-      "realmRoles": [
-        "user"
-      ]
-    },
-    {
       "username": "alice",
       "email": "alice@example.com",
       "firstName": "Alice",
@@ -89,13 +73,31 @@
       "credentials": [
         {
           "type": "password",
-          "value": "alice",
+          "value": "password",
           "temporary": false
         }
       ],
       "realmRoles": [
         "user",
         "admin"
+      ]
+    },
+    {
+      "username": "bob",
+      "email": "bob@example.com",
+      "firstName": "Bob",
+      "lastName": "Developer",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "password",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "user"
       ]
     }
   ]
