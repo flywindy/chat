@@ -36,9 +36,10 @@ type config struct {
 
 // mongoInboxStore implements InboxStore using MongoDB.
 type mongoInboxStore struct {
-	subCol  *mongo.Collection
-	roomCol *mongo.Collection
-	userCol *mongo.Collection
+	subCol       *mongo.Collection
+	roomCol      *mongo.Collection
+	userCol      *mongo.Collection
+	threadSubCol *mongo.Collection
 }
 
 func (s *mongoInboxStore) CreateSubscription(ctx context.Context, sub *model.Subscription) error {
@@ -106,6 +107,56 @@ func (s *mongoInboxStore) BulkCreateSubscriptions(ctx context.Context, subs []*m
 	return nil
 }
 
+// ensureIndexes creates the unique index on (threadRoomId, userId) used by
+// UpsertThreadSubscription. The index name and shape match what message-worker
+// creates in its own threadStoreMongo so both services agree on the natural
+// key for thread subscriptions.
+func (s *mongoInboxStore) ensureIndexes(ctx context.Context) error {
+	if _, err := s.threadSubCol.Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys:    bson.D{{Key: "threadRoomId", Value: 1}, {Key: "userId", Value: 1}},
+		Options: options.Index().SetUnique(true),
+	}); err != nil {
+		return fmt.Errorf("ensure thread_subscriptions (threadRoomId,userId) index: %w", err)
+	}
+	return nil
+}
+
+// UpsertThreadSubscription inserts the subscription on first event for a
+// (threadRoomId, userId) pair, and on subsequent events updates only
+// updatedAt and (monotonically) hasMention. $setOnInsert pins the immutable
+// fields on insert; $set always refreshes updatedAt; $max on hasMention
+// guarantees a non-mention event never clears a prior mention=true.
+//
+// $max on a bool works because BSON encodes false (0x00) < true (0x01), so
+// $max(existing, incoming) for a bool is equivalent to a monotonic OR.
+//
+// $setOnInsert and $max operate on disjoint fields (hasMention is set by $max
+// only — never by $setOnInsert) so MongoDB doesn't reject the update with a
+// "conflicting update operators" error.
+func (s *mongoInboxStore) UpsertThreadSubscription(ctx context.Context, sub *model.ThreadSubscription) error {
+	filter := bson.M{"threadRoomId": sub.ThreadRoomID, "userId": sub.UserID}
+	update := bson.M{
+		"$setOnInsert": bson.M{
+			"_id":             sub.ID,
+			"parentMessageId": sub.ParentMessageID,
+			"roomId":          sub.RoomID,
+			"threadRoomId":    sub.ThreadRoomID,
+			"userId":          sub.UserID,
+			"userAccount":     sub.UserAccount,
+			"siteId":          sub.SiteID,
+			"lastSeenAt":      sub.LastSeenAt,
+			"createdAt":       sub.CreatedAt,
+		},
+		"$set": bson.M{"updatedAt": sub.UpdatedAt},
+		"$max": bson.M{"hasMention": sub.HasMention},
+	}
+	if _, err := s.threadSubCol.UpdateOne(ctx, filter, update, options.UpdateOne().SetUpsert(true)); err != nil {
+		return fmt.Errorf("upsert thread subscription (threadRoomID %q, userID %q): %w",
+			sub.ThreadRoomID, sub.UserID, err)
+	}
+	return nil
+}
+
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 
@@ -130,9 +181,14 @@ func main() {
 	}
 	db := mongoClient.Database(cfg.MongoDB)
 	store := &mongoInboxStore{
-		subCol:  db.Collection("subscriptions"),
-		roomCol: db.Collection("rooms"),
-		userCol: db.Collection("users"),
+		subCol:       db.Collection("subscriptions"),
+		roomCol:      db.Collection("rooms"),
+		userCol:      db.Collection("users"),
+		threadSubCol: db.Collection("thread_subscriptions"),
+	}
+	if err := store.ensureIndexes(ctx); err != nil {
+		slog.Error("ensure indexes failed", "error", err)
+		os.Exit(1)
 	}
 
 	nc, err := natsutil.Connect(cfg.NatsURL, cfg.NatsCredsFile)

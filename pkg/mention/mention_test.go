@@ -60,8 +60,8 @@ func TestParse(t *testing.T) {
 }
 
 func TestResolve(t *testing.T) {
-	bobUser := model.User{ID: "u-bob", Account: "bob", EngName: "Bob Chen", ChineseName: "鮑勃"}
-	aliceUser := model.User{ID: "u-alice", Account: "alice", EngName: "Alice Wang", ChineseName: "愛麗絲"}
+	bobUser := model.User{ID: "u-bob", Account: "bob", SiteID: "site-b", EngName: "Bob Chen", ChineseName: "鮑勃"}
+	aliceUser := model.User{ID: "u-alice", Account: "alice", SiteID: "site-a", EngName: "Alice Wang", ChineseName: "愛麗絲"}
 
 	tests := []struct {
 		name           string
@@ -83,7 +83,7 @@ func TestResolve(t *testing.T) {
 			lookupUsers:  []model.User{bobUser},
 			wantAccounts: []string{"bob"},
 			wantParts: []model.Participant{
-				{UserID: "u-bob", Account: "bob", EngName: "Bob Chen", ChineseName: "鮑勃"},
+				{UserID: "u-bob", Account: "bob", SiteID: "site-b", EngName: "Bob Chen", ChineseName: "鮑勃"},
 			},
 		},
 		{
@@ -92,8 +92,8 @@ func TestResolve(t *testing.T) {
 			lookupUsers:  []model.User{aliceUser, bobUser},
 			wantAccounts: []string{"alice", "bob"},
 			wantParts: []model.Participant{
-				{UserID: "u-alice", Account: "alice", EngName: "Alice Wang", ChineseName: "愛麗絲"},
-				{UserID: "u-bob", Account: "bob", EngName: "Bob Chen", ChineseName: "鮑勃"},
+				{UserID: "u-alice", Account: "alice", SiteID: "site-a", EngName: "Alice Wang", ChineseName: "愛麗絲"},
+				{UserID: "u-bob", Account: "bob", SiteID: "site-b", EngName: "Bob Chen", ChineseName: "鮑勃"},
 			},
 		},
 		{
@@ -111,7 +111,7 @@ func TestResolve(t *testing.T) {
 			wantAccounts:   []string{"bob"},
 			wantMentionAll: true,
 			wantParts: []model.Participant{
-				{UserID: "u-bob", Account: "bob", EngName: "Bob Chen", ChineseName: "鮑勃"},
+				{UserID: "u-bob", Account: "bob", SiteID: "site-b", EngName: "Bob Chen", ChineseName: "鮑勃"},
 				{Account: "all", EngName: "all"},
 			},
 		},
@@ -121,7 +121,7 @@ func TestResolve(t *testing.T) {
 			lookupUsers:  []model.User{aliceUser},
 			wantAccounts: []string{"alice", "unknown"},
 			wantParts: []model.Participant{
-				{UserID: "u-alice", Account: "alice", EngName: "Alice Wang", ChineseName: "愛麗絲"},
+				{UserID: "u-alice", Account: "alice", SiteID: "site-a", EngName: "Alice Wang", ChineseName: "愛麗絲"},
 			},
 		},
 		{

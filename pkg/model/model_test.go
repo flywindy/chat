@@ -617,6 +617,31 @@ func TestParticipantJSON(t *testing.T) {
 		require.NoError(t, json.Unmarshal(data, &dst))
 		assert.Equal(t, p, dst)
 	})
+
+	t.Run("with siteID round-trips", func(t *testing.T) {
+		p := model.Participant{
+			UserID:      "u1",
+			Account:     "alice",
+			SiteID:      "site-a",
+			ChineseName: "愛麗絲",
+			EngName:     "Alice Wang",
+		}
+		roundTrip(t, &p, &model.Participant{})
+	})
+
+	t.Run("siteID omitted when empty", func(t *testing.T) {
+		p := model.Participant{
+			UserID:  "u1",
+			Account: "alice",
+			EngName: "Alice Wang",
+		}
+		data, err := json.Marshal(p)
+		require.NoError(t, err)
+		var raw map[string]any
+		require.NoError(t, json.Unmarshal(data, &raw))
+		_, hasSiteID := raw["siteId"]
+		assert.False(t, hasSiteID, "siteId should be omitted when empty")
+	})
 }
 
 func TestClientMessageJSON(t *testing.T) {
@@ -729,6 +754,27 @@ func TestOutboxEventJSON(t *testing.T) {
 	require.NoError(t, json.Unmarshal(data, &dst))
 	if !reflect.DeepEqual(src, dst) {
 		t.Errorf("round-trip mismatch:\n  got  %+v\n  want %+v", dst, src)
+	}
+}
+
+func TestOutboxEventJSON_ThreadSubscriptionUpserted(t *testing.T) {
+	src := model.OutboxEvent{
+		Type:       model.OutboxThreadSubscriptionUpserted,
+		SiteID:     "site-a",
+		DestSiteID: "site-b",
+		Payload:    []byte(`{"id":"sub-1","threadRoomId":"tr-1"}`),
+		Timestamp:  1735689600000,
+	}
+	data, err := json.Marshal(&src)
+	require.NoError(t, err)
+
+	var dst model.OutboxEvent
+	require.NoError(t, json.Unmarshal(data, &dst))
+	if !reflect.DeepEqual(src, dst) {
+		t.Errorf("round-trip mismatch:\n  got  %+v\n  want %+v", dst, src)
+	}
+	if dst.Type != "thread_subscription_upserted" {
+		t.Errorf("Type = %q, want thread_subscription_upserted", dst.Type)
 	}
 }
 

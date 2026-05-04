@@ -29,6 +29,7 @@ type stubInboxStore struct {
 	rooms             []model.Room
 	roleUpdates       []roleUpdate
 	users             []model.User
+	threadSubs        []model.ThreadSubscription
 }
 
 func (s *stubInboxStore) CreateSubscription(ctx context.Context, sub *model.Subscription) error {
@@ -126,6 +127,31 @@ func (s *stubInboxStore) BulkCreateSubscriptions(_ context.Context, subs []*mode
 		s.subscriptions = append(s.subscriptions, *sub)
 	}
 	return nil
+}
+
+func (s *stubInboxStore) UpsertThreadSubscription(_ context.Context, sub *model.ThreadSubscription) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.threadSubs {
+		if s.threadSubs[i].ThreadRoomID == sub.ThreadRoomID && s.threadSubs[i].UserID == sub.UserID {
+			// Monotonic hasMention merge — never clear true→false.
+			if sub.HasMention {
+				s.threadSubs[i].HasMention = true
+			}
+			s.threadSubs[i].UpdatedAt = sub.UpdatedAt
+			return nil
+		}
+	}
+	s.threadSubs = append(s.threadSubs, *sub)
+	return nil
+}
+
+func (s *stubInboxStore) getThreadSubs() []model.ThreadSubscription {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cp := make([]model.ThreadSubscription, len(s.threadSubs))
+	copy(cp, s.threadSubs)
+	return cp
 }
 
 // --- Tests ---
@@ -772,4 +798,116 @@ func TestHandleEvent_MemberRemoved_DeleteError(t *testing.T) {
 	err := h.HandleEvent(context.Background(), outboxPayload)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "delete subscriptions")
+}
+
+func TestHandleEvent_ThreadSubscriptionUpserted_Insert(t *testing.T) {
+	store := &stubInboxStore{}
+	h := NewHandler(store)
+
+	now := time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC)
+	// SiteID is the room's home site (site-a), preserved across federation.
+	sub := model.ThreadSubscription{
+		ID:              "sub-1",
+		ParentMessageID: "pm-1",
+		RoomID:          "r1",
+		ThreadRoomID:    "tr-1",
+		UserID:          "u-bob",
+		UserAccount:     "bob",
+		SiteID:          "site-a",
+		HasMention:      false,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+	subData, err := json.Marshal(sub)
+	require.NoError(t, err)
+
+	evt := model.OutboxEvent{
+		Type:       "thread_subscription_upserted",
+		SiteID:     "site-a",
+		DestSiteID: "site-b",
+		Payload:    subData,
+		Timestamp:  now.UnixMilli(),
+	}
+	evtData, _ := json.Marshal(evt)
+
+	require.NoError(t, h.HandleEvent(context.Background(), evtData))
+
+	got := store.getThreadSubs()
+	require.Len(t, got, 1)
+	assert.Equal(t, sub, got[0])
+}
+
+func TestHandleEvent_ThreadSubscriptionUpserted_MonotonicHasMention(t *testing.T) {
+	store := &stubInboxStore{}
+	h := NewHandler(store)
+
+	now := time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC)
+	// SiteID is the room's home site (site-a), preserved across federation.
+	mentionSub := model.ThreadSubscription{
+		ID: "sub-1", ParentMessageID: "pm-1", RoomID: "r1", ThreadRoomID: "tr-1",
+		UserID: "u-bob", UserAccount: "bob", SiteID: "site-a",
+		HasMention: true, CreatedAt: now, UpdatedAt: now,
+	}
+	mentionData, _ := json.Marshal(mentionSub)
+	mentionEvt, _ := json.Marshal(model.OutboxEvent{
+		Type: "thread_subscription_upserted", SiteID: "site-a", DestSiteID: "site-b",
+		Payload: mentionData, Timestamp: now.UnixMilli(),
+	})
+	require.NoError(t, h.HandleEvent(context.Background(), mentionEvt))
+
+	// Second event for same (threadRoomID, userID) with HasMention=false must NOT clear it.
+	plainSub := mentionSub
+	plainSub.HasMention = false
+	plainSub.UpdatedAt = now.Add(time.Minute)
+	plainData, _ := json.Marshal(plainSub)
+	plainEvt, _ := json.Marshal(model.OutboxEvent{
+		Type: "thread_subscription_upserted", SiteID: "site-a", DestSiteID: "site-b",
+		Payload: plainData, Timestamp: plainSub.UpdatedAt.UnixMilli(),
+	})
+	require.NoError(t, h.HandleEvent(context.Background(), plainEvt))
+
+	got := store.getThreadSubs()
+	require.Len(t, got, 1)
+	assert.True(t, got[0].HasMention, "hasMention must remain true after a non-mention event")
+}
+
+func TestHandleEvent_ThreadSubscriptionUpserted_InvalidPayload(t *testing.T) {
+	store := &stubInboxStore{}
+	h := NewHandler(store)
+
+	evt := model.OutboxEvent{
+		Type: "thread_subscription_upserted", SiteID: "site-a", DestSiteID: "site-b",
+		Payload: []byte("not json"),
+	}
+	evtData, _ := json.Marshal(evt)
+
+	require.Error(t, h.HandleEvent(context.Background(), evtData))
+	assert.Empty(t, store.getThreadSubs())
+}
+
+func TestHandleEvent_ThreadSubscriptionUpserted_StoreError(t *testing.T) {
+	store := &errorThreadSubStore{stubInboxStore: &stubInboxStore{}}
+	h := NewHandler(store)
+
+	now := time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC)
+	sub := model.ThreadSubscription{
+		ID: "sub-1", ThreadRoomID: "tr-1", UserID: "u-bob", SiteID: "site-a",
+		CreatedAt: now, UpdatedAt: now,
+	}
+	subData, _ := json.Marshal(sub)
+	evtData, _ := json.Marshal(model.OutboxEvent{
+		Type: "thread_subscription_upserted", SiteID: "site-a", DestSiteID: "site-b",
+		Payload: subData, Timestamp: now.UnixMilli(),
+	})
+
+	err := h.HandleEvent(context.Background(), evtData)
+	require.Error(t, err)
+}
+
+type errorThreadSubStore struct {
+	*stubInboxStore
+}
+
+func (s *errorThreadSubStore) UpsertThreadSubscription(_ context.Context, _ *model.ThreadSubscription) error {
+	return fmt.Errorf("boom")
 }

@@ -19,6 +19,7 @@ type InboxStore interface {
 	UpdateSubscriptionRoles(ctx context.Context, account, roomID string, roles []model.Role) error
 	DeleteSubscriptionsByAccounts(ctx context.Context, roomID string, accounts []string) error
 	FindUsersByAccounts(ctx context.Context, accounts []string) ([]model.User, error)
+	UpsertThreadSubscription(ctx context.Context, sub *model.ThreadSubscription) error
 }
 
 // Handler processes incoming cross-site OutboxEvent messages.
@@ -47,6 +48,8 @@ func (h *Handler) HandleEvent(ctx context.Context, data []byte) error {
 		return h.handleRoomSync(ctx, &evt)
 	case "role_updated":
 		return h.handleRoleUpdated(ctx, &evt)
+	case "thread_subscription_upserted":
+		return h.handleThreadSubscriptionUpserted(ctx, &evt)
 	default:
 		slog.Warn("unknown event type, skipping", "type", evt.Type)
 		return nil
@@ -160,6 +163,22 @@ func (h *Handler) handleRoleUpdated(ctx context.Context, evt *model.OutboxEvent)
 	}
 	if err := h.store.UpdateSubscriptionRoles(ctx, account, roomID, roles); err != nil {
 		return fmt.Errorf("update subscription roles: %w", err)
+	}
+	return nil
+}
+
+// handleThreadSubscriptionUpserted upserts a ThreadSubscription on the local
+// site when message-worker on another site reports that a user (parent author,
+// replier, or mentionee) is participating in a thread. The Mongo store layer
+// is responsible for the monotonic hasMention merge — see store impl.
+func (h *Handler) handleThreadSubscriptionUpserted(ctx context.Context, evt *model.OutboxEvent) error {
+	var sub model.ThreadSubscription
+	if err := json.Unmarshal(evt.Payload, &sub); err != nil {
+		return fmt.Errorf("unmarshal thread_subscription_upserted payload: %w", err)
+	}
+	if err := h.store.UpsertThreadSubscription(ctx, &sub); err != nil {
+		return fmt.Errorf("upsert thread subscription (threadRoomID %q, userID %q): %w",
+			sub.ThreadRoomID, sub.UserID, err)
 	}
 	return nil
 }

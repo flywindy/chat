@@ -92,7 +92,18 @@ func main() {
 		slog.Error("ensure thread store indexes failed", "error", err)
 		os.Exit(1)
 	}
-	handler := NewHandler(store, us, threadStore)
+	handler := NewHandler(store, us, threadStore, cfg.SiteID, func(ctx context.Context, subj string, data []byte, msgID string) error {
+		if msgID == "" {
+			if err := nc.Publish(ctx, subj, data); err != nil {
+				return fmt.Errorf("publish nats message to %s: %w", subj, err)
+			}
+			return nil
+		}
+		if _, err := js.Publish(ctx, subj, data, jetstream.WithMsgID(msgID)); err != nil {
+			return fmt.Errorf("publish jetstream message to %s with msgID %s: %w", subj, msgID, err)
+		}
+		return nil
+	})
 
 	if err := bootstrapStreams(ctx, js, cfg.SiteID, cfg.Bootstrap.Enabled); err != nil {
 		slog.Error("bootstrap streams failed", "error", err)

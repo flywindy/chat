@@ -190,3 +190,122 @@ func TestInboxWorker_MemberRemoved_Integration(t *testing.T) {
 
 	// No publish — room-worker handles user notification via NATS supercluster.
 }
+
+func TestInboxWorker_ThreadSubscriptionUpserted_Insert_Integration(t *testing.T) {
+	db := setupMongo(t)
+	ctx := context.Background()
+
+	store := &mongoInboxStore{
+		subCol:       db.Collection("subscriptions"),
+		roomCol:      db.Collection("rooms"),
+		userCol:      db.Collection("users"),
+		threadSubCol: db.Collection("thread_subscriptions"),
+	}
+	require.NoError(t, store.ensureIndexes(ctx))
+
+	handler := NewHandler(store)
+
+	now := time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC)
+	// Subscription.SiteID is the room's home site (site-a). Bob's home is site-b
+	// (where this inbox-worker instance lives), inferred from the document being
+	// stored on this site rather than from the field.
+	sub := model.ThreadSubscription{
+		ID: "sub-1", ParentMessageID: "pm-1", RoomID: "r1", ThreadRoomID: "tr-1",
+		UserID: "u-bob", UserAccount: "bob", SiteID: "site-a",
+		HasMention: false, CreatedAt: now, UpdatedAt: now,
+	}
+	subData, err := json.Marshal(sub)
+	require.NoError(t, err)
+	evtData, err := json.Marshal(model.OutboxEvent{
+		Type: "thread_subscription_upserted", SiteID: "site-a", DestSiteID: "site-b",
+		Payload: subData, Timestamp: now.UnixMilli(),
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, handler.HandleEvent(ctx, evtData))
+
+	var got model.ThreadSubscription
+	require.NoError(t, db.Collection("thread_subscriptions").
+		FindOne(ctx, bson.M{"threadRoomId": "tr-1", "userId": "u-bob"}).
+		Decode(&got))
+	assert.Equal(t, "sub-1", got.ID)
+	assert.Equal(t, "site-a", got.SiteID, "SiteID is the room's site, preserved across federation")
+	assert.False(t, got.HasMention)
+	assert.True(t, got.CreatedAt.Equal(now))
+	assert.True(t, got.UpdatedAt.Equal(now))
+}
+
+func TestInboxWorker_ThreadSubscriptionUpserted_MonotonicMention_Integration(t *testing.T) {
+	db := setupMongo(t)
+	ctx := context.Background()
+
+	store := &mongoInboxStore{
+		subCol:       db.Collection("subscriptions"),
+		roomCol:      db.Collection("rooms"),
+		userCol:      db.Collection("users"),
+		threadSubCol: db.Collection("thread_subscriptions"),
+	}
+	require.NoError(t, store.ensureIndexes(ctx))
+
+	handler := NewHandler(store)
+	now := time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC)
+
+	// First event: HasMention=true. Subscription.SiteID is the room's site (site-a).
+	mentionSub := model.ThreadSubscription{
+		ID: "sub-1", ParentMessageID: "pm-1", RoomID: "r1", ThreadRoomID: "tr-1",
+		UserID: "u-bob", UserAccount: "bob", SiteID: "site-a",
+		HasMention: true, CreatedAt: now, UpdatedAt: now,
+	}
+	mentionData, err := json.Marshal(mentionSub)
+	require.NoError(t, err)
+	mentionEvt, err := json.Marshal(model.OutboxEvent{
+		Type: "thread_subscription_upserted", SiteID: "site-a", DestSiteID: "site-b",
+		Payload: mentionData, Timestamp: now.UnixMilli(),
+	})
+	require.NoError(t, err)
+	require.NoError(t, handler.HandleEvent(ctx, mentionEvt))
+
+	// Second event: HasMention=false (later updatedAt). Must NOT clear the flag.
+	plainSub := mentionSub
+	plainSub.HasMention = false
+	later := now.Add(time.Minute)
+	plainSub.UpdatedAt = later
+	plainData, err := json.Marshal(plainSub)
+	require.NoError(t, err)
+	plainEvt, err := json.Marshal(model.OutboxEvent{
+		Type: "thread_subscription_upserted", SiteID: "site-a", DestSiteID: "site-b",
+		Payload: plainData, Timestamp: later.UnixMilli(),
+	})
+	require.NoError(t, err)
+	require.NoError(t, handler.HandleEvent(ctx, plainEvt))
+
+	var got model.ThreadSubscription
+	require.NoError(t, db.Collection("thread_subscriptions").
+		FindOne(ctx, bson.M{"threadRoomId": "tr-1", "userId": "u-bob"}).
+		Decode(&got))
+	assert.True(t, got.HasMention, "hasMention must remain true after a non-mention event")
+	assert.True(t, got.UpdatedAt.Equal(later), "updatedAt must advance to the later event's value")
+	// _id and createdAt come from $setOnInsert and must remain from the first event.
+	assert.Equal(t, "sub-1", got.ID)
+	assert.True(t, got.CreatedAt.Equal(now))
+
+	// Third event: HasMention=true again. Idempotent — still true, updatedAt advances.
+	thirdSub := plainSub
+	thirdSub.HasMention = true
+	evenLater := later.Add(time.Minute)
+	thirdSub.UpdatedAt = evenLater
+	thirdData, err := json.Marshal(thirdSub)
+	require.NoError(t, err)
+	thirdEvt, err := json.Marshal(model.OutboxEvent{
+		Type: "thread_subscription_upserted", SiteID: "site-a", DestSiteID: "site-b",
+		Payload: thirdData, Timestamp: evenLater.UnixMilli(),
+	})
+	require.NoError(t, err)
+	require.NoError(t, handler.HandleEvent(ctx, thirdEvt))
+
+	require.NoError(t, db.Collection("thread_subscriptions").
+		FindOne(ctx, bson.M{"threadRoomId": "tr-1", "userId": "u-bob"}).
+		Decode(&got))
+	assert.True(t, got.HasMention)
+	assert.True(t, got.UpdatedAt.Equal(evenLater))
+}

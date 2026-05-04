@@ -78,6 +78,7 @@ func Resolve(ctx context.Context, content string, lookupFn LookupFunc) (*Resolve
 			result.Participants = append(result.Participants, model.Participant{
 				UserID:      users[i].ID,
 				Account:     users[i].Account,
+				SiteID:      users[i].SiteID,
 				ChineseName: users[i].ChineseName,
 				EngName:     users[i].EngName,
 			})

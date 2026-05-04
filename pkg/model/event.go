@@ -79,8 +79,9 @@ type NotificationEvent struct {
 type OutboxEventType = string
 
 const (
-	OutboxMemberAdded   OutboxEventType = "member_added"
-	OutboxMemberRemoved OutboxEventType = "member_removed"
+	OutboxMemberAdded                OutboxEventType = "member_added"
+	OutboxMemberRemoved              OutboxEventType = "member_removed"
+	OutboxThreadSubscriptionUpserted OutboxEventType = "thread_subscription_upserted"
 )
 
 type OutboxEvent struct {
@@ -105,6 +106,7 @@ type MemberAddEvent struct {
 type Participant struct {
 	UserID      string `json:"userId,omitempty" bson:"userId,omitempty"`
 	Account     string `json:"account" bson:"account"`
+	SiteID      string `json:"siteId,omitempty" bson:"siteId,omitempty"`
 	ChineseName string `json:"chineseName" bson:"chineseName"`
 	EngName     string `json:"engName" bson:"engName"`
 }
