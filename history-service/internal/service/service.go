@@ -71,10 +71,11 @@ type HistoryService struct {
 	publisher     EventPublisher
 	threadRooms   ThreadRoomRepository
 	keyProvider   RoomKeyProvider
+	encrypt       bool
 }
 
 // New creates a HistoryService with the given repositories and event publisher.
-func New(msgs MessageRepository, subs SubscriptionRepository, pub EventPublisher, threadRooms ThreadRoomRepository, keyProvider RoomKeyProvider) *HistoryService {
+func New(msgs MessageRepository, subs SubscriptionRepository, pub EventPublisher, threadRooms ThreadRoomRepository, keyProvider RoomKeyProvider, encrypt bool) *HistoryService {
 	return &HistoryService{
 		msgReader:     msgs,
 		msgWriter:     msgs,
@@ -82,6 +83,7 @@ func New(msgs MessageRepository, subs SubscriptionRepository, pub EventPublisher
 		publisher:     pub,
 		threadRooms:   threadRooms,
 		keyProvider:   keyProvider,
+		encrypt:       encrypt,
 	}
 }
 

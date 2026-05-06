@@ -49,14 +49,14 @@ func generateTestKeyPair(t *testing.T) *roomkeystore.VersionedKeyPair {
 	}
 }
 
-func newService(t *testing.T) (*service.HistoryService, *mocks.MockMessageRepository, *mocks.MockSubscriptionRepository, *mocks.MockEventPublisher, *mocks.MockThreadRoomRepository, *mocks.MockRoomKeyProvider) {
+func newService(t *testing.T, encrypt bool) (*service.HistoryService, *mocks.MockMessageRepository, *mocks.MockSubscriptionRepository, *mocks.MockEventPublisher, *mocks.MockThreadRoomRepository, *mocks.MockRoomKeyProvider) {
 	ctrl := gomock.NewController(t)
 	msgs := mocks.NewMockMessageRepository(ctrl)
 	subs := mocks.NewMockSubscriptionRepository(ctrl)
 	pub := mocks.NewMockEventPublisher(ctrl)
 	threadRooms := mocks.NewMockThreadRoomRepository(ctrl)
 	keys := mocks.NewMockRoomKeyProvider(ctrl)
-	return service.New(msgs, subs, pub, threadRooms, keys), msgs, subs, pub, threadRooms, keys
+	return service.New(msgs, subs, pub, threadRooms, keys, encrypt), msgs, subs, pub, threadRooms, keys
 }
 
 func assertInternalErr(t *testing.T, err error, wantMsg string) {
@@ -102,7 +102,7 @@ func makePage(msgs []models.Message, hasNext bool) cassrepo.Page[models.Message]
 // --- LoadHistory ---
 
 func TestHistoryService_LoadHistory_Success(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t)
+	svc, msgs, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(&joinTime, true, nil)
@@ -122,7 +122,7 @@ func TestHistoryService_LoadHistory_Success(t *testing.T) {
 }
 
 func TestHistoryService_LoadHistory_StoreError(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t)
+	svc, msgs, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(&joinTime, true, nil)
@@ -134,7 +134,7 @@ func TestHistoryService_LoadHistory_StoreError(t *testing.T) {
 }
 
 func TestHistoryService_LoadHistory_SubscriptionError(t *testing.T) {
-	svc, _, subs, _, _, _ := newService(t)
+	svc, _, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, false, fmt.Errorf("db error"))
@@ -145,7 +145,7 @@ func TestHistoryService_LoadHistory_SubscriptionError(t *testing.T) {
 }
 
 func TestHistoryService_LoadHistory_EmptyResult(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t)
+	svc, msgs, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(&joinTime, true, nil)
@@ -157,7 +157,7 @@ func TestHistoryService_LoadHistory_EmptyResult(t *testing.T) {
 }
 
 func TestHistoryService_LoadHistory_NoHSS(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t)
+	svc, msgs, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, true, nil)
@@ -174,7 +174,7 @@ func TestHistoryService_LoadHistory_NoHSS(t *testing.T) {
 }
 
 func TestHistoryService_LoadHistory_WithBeforeTimestamp(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t)
+	svc, msgs, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	beforeTime := joinTime.Add(5 * time.Minute)
@@ -196,7 +196,7 @@ func TestHistoryService_LoadHistory_WithBeforeTimestamp(t *testing.T) {
 // --- LoadNextMessages ---
 
 func TestHistoryService_LoadNextMessages_BothAfterAndHSS(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t)
+	svc, msgs, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	// Both after and HSS present — effective lower bound = max(after, HSS)
@@ -219,7 +219,7 @@ func TestHistoryService_LoadNextMessages_BothAfterAndHSS(t *testing.T) {
 }
 
 func TestHistoryService_LoadNextMessages_OnlyHSS(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t)
+	svc, msgs, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	// No after in request, HSS present — effective lower bound = HSS, uses GetMessagesAfter
@@ -231,7 +231,7 @@ func TestHistoryService_LoadNextMessages_OnlyHSS(t *testing.T) {
 }
 
 func TestHistoryService_LoadNextMessages_OnlyAfter(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t)
+	svc, msgs, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	// after present, HSS not found — effective lower bound = after
@@ -246,7 +246,7 @@ func TestHistoryService_LoadNextMessages_OnlyAfter(t *testing.T) {
 }
 
 func TestHistoryService_LoadNextMessages_BothNil(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t)
+	svc, msgs, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	// Neither after nor HSS — no lower bound → GetAllMessagesAsc
@@ -258,7 +258,7 @@ func TestHistoryService_LoadNextMessages_BothNil(t *testing.T) {
 }
 
 func TestHistoryService_LoadNextMessages_AfterBeforeHSS_ClampsToHSS(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t)
+	svc, msgs, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	// after is before HSS — effective lower bound = HSS (the greater one)
@@ -273,7 +273,7 @@ func TestHistoryService_LoadNextMessages_AfterBeforeHSS_ClampsToHSS(t *testing.T
 }
 
 func TestHistoryService_LoadNextMessages_SubscriptionStoreError(t *testing.T) {
-	svc, _, subs, _, _, _ := newService(t)
+	svc, _, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, false, fmt.Errorf("db error"))
@@ -284,7 +284,7 @@ func TestHistoryService_LoadNextMessages_SubscriptionStoreError(t *testing.T) {
 }
 
 func TestHistoryService_LoadNextMessages_StoreErrorAfter(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t)
+	svc, msgs, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	// HSS present → GetMessagesAfter path
@@ -297,7 +297,7 @@ func TestHistoryService_LoadNextMessages_StoreErrorAfter(t *testing.T) {
 }
 
 func TestHistoryService_LoadNextMessages_StoreErrorLatest(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t)
+	svc, msgs, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	// No HSS, no after → GetAllMessagesAsc path
@@ -310,7 +310,7 @@ func TestHistoryService_LoadNextMessages_StoreErrorLatest(t *testing.T) {
 }
 
 func TestHistoryService_LoadNextMessages_HasNext(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t)
+	svc, msgs, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(&joinTime, true, nil)
@@ -328,7 +328,7 @@ func TestHistoryService_LoadNextMessages_HasNext(t *testing.T) {
 }
 
 func TestHistoryService_LoadNextMessages_DefaultLimit(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t)
+	svc, msgs, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, true, nil)
@@ -343,7 +343,7 @@ func TestHistoryService_LoadNextMessages_DefaultLimit(t *testing.T) {
 }
 
 func TestHistoryService_LoadNextMessages_LimitClampsToMax(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t)
+	svc, msgs, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, true, nil)
@@ -360,7 +360,7 @@ func TestHistoryService_LoadNextMessages_LimitClampsToMax(t *testing.T) {
 // --- GetMessageByID ---
 
 func TestHistoryService_GetMessageByID_Success(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t)
+	svc, msgs, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	createdAt := joinTime.Add(1 * time.Minute)
@@ -374,7 +374,7 @@ func TestHistoryService_GetMessageByID_Success(t *testing.T) {
 }
 
 func TestHistoryService_GetMessageByID_OutsideAccessWindow(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t)
+	svc, msgs, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	createdAt := joinTime.Add(-1 * time.Hour)
@@ -387,7 +387,7 @@ func TestHistoryService_GetMessageByID_OutsideAccessWindow(t *testing.T) {
 }
 
 func TestHistoryService_GetMessageByID_NotFound(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t)
+	svc, msgs, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(&joinTime, true, nil)
@@ -399,7 +399,7 @@ func TestHistoryService_GetMessageByID_NotFound(t *testing.T) {
 }
 
 func TestHistoryService_GetMessageByID_WrongRoom(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t)
+	svc, msgs, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	createdAt := joinTime.Add(1 * time.Minute)
@@ -414,7 +414,7 @@ func TestHistoryService_GetMessageByID_WrongRoom(t *testing.T) {
 }
 
 func TestHistoryService_GetMessageByID_StoreError(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t)
+	svc, msgs, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(&joinTime, true, nil)
@@ -426,7 +426,7 @@ func TestHistoryService_GetMessageByID_StoreError(t *testing.T) {
 }
 
 func TestHistoryService_GetMessageByID_NoHSS(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t)
+	svc, msgs, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	createdAt := joinTime.Add(-1 * time.Hour)
@@ -441,7 +441,7 @@ func TestHistoryService_GetMessageByID_NoHSS(t *testing.T) {
 }
 
 func TestHistoryService_LoadNextMessages_HasNextFalse(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t)
+	svc, msgs, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(&joinTime, true, nil)
@@ -456,7 +456,7 @@ func TestHistoryService_LoadNextMessages_HasNextFalse(t *testing.T) {
 // --- LoadSurroundingMessages ---
 
 func TestHistoryService_LoadSurroundingMessages_Success(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t)
+	svc, msgs, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(&joinTime, true, nil)
@@ -484,7 +484,7 @@ func TestHistoryService_LoadSurroundingMessages_Success(t *testing.T) {
 }
 
 func TestHistoryService_LoadSurroundingMessages_MoreBeforeAndAfter(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t)
+	svc, msgs, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(&joinTime, true, nil)
@@ -507,7 +507,7 @@ func TestHistoryService_LoadSurroundingMessages_MoreBeforeAndAfter(t *testing.T)
 }
 
 func TestHistoryService_LoadSurroundingMessages_HSSBeforeMessage(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t)
+	svc, msgs, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	// accessSince set and before central message — before-page uses GetMessagesBetweenDesc,
@@ -534,7 +534,7 @@ func TestHistoryService_LoadSurroundingMessages_HSSBeforeMessage(t *testing.T) {
 }
 
 func TestHistoryService_LoadSurroundingMessages_NoHSS(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t)
+	svc, msgs, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	// nil accessSince — no lower bound restriction, full history access
@@ -558,7 +558,7 @@ func TestHistoryService_LoadSurroundingMessages_NoHSS(t *testing.T) {
 }
 
 func TestHistoryService_LoadSurroundingMessages_SubscriptionError(t *testing.T) {
-	svc, _, subs, _, _, _ := newService(t)
+	svc, _, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, false, fmt.Errorf("db error"))
@@ -571,7 +571,7 @@ func TestHistoryService_LoadSurroundingMessages_SubscriptionError(t *testing.T) 
 }
 
 func TestHistoryService_LoadSurroundingMessages_WrongRoom(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t)
+	svc, msgs, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(&joinTime, true, nil)
@@ -588,7 +588,7 @@ func TestHistoryService_LoadSurroundingMessages_WrongRoom(t *testing.T) {
 }
 
 func TestHistoryService_LoadSurroundingMessages_CentralMessageOutsideWindow(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t)
+	svc, msgs, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(&joinTime, true, nil)
@@ -604,7 +604,7 @@ func TestHistoryService_LoadSurroundingMessages_CentralMessageOutsideWindow(t *t
 }
 
 func TestHistoryService_LoadSurroundingMessages_MessageNotFound(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t)
+	svc, msgs, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(&joinTime, true, nil)
@@ -618,7 +618,7 @@ func TestHistoryService_LoadSurroundingMessages_MessageNotFound(t *testing.T) {
 }
 
 func TestHistoryService_LoadSurroundingMessages_StoreError(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t)
+	svc, msgs, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(&joinTime, true, nil)
@@ -632,7 +632,7 @@ func TestHistoryService_LoadSurroundingMessages_StoreError(t *testing.T) {
 }
 
 func TestHistoryService_LoadSurroundingMessages_BeforePageError(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t)
+	svc, msgs, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(&joinTime, true, nil)
@@ -648,7 +648,7 @@ func TestHistoryService_LoadSurroundingMessages_BeforePageError(t *testing.T) {
 }
 
 func TestHistoryService_LoadSurroundingMessages_BeforePageError_NoHSS(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t)
+	svc, msgs, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, true, nil)
@@ -664,7 +664,7 @@ func TestHistoryService_LoadSurroundingMessages_BeforePageError_NoHSS(t *testing
 }
 
 func TestHistoryService_LoadSurroundingMessages_AfterPageError(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t)
+	svc, msgs, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(&joinTime, true, nil)
@@ -682,7 +682,7 @@ func TestHistoryService_LoadSurroundingMessages_AfterPageError(t *testing.T) {
 }
 
 func TestHistoryService_LoadSurroundingMessages_Limit1_OnlyCentral(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t)
+	svc, msgs, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(&joinTime, true, nil)
@@ -701,7 +701,7 @@ func TestHistoryService_LoadSurroundingMessages_Limit1_OnlyCentral(t *testing.T)
 }
 
 func TestHistoryService_LoadSurroundingMessages_Limit1_RedactsInaccessibleQuote(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t)
+	svc, msgs, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(&joinTime, true, nil)
@@ -727,7 +727,7 @@ func TestHistoryService_LoadSurroundingMessages_Limit1_RedactsInaccessibleQuote(
 // --- Access Control: Not Subscribed ---
 
 func TestHistoryService_LoadHistory_NotSubscribed(t *testing.T) {
-	svc, _, subs, _, _, _ := newService(t)
+	svc, _, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, false, nil)
@@ -738,7 +738,7 @@ func TestHistoryService_LoadHistory_NotSubscribed(t *testing.T) {
 }
 
 func TestHistoryService_LoadNextMessages_NotSubscribed(t *testing.T) {
-	svc, _, subs, _, _, _ := newService(t)
+	svc, _, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, false, nil)
@@ -749,7 +749,7 @@ func TestHistoryService_LoadNextMessages_NotSubscribed(t *testing.T) {
 }
 
 func TestHistoryService_LoadSurroundingMessages_NotSubscribed(t *testing.T) {
-	svc, _, subs, _, _, _ := newService(t)
+	svc, _, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, false, nil)
@@ -762,7 +762,7 @@ func TestHistoryService_LoadSurroundingMessages_NotSubscribed(t *testing.T) {
 }
 
 func TestHistoryService_GetMessageByID_MissingMessageID(t *testing.T) {
-	svc, _, subs, _, _, _ := newService(t)
+	svc, _, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(&joinTime, true, nil)
@@ -773,7 +773,7 @@ func TestHistoryService_GetMessageByID_MissingMessageID(t *testing.T) {
 }
 
 func TestHistoryService_LoadSurroundingMessages_MissingMessageID(t *testing.T) {
-	svc, _, subs, _, _, _ := newService(t)
+	svc, _, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(&joinTime, true, nil)
@@ -784,7 +784,7 @@ func TestHistoryService_LoadSurroundingMessages_MissingMessageID(t *testing.T) {
 }
 
 func TestHistoryService_GetMessageByID_NotSubscribed(t *testing.T) {
-	svc, _, subs, _, _, _ := newService(t)
+	svc, _, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, false, nil)
@@ -796,56 +796,8 @@ func TestHistoryService_GetMessageByID_NotSubscribed(t *testing.T) {
 
 // --- EditMessage ---
 
-func TestHistoryService_EditMessage_Success(t *testing.T) {
-	svc, msgs, subs, pub, _, keys := newService(t)
-	c := testContext()
-
-	// Subscription check passes (accessSince nil means full history access, non-nil also fine)
-	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, true, nil)
-
-	// Message lookup returns the user's own message in the expected room.
-	hydrated := &models.Message{
-		MessageID: "m-abc",
-		RoomID:    "r1",
-		Sender:    models.Participant{Account: "u1"},
-	}
-	msgs.EXPECT().GetMessageByID(gomock.Any(), "m-abc").Return(hydrated, nil)
-
-	// UPDATE succeeds. The handler passes the hydrated *Message directly.
-	msgs.EXPECT().
-		UpdateMessageContent(gomock.Any(), hydrated, "new content", gomock.Any()).
-		Return(nil)
-
-	// nil key → plaintext fallback.
-	keys.EXPECT().Get(gomock.Any(), "r1").Return(nil, nil)
-
-	// Publish succeeds. Validate the payload.
-	pub.EXPECT().
-		Publish(gomock.Any(), "chat.room.r1.event", gomock.Any()).
-		DoAndReturn(func(_ context.Context, subj string, data []byte) error {
-			var evt models.MessageEditedEvent
-			require.NoError(t, json.Unmarshal(data, &evt))
-			assert.Equal(t, "message_edited", evt.Type)
-			assert.Equal(t, "r1", evt.RoomID)
-			assert.Equal(t, "m-abc", evt.MessageID)
-			assert.Equal(t, "new content", evt.NewMsg)
-			assert.Equal(t, "u1", evt.EditedBy)
-			assert.NotZero(t, evt.Timestamp)
-			assert.NotZero(t, evt.EditedAt)
-			return nil
-		})
-
-	resp, err := svc.EditMessage(c, models.EditMessageRequest{
-		MessageID: "m-abc",
-		NewMsg:    "new content",
-	})
-	require.NoError(t, err)
-	assert.Equal(t, "m-abc", resp.MessageID)
-	assert.NotZero(t, resp.EditedAt)
-}
-
 func TestHistoryService_EditMessage_NotSubscribed(t *testing.T) {
-	svc, _, subs, _, _, _ := newService(t)
+	svc, _, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	// Not subscribed — the helper returns ErrForbidden before we touch anything else.
@@ -861,7 +813,7 @@ func TestHistoryService_EditMessage_NotSubscribed(t *testing.T) {
 }
 
 func TestHistoryService_EditMessage_NotSender(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t)
+	svc, msgs, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, true, nil)
@@ -884,7 +836,7 @@ func TestHistoryService_EditMessage_NotSender(t *testing.T) {
 }
 
 func TestHistoryService_EditMessage_NotFound(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t)
+	svc, msgs, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, true, nil)
@@ -899,7 +851,7 @@ func TestHistoryService_EditMessage_NotFound(t *testing.T) {
 }
 
 func TestHistoryService_EditMessage_WrongRoom(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t)
+	svc, msgs, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, true, nil)
@@ -921,7 +873,7 @@ func TestHistoryService_EditMessage_WrongRoom(t *testing.T) {
 }
 
 func TestHistoryService_EditMessage_AlreadyDeleted(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t)
+	svc, msgs, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, true, nil)
@@ -946,7 +898,7 @@ func TestHistoryService_EditMessage_AlreadyDeleted(t *testing.T) {
 }
 
 func TestHistoryService_EditMessage_EmptyNewMsg(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t)
+	svc, msgs, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, true, nil)
@@ -968,7 +920,7 @@ func TestHistoryService_EditMessage_EmptyNewMsg(t *testing.T) {
 }
 
 func TestHistoryService_EditMessage_TooLarge(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t)
+	svc, msgs, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, true, nil)
@@ -993,7 +945,7 @@ func TestHistoryService_EditMessage_TooLarge(t *testing.T) {
 }
 
 func TestHistoryService_EditMessage_UpdateFails(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t)
+	svc, msgs, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, true, nil)
@@ -1018,7 +970,7 @@ func TestHistoryService_EditMessage_UpdateFails(t *testing.T) {
 }
 
 func TestHistoryService_EditMessage_PublishFails(t *testing.T) {
-	svc, msgs, subs, pub, _, keys := newService(t)
+	svc, msgs, subs, pub, _, keys := newService(t, true)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, true, nil)
@@ -1031,8 +983,9 @@ func TestHistoryService_EditMessage_PublishFails(t *testing.T) {
 	msgs.EXPECT().GetMessageByID(gomock.Any(), "m-abc").Return(hydrated, nil)
 	msgs.EXPECT().UpdateMessageContent(gomock.Any(), hydrated, "new content", gomock.Any()).Return(nil)
 
-	// nil key → plaintext fallback.
-	keys.EXPECT().Get(gomock.Any(), "r1").Return(nil, nil)
+	// Real key so encryption succeeds and the publish is attempted.
+	kp := generateTestKeyPair(t)
+	keys.EXPECT().Get(gomock.Any(), "r1").Return(kp, nil)
 
 	// Publisher fails, but handler must still return success (best-effort fan-out).
 	pub.EXPECT().Publish(gomock.Any(), "chat.room.r1.event", gomock.Any()).Return(fmt.Errorf("nats disconnected"))
@@ -1047,7 +1000,7 @@ func TestHistoryService_EditMessage_PublishFails(t *testing.T) {
 // room key exists the handler places the encrypted payload in EncryptedNewMsg
 // and leaves NewMsg empty.
 func TestHistoryService_EditMessage_Success_EncryptedEvent(t *testing.T) {
-	svc, msgs, subs, pub, _, keys := newService(t)
+	svc, msgs, subs, pub, _, keys := newService(t, true)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, true, nil)
@@ -1081,11 +1034,12 @@ func TestHistoryService_EditMessage_Success_EncryptedEvent(t *testing.T) {
 	assert.NotZero(t, resp.EditedAt)
 }
 
-// TestHistoryService_EditMessage_Success_KeyFetchError verifies that when the
-// key store returns an error the handler falls back to plaintext NewMsg and
-// still publishes the event (best-effort; the Cassandra write already succeeded).
-func TestHistoryService_EditMessage_Success_KeyFetchError(t *testing.T) {
-	svc, msgs, subs, pub, _, keys := newService(t)
+// TestHistoryService_EditMessage_SkipPublishOnKeyError verifies that when
+// encryption is enabled and the keystore returns an error, the handler skips
+// publishing the live event entirely (rather than leaking plaintext via the
+// MessageEditedEvent.NewMsg field). The Cassandra write already succeeded.
+func TestHistoryService_EditMessage_SkipPublishOnKeyError(t *testing.T) {
+	svc, msgs, subs, pub, _, keys := newService(t, true)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, true, nil)
@@ -1099,25 +1053,149 @@ func TestHistoryService_EditMessage_Success_KeyFetchError(t *testing.T) {
 
 	keys.EXPECT().Get(gomock.Any(), "r1").Return(nil, fmt.Errorf("valkey connection refused"))
 
+	// pub.EXPECT().Publish is intentionally NOT set — gomock's strict mode will
+	// fail the test if Publish is called.
+	_ = pub
+
+	resp, err := svc.EditMessage(c, models.EditMessageRequest{MessageID: "m-abc", NewMsg: "some edit"})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	assert.Equal(t, "m-abc", resp.MessageID)
+}
+
+// TestHistoryService_EditMessage_PlaintextWhenDisabled verifies that with
+// encryption disabled the handler publishes a plaintext MessageEditedEvent
+// (NewMsg set, EncryptedNewMsg empty) and does not consult the key provider.
+func TestHistoryService_EditMessage_PlaintextWhenDisabled(t *testing.T) {
+	svc, msgs, subs, pub, _, _ := newService(t, false)
+	c := testContext()
+
+	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, true, nil)
+	hydrated := &models.Message{
+		MessageID: "m-abc",
+		RoomID:    "r1",
+		Sender:    models.Participant{Account: "u1"},
+	}
+	msgs.EXPECT().GetMessageByID(gomock.Any(), "m-abc").Return(hydrated, nil)
+	msgs.EXPECT().UpdateMessageContent(gomock.Any(), hydrated, "plain edit", gomock.Any()).Return(nil)
+
+	// No keys.EXPECT().Get — the disabled path must not consult the provider.
+
 	pub.EXPECT().
 		Publish(gomock.Any(), "chat.room.r1.event", gomock.Any()).
 		DoAndReturn(func(_ context.Context, _ string, data []byte) error {
 			var evt models.MessageEditedEvent
 			require.NoError(t, json.Unmarshal(data, &evt))
-			assert.Equal(t, "some edit", evt.NewMsg, "must fall back to plaintext on key error")
+			assert.Equal(t, "plain edit", evt.NewMsg)
 			assert.Empty(t, evt.EncryptedNewMsg)
 			return nil
 		})
 
-	resp, err := svc.EditMessage(c, models.EditMessageRequest{MessageID: "m-abc", NewMsg: "some edit"})
+	resp, err := svc.EditMessage(c, models.EditMessageRequest{MessageID: "m-abc", NewMsg: "plain edit"})
 	require.NoError(t, err)
 	assert.Equal(t, "m-abc", resp.MessageID)
+}
+
+// TestHistoryService_EditMessage_SkipPublishOnNilKey verifies that when
+// encryption is enabled and the keystore returns (nil, nil), the handler
+// skips publishing the live event rather than falling back to plaintext.
+func TestHistoryService_EditMessage_SkipPublishOnNilKey(t *testing.T) {
+	svc, msgs, subs, pub, _, keys := newService(t, true)
+	c := testContext()
+
+	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, true, nil)
+	hydrated := &models.Message{
+		MessageID: "m-abc",
+		RoomID:    "r1",
+		Sender:    models.Participant{Account: "u1"},
+	}
+	msgs.EXPECT().GetMessageByID(gomock.Any(), "m-abc").Return(hydrated, nil)
+	msgs.EXPECT().UpdateMessageContent(gomock.Any(), hydrated, "secret", gomock.Any()).Return(nil)
+
+	keys.EXPECT().Get(gomock.Any(), "r1").Return(nil, nil)
+
+	// pub.EXPECT().Publish is intentionally NOT set — gomock's strict mode will
+	// fail the test if Publish is called.
+	_ = pub
+
+	resp, err := svc.EditMessage(c, models.EditMessageRequest{MessageID: "m-abc", NewMsg: "secret"})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	assert.Equal(t, "m-abc", resp.MessageID)
+}
+
+// TestHistoryService_encryptEditMsg covers the four return shapes of
+// encryptEditMsg directly (in addition to the EditMessage end-to-end tests).
+func TestHistoryService_encryptEditMsg(t *testing.T) {
+	t.Run("disabled returns plaintext", func(t *testing.T) {
+		svc, _, _, _, _, keys := newService(t, false)
+		_ = keys // intentionally not set up — must not be called
+		c := testContext()
+		plain, enc, err := svc.EncryptEditMsgForTest(c, "r1", "hello")
+		require.NoError(t, err)
+		assert.Equal(t, "hello", plain)
+		assert.Nil(t, enc)
+	})
+
+	t.Run("enabled with valid key returns encrypted JSON", func(t *testing.T) {
+		svc, _, _, _, _, keys := newService(t, true)
+		kp := generateTestKeyPair(t)
+		keys.EXPECT().Get(gomock.Any(), "r1").Return(kp, nil)
+		c := testContext()
+		plain, enc, err := svc.EncryptEditMsgForTest(c, "r1", "secret")
+		require.NoError(t, err)
+		assert.Empty(t, plain)
+		assert.NotEmpty(t, enc)
+		var decoded map[string]interface{}
+		require.NoError(t, json.Unmarshal(enc, &decoded))
+	})
+
+	t.Run("enabled with key fetch error returns error", func(t *testing.T) {
+		svc, _, _, _, _, keys := newService(t, true)
+		keys.EXPECT().Get(gomock.Any(), "r1").Return(nil, fmt.Errorf("valkey down"))
+		c := testContext()
+		plain, enc, err := svc.EncryptEditMsgForTest(c, "r1", "secret")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "valkey down")
+		assert.Empty(t, plain)
+		assert.Nil(t, enc)
+	})
+
+	t.Run("enabled with nil key returns error", func(t *testing.T) {
+		svc, _, _, _, _, keys := newService(t, true)
+		keys.EXPECT().Get(gomock.Any(), "r1").Return(nil, nil)
+		c := testContext()
+		plain, enc, err := svc.EncryptEditMsgForTest(c, "r1", "secret")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no current key")
+		assert.Empty(t, plain)
+		assert.Nil(t, enc)
+	})
+
+	t.Run("enabled with invalid public key returns error", func(t *testing.T) {
+		svc, _, _, _, _, keys := newService(t, true)
+		// Zero-length public key causes ecdh.P256().NewPublicKey to fail inside
+		// roomcrypto.Encode (P-256 expects a 65-byte uncompressed point).
+		invalidKey := &roomkeystore.VersionedKeyPair{
+			Version: 1,
+			KeyPair: roomkeystore.RoomKeyPair{
+				PublicKey: []byte{}, // wrong length: roomcrypto expects 65 bytes for P-256
+			},
+		}
+		keys.EXPECT().Get(gomock.Any(), "r1").Return(invalidKey, nil)
+		c := testContext()
+		plain, enc, err := svc.EncryptEditMsgForTest(c, "r1", "secret")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "encrypt edit message")
+		assert.Empty(t, plain)
+		assert.Nil(t, enc)
+	})
 }
 
 // --- DeleteMessage ---
 
 func TestHistoryService_DeleteMessage_Success(t *testing.T) {
-	svc, msgs, subs, pub, _, _ := newService(t)
+	svc, msgs, subs, pub, _, _ := newService(t, true)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, true, nil)
@@ -1157,7 +1235,7 @@ func TestHistoryService_DeleteMessage_Success(t *testing.T) {
 }
 
 func TestHistoryService_DeleteMessage_AlreadyDeleted_ShortCircuits(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t)
+	svc, msgs, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, true, nil)
@@ -1182,7 +1260,7 @@ func TestHistoryService_DeleteMessage_AlreadyDeleted_ShortCircuits(t *testing.T)
 }
 
 func TestHistoryService_DeleteMessage_NotSubscribed(t *testing.T) {
-	svc, _, subs, _, _, _ := newService(t)
+	svc, _, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, false, nil)
@@ -1197,7 +1275,7 @@ func TestHistoryService_DeleteMessage_NotSubscribed(t *testing.T) {
 }
 
 func TestHistoryService_DeleteMessage_NotSender(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t)
+	svc, msgs, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, true, nil)
@@ -1219,7 +1297,7 @@ func TestHistoryService_DeleteMessage_NotSender(t *testing.T) {
 }
 
 func TestHistoryService_DeleteMessage_NotFound(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t)
+	svc, msgs, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, true, nil)
@@ -1234,7 +1312,7 @@ func TestHistoryService_DeleteMessage_NotFound(t *testing.T) {
 }
 
 func TestHistoryService_DeleteMessage_WrongRoom(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t)
+	svc, msgs, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, true, nil)
@@ -1256,7 +1334,7 @@ func TestHistoryService_DeleteMessage_WrongRoom(t *testing.T) {
 }
 
 func TestHistoryService_DeleteMessage_SoftDeleteFails(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t)
+	svc, msgs, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, true, nil)
@@ -1285,7 +1363,7 @@ func TestHistoryService_DeleteMessage_SoftDeleteFails(t *testing.T) {
 // flipped the row. The handler must NOT publish a duplicate message_deleted
 // event and must return the timestamp the winning goroutine wrote.
 func TestHistoryService_DeleteMessage_ConcurrentDeleteSkipsPublish(t *testing.T) {
-	svc, msgs, subs, pub, _, _ := newService(t)
+	svc, msgs, subs, pub, _, _ := newService(t, true)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, true, nil)
@@ -1316,7 +1394,7 @@ func TestHistoryService_DeleteMessage_ConcurrentDeleteSkipsPublish(t *testing.T)
 }
 
 func TestHistoryService_DeleteMessage_PublishFails(t *testing.T) {
-	svc, msgs, subs, pub, _, _ := newService(t)
+	svc, msgs, subs, pub, _, _ := newService(t, true)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, true, nil)
@@ -1346,7 +1424,7 @@ func TestHistoryService_DeleteMessage_PublishFails(t *testing.T) {
 // ============================================================
 
 func TestHistoryService_QuoteRedact_BeforeAccessSince(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t)
+	svc, msgs, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(&joinTime, true, nil)
@@ -1375,7 +1453,7 @@ func TestHistoryService_QuoteRedact_BeforeAccessSince(t *testing.T) {
 }
 
 func TestHistoryService_QuoteRedact_AfterAccessSince(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t)
+	svc, msgs, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(&joinTime, true, nil)
@@ -1404,7 +1482,7 @@ func TestHistoryService_QuoteRedact_AfterAccessSince(t *testing.T) {
 }
 
 func TestHistoryService_QuoteRedact_NoAccessWindow(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t)
+	svc, msgs, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, true, nil)
@@ -1432,7 +1510,7 @@ func TestHistoryService_QuoteRedact_NoAccessWindow(t *testing.T) {
 }
 
 func TestHistoryService_QuoteRedact_SingleMessage(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t)
+	svc, msgs, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(&joinTime, true, nil)
@@ -1465,7 +1543,7 @@ func TestHistoryService_QuoteRedact_SingleMessage(t *testing.T) {
 // snapshot replaced with unavailable stub. ThreadParentCreatedAt is embedded at write
 // time by message-worker; no Cassandra fetch needed.
 func TestHistoryService_TShow_ParentBeforeAccessSince(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t)
+	svc, msgs, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(&joinTime, true, nil)
@@ -1498,7 +1576,7 @@ func TestHistoryService_TShow_ParentBeforeAccessSince(t *testing.T) {
 // TShow message whose QuotedParentMessage.ThreadParentCreatedAt is within the access
 // window → not redacted.
 func TestHistoryService_TShow_ParentAfterAccessSince(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t)
+	svc, msgs, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(&joinTime, true, nil)
@@ -1529,7 +1607,7 @@ func TestHistoryService_TShow_ParentAfterAccessSince(t *testing.T) {
 
 // TShow message with no QuotedParentMessage → nothing to redact.
 func TestHistoryService_TShow_NoQuotedParentMessage(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t)
+	svc, msgs, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(&joinTime, true, nil)
@@ -1552,7 +1630,7 @@ func TestHistoryService_TShow_NoQuotedParentMessage(t *testing.T) {
 
 // Two TShow messages pointing to the same inaccessible thread parent → both redacted.
 func TestHistoryService_TShow_TwoMessagesWithSameParent_BothRedacted(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t)
+	svc, msgs, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(&joinTime, true, nil)
@@ -1585,7 +1663,7 @@ func TestHistoryService_TShow_TwoMessagesWithSameParent_BothRedacted(t *testing.
 // TShow message where ThreadParentCreatedAt is nil (message-worker didn't populate it) →
 // conservatively redacted because the access window cannot be verified.
 func TestHistoryService_TShow_ThreadParentCreatedAtNil_ConservativeRedaction(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t)
+	svc, msgs, subs, _, _, _ := newService(t, true)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(&joinTime, true, nil)

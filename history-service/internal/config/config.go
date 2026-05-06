@@ -29,18 +29,27 @@ type NATSConfig struct {
 
 // ValkeyConfig holds Valkey (Redis-compatible) connection settings.
 // Env vars: VALKEY_ADDR, VALKEY_PASSWORD
+// Addr is validated only when encryption is enabled (see main.go).
 type ValkeyConfig struct {
-	Addr     string `env:"ADDR" required:"true"`
+	Addr     string `env:"ADDR"`
 	Password string `env:"PASSWORD" envDefault:""`
+}
+
+// EncryptionConfig gates the room-key (Valkey) connection and the
+// encrypted-edit publish path.
+// Env vars: ENCRYPTION_ENABLED
+type EncryptionConfig struct {
+	Enabled bool `env:"ENABLED" envDefault:"false"`
 }
 
 // Config is the top-level configuration for history-service.
 type Config struct {
-	SiteID    string          `env:"SITE_ID" envDefault:"site-local"`
-	Cassandra CassandraConfig `envPrefix:"CASSANDRA_"`
-	Mongo     MongoConfig     `envPrefix:"MONGO_"`
-	NATS      NATSConfig      `envPrefix:"NATS_"`
-	Valkey    ValkeyConfig    `envPrefix:"VALKEY_"`
+	SiteID     string           `env:"SITE_ID" envDefault:"site-local"`
+	Cassandra  CassandraConfig  `envPrefix:"CASSANDRA_"`
+	Mongo      MongoConfig      `envPrefix:"MONGO_"`
+	NATS       NATSConfig       `envPrefix:"NATS_"`
+	Valkey     ValkeyConfig     `envPrefix:"VALKEY_"`
+	Encryption EncryptionConfig `envPrefix:"ENCRYPTION_"`
 }
 
 // Load parses environment variables into Config. Returns error if required vars are missing.

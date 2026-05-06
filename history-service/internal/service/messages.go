@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"strings"
 	"time"
@@ -206,33 +207,34 @@ func (s *HistoryService) GetMessageByID(c *natsrouter.Context, req models.GetMes
 	return msg, nil
 }
 
-// encryptEditMsg attempts to encrypt plaintext using the room's current key.
-// Returns ("", encryptedJSON) on success. Returns (plaintext, nil) on any
-// failure (no key, key fetch error, encode error) so the caller can fall back
-// to a plaintext event — the Cassandra write already succeeded.
-func (s *HistoryService) encryptEditMsg(c *natsrouter.Context, roomID, plaintext string) (string, json.RawMessage) {
-	if s.keyProvider == nil {
-		return plaintext, nil
+// encryptEditMsg returns the payload pieces for the live MessageEditedEvent.
+//
+// Returns:
+//
+//	(plaintext, nil, nil)   — encryption is disabled, caller publishes plaintext.
+//	("",        encJSON, nil) — encryption succeeded, caller publishes encrypted.
+//	("",        nil,     err) — encryption was required but failed; caller MUST
+//	                             skip publishing to avoid plaintext exposure.
+func (s *HistoryService) encryptEditMsg(c *natsrouter.Context, roomID, plaintext string) (string, json.RawMessage, error) {
+	if !s.encrypt {
+		return plaintext, nil, nil
 	}
 	key, err := s.keyProvider.Get(c, roomID)
 	if err != nil {
-		slog.Warn("edit: get room key failed, event will be plaintext", "error", err, "roomID", roomID)
-		return plaintext, nil
+		return "", nil, fmt.Errorf("get room key for room %s: %w", roomID, err)
 	}
 	if key == nil {
-		return plaintext, nil
+		return "", nil, fmt.Errorf("no current key for room %s", roomID)
 	}
 	encrypted, err := roomcrypto.Encode(plaintext, key.KeyPair.PublicKey, key.Version)
 	if err != nil {
-		slog.Warn("edit: encrypt failed, event will be plaintext", "error", err, "roomID", roomID)
-		return plaintext, nil
+		return "", nil, fmt.Errorf("encrypt edit message for room %s: %w", roomID, err)
 	}
 	encJSON, err := json.Marshal(encrypted)
 	if err != nil {
-		slog.Warn("edit: marshal encrypted message failed, event will be plaintext", "error", err, "roomID", roomID)
-		return plaintext, nil
+		return "", nil, fmt.Errorf("marshal encrypted edit message: %w", err)
 	}
-	return "", json.RawMessage(encJSON)
+	return "", json.RawMessage(encJSON), nil
 }
 
 // EditMessage handles chat.user.{account}.request.room.{roomID}.{siteID}.msg.edit.
@@ -280,24 +282,32 @@ func (s *HistoryService) EditMessage(c *natsrouter.Context, req models.EditMessa
 	}
 
 	// Publish live event (best-effort — publish failure is logged, not returned).
+	// When encryption is required but fails, skip the publish entirely to avoid
+	// leaking plaintext on the live event subject. The Cassandra write already
+	// succeeded; clients will see the edit on next history fetch.
 	editedAtMs := editedAt.UnixMilli()
-	plainMsg, encMsg := s.encryptEditMsg(c, roomID, req.NewMsg)
-	evt := models.MessageEditedEvent{
-		Type:            "message_edited",
-		Timestamp:       editedAtMs,
-		RoomID:          roomID,
-		MessageID:       req.MessageID,
-		NewMsg:          plainMsg,
-		EncryptedNewMsg: encMsg,
-		EditedBy:        account,
-		EditedAt:        editedAtMs,
-	}
-	if payload, err := json.Marshal(evt); err == nil {
-		if pubErr := s.publisher.Publish(c, subject.RoomEvent(roomID), payload); pubErr != nil {
-			slog.Warn("edit: publish event failed", "error", pubErr, "messageID", req.MessageID)
-		}
+	plainMsg, encMsg, encErr := s.encryptEditMsg(c, roomID, req.NewMsg)
+	if encErr != nil {
+		slog.Error("edit: encryption failed, skipping live event to avoid plaintext exposure",
+			"error", encErr, "messageID", req.MessageID, "roomID", roomID)
 	} else {
-		slog.Warn("edit: marshal event failed", "error", err, "messageID", req.MessageID)
+		evt := models.MessageEditedEvent{
+			Type:            "message_edited",
+			Timestamp:       editedAtMs,
+			RoomID:          roomID,
+			MessageID:       req.MessageID,
+			NewMsg:          plainMsg,
+			EncryptedNewMsg: encMsg,
+			EditedBy:        account,
+			EditedAt:        editedAtMs,
+		}
+		if payload, err := json.Marshal(evt); err == nil {
+			if pubErr := s.publisher.Publish(c, subject.RoomEvent(roomID), payload); pubErr != nil {
+				slog.Warn("edit: publish event failed", "error", pubErr, "messageID", req.MessageID)
+			}
+		} else {
+			slog.Warn("edit: marshal event failed", "error", err, "messageID", req.MessageID)
+		}
 	}
 
 	return &models.EditMessageResponse{
