@@ -18,6 +18,8 @@ const (
 
 type HistoryConfig struct {
 	Mode HistoryMode `json:"mode" bson:"mode"`
+	// SharedSince (ms): when non-nil under HistoryModeNone, takes precedence over acceptedAt.
+	SharedSince *int64 `json:"sharedSince,omitempty" bson:"sharedSince,omitempty"`
 }
 
 // ChannelRef identifies a source channel by room + its home site. Used by add-member
@@ -94,6 +96,15 @@ type MembersAdded struct {
 	AddedUsersCount int          `json:"addedUsersCount"`
 }
 
+// RoomCreated is the sys-message payload emitted on channel creation.
+type RoomCreated struct {
+	Name            string       `json:"name"`
+	Users           []string     `json:"users"`
+	Orgs            []string     `json:"orgs"`
+	Channels        []ChannelRef `json:"channels"`
+	AddedUsersCount int          `json:"addedUsersCount"`
+}
+
 type ListRoomMembersRequest struct {
 	Limit  *int `json:"limit,omitempty"`
 	Offset *int `json:"offset,omitempty"`
@@ -118,4 +129,23 @@ type OrgMember struct {
 
 type ListOrgMembersResponse struct {
 	Members []OrgMember `json:"members"`
+}
+
+// CreateRoomRequest is the canonical event payload (X-Request-ID rides on the NATS header).
+// Users/Orgs/Channels are the literal client request; ResolvedUsers/ResolvedOrgs carry the
+// post-expansion (channel-ref-merged, requester-stripped, dedup'd) sets the worker uses for
+// member materialization. Sys-message payloads use the literal lists.
+type CreateRoomRequest struct {
+	Name     string       `json:"name"     bson:"name"`
+	Users    []string     `json:"users"    bson:"users"`
+	Orgs     []string     `json:"orgs"     bson:"orgs"`
+	Channels []ChannelRef `json:"channels" bson:"channels"`
+
+	ResolvedUsers []string `json:"resolvedUsers,omitempty" bson:"resolvedUsers,omitempty"`
+	ResolvedOrgs  []string `json:"resolvedOrgs,omitempty"  bson:"resolvedOrgs,omitempty"`
+
+	RoomID           string `json:"roomId"            bson:"roomId"`
+	RequesterID      string `json:"requesterId"       bson:"requesterId"`
+	RequesterAccount string `json:"requesterAccount"  bson:"requesterAccount"`
+	Timestamp        int64  `json:"timestamp"         bson:"timestamp"`
 }

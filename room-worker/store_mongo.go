@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
@@ -46,18 +47,63 @@ func (s *MongoStore) ListByRoom(ctx context.Context, roomID string) ([]model.Sub
 	return subs, nil
 }
 
-// ReconcileUserCount sets rooms.userCount to the current subscription count.
-// Using $set (not $inc) makes the write idempotent under JetStream
-// redelivery: running this after any add/remove converges to the correct
-// value, even if an earlier delivery already performed the underlying
-// subscription changes and we're seeing a retry.
-func (s *MongoStore) ReconcileUserCount(ctx context.Context, roomID string) error {
-	count, err := s.subscriptions.CountDocuments(ctx, bson.M{"roomId": roomID})
-	if err != nil {
-		return fmt.Errorf("count subscriptions for room %q: %w", roomID, err)
+// ReconcileMemberCounts counts the room's subscriptions, splitting on
+// the bot account naming pattern to produce both UserCount (non-bot) and
+// AppCount (bot). A single $group aggregation does both buckets in one
+// collection scan (was: two CountDocuments queries). Writes both fields
+// to the rooms collection in a single updateOne. The regex must stay in
+// lockstep with pkg/pipelines.GetNewMembersPipeline — both classify
+// accounts matching `.bot$|^p_` as bots.
+func (s *MongoStore) ReconcileMemberCounts(ctx context.Context, roomID string) error {
+	const botRegex = `(\.bot$|^p_)`
+	pipe := []bson.M{
+		{"$match": bson.M{"roomId": roomID}},
+		{"$group": bson.M{
+			"_id": nil,
+			"appCount": bson.M{"$sum": bson.M{
+				"$cond": []any{
+					bson.M{"$regexMatch": bson.M{"input": "$u.account", "regex": botRegex}},
+					1, 0,
+				},
+			}},
+			"userCount": bson.M{"$sum": bson.M{
+				"$cond": []any{
+					bson.M{"$regexMatch": bson.M{"input": "$u.account", "regex": botRegex}},
+					0, 1,
+				},
+			}},
+		}},
 	}
-	if _, err := s.rooms.UpdateOne(ctx, bson.M{"_id": roomID}, bson.M{"$set": bson.M{"userCount": count}}); err != nil {
-		return fmt.Errorf("reconcile userCount for room %q: %w", roomID, err)
+	cur, err := s.subscriptions.Aggregate(ctx, pipe)
+	if err != nil {
+		return fmt.Errorf("aggregate member counts: %w", err)
+	}
+	defer cur.Close(ctx)
+
+	var counts struct {
+		UserCount int64 `bson:"userCount"`
+		AppCount  int64 `bson:"appCount"`
+	}
+	if cur.Next(ctx) {
+		if err := cur.Decode(&counts); err != nil {
+			return fmt.Errorf("decode member counts: %w", err)
+		}
+	} else if err := cur.Err(); err != nil {
+		// A cursor failure must not silently fall through to an UpdateOne with
+		// zero counts, which would clobber the rooms doc on a transient error.
+		return fmt.Errorf("iterate member counts: %w", err)
+	}
+	// No rows match → both counts stay 0, which is the correct reset behavior
+	// for a room whose last subscription was just removed.
+
+	if _, err := s.rooms.UpdateOne(ctx, bson.M{"_id": roomID}, bson.M{
+		"$set": bson.M{
+			"userCount": counts.UserCount,
+			"appCount":  counts.AppCount,
+			"updatedAt": time.Now().UTC(),
+		},
+	}); err != nil {
+		return fmt.Errorf("update room counts: %w", err)
 	}
 	return nil
 }
@@ -71,14 +117,51 @@ func (s *MongoStore) GetRoom(ctx context.Context, roomID string) (*model.Room, e
 }
 
 func (s *MongoStore) GetUser(ctx context.Context, account string) (*model.User, error) {
-	var user model.User
-	if err := s.users.FindOne(ctx, bson.M{"account": account}).Decode(&user); err != nil {
-		if errors.Is(err, mongo.ErrNoDocuments) {
-			return nil, fmt.Errorf("user %q not found: %w", account, err)
-		}
+	var u model.User
+	err := s.users.FindOne(ctx, bson.M{"account": account}).Decode(&u)
+	if errors.Is(err, mongo.ErrNoDocuments) {
+		return nil, ErrUserNotFound
+	}
+	if err != nil {
 		return nil, fmt.Errorf("get user %q: %w", account, err)
 	}
-	return &user, nil
+	return &u, nil
+}
+
+func (s *MongoStore) CreateRoom(ctx context.Context, room *model.Room) error {
+	if _, err := s.rooms.InsertOne(ctx, room); err != nil {
+		return fmt.Errorf("insert room: %w", err)
+	}
+	return nil
+}
+
+func (s *MongoStore) ListNewMembersForNewRoom(ctx context.Context, orgIDs, accounts []string, excludeAccount string) ([]string, error) {
+	pipe := pipelines.GetNewMembersPipeline(orgIDs, accounts, "", excludeAccount)
+	pipe = append(pipe, bson.M{"$group": bson.M{
+		"_id":      nil,
+		"accounts": bson.M{"$addToSet": "$account"},
+	}})
+	cur, err := s.users.Aggregate(ctx, pipe)
+	if err != nil {
+		return nil, fmt.Errorf("list new members for new room: %w", err)
+	}
+	defer cur.Close(ctx)
+	if !cur.Next(ctx) {
+		// Distinguish a true empty result from a cursor/read failure — the
+		// caller must not proceed to room creation when membership resolution
+		// silently failed.
+		if err := cur.Err(); err != nil {
+			return nil, fmt.Errorf("iterate aggregation result: %w", err)
+		}
+		return nil, nil
+	}
+	var doc struct {
+		Accounts []string `bson:"accounts"`
+	}
+	if err := cur.Decode(&doc); err != nil {
+		return nil, fmt.Errorf("decode aggregation result: %w", err)
+	}
+	return doc.Accounts, nil
 }
 
 func (s *MongoStore) GetSubscription(ctx context.Context, account, roomID string) (*model.Subscription, error) {
@@ -306,7 +389,7 @@ func (s *MongoStore) ListNewMembers(ctx context.Context, orgIDs, directAccounts 
 		return nil, nil
 	}
 
-	pipeline := pipelines.GetNewMembersPipeline(orgIDs, directAccounts, roomID)
+	pipeline := pipelines.GetNewMembersPipeline(orgIDs, directAccounts, roomID, "")
 	pipeline = append(pipeline, bson.M{
 		"$group": bson.M{"_id": nil, "accounts": bson.M{"$addToSet": "$account"}},
 	})

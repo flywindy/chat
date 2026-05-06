@@ -9,8 +9,10 @@ import (
 	"log/slog"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Marz32onE/instrumentation-go/otel-nats/otelnats"
+	"github.com/nats-io/nats.go"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -24,17 +26,27 @@ import (
 )
 
 type Handler struct {
-	store            RoomStore
-	keyStore         RoomKeyStore
-	memberListClient MemberListClient
-	siteID           string
-	maxRoomSize      int
-	maxBatchSize     int
-	publishToStream  func(ctx context.Context, subj string, data []byte) error
+	store             RoomStore
+	keyStore          RoomKeyStore
+	memberListClient  MemberListClient
+	siteID            string
+	maxRoomSize       int
+	maxBatchSize      int
+	memberListTimeout time.Duration
+	publishToStream   func(ctx context.Context, subj string, data []byte) error
 }
 
-func NewHandler(store RoomStore, keyStore RoomKeyStore, memberListClient MemberListClient, siteID string, maxRoomSize, maxBatchSize int, publishToStream func(context.Context, string, []byte) error) *Handler {
-	return &Handler{store: store, keyStore: keyStore, memberListClient: memberListClient, siteID: siteID, maxRoomSize: maxRoomSize, maxBatchSize: maxBatchSize, publishToStream: publishToStream}
+func NewHandler(store RoomStore, keyStore RoomKeyStore, memberListClient MemberListClient, siteID string, maxRoomSize, maxBatchSize int, memberListTimeout time.Duration, publishToStream func(context.Context, string, []byte) error) *Handler {
+	return &Handler{
+		store:             store,
+		keyStore:          keyStore,
+		memberListClient:  memberListClient,
+		siteID:            siteID,
+		maxRoomSize:       maxRoomSize,
+		maxBatchSize:      maxBatchSize,
+		memberListTimeout: memberListTimeout,
+		publishToStream:   publishToStream,
+	}
 }
 
 // wrappedCtx returns m.Context() augmented with X-Request-ID from the inbound msg header; entry ctx for every nats* handler.
@@ -45,8 +57,8 @@ func wrappedCtx(m otelnats.Msg) context.Context {
 // RegisterCRUD registers NATS request/reply handlers for room CRUD with queue group.
 func (h *Handler) RegisterCRUD(nc *otelnats.Conn) error {
 	const queue = "room-service"
-	if _, err := nc.QueueSubscribe(subject.RoomsCreateWildcard(), queue, h.natsCreateRoom); err != nil {
-		return err
+	if _, err := nc.QueueSubscribe(subject.RoomCreateWildcard(h.siteID), queue, h.natsCreateRoom); err != nil {
+		return fmt.Errorf("subscribe room.create: %w", err)
 	}
 	if _, err := nc.QueueSubscribe(subject.RoomsListWildcard(), queue, h.natsListRooms); err != nil {
 		return err
@@ -77,13 +89,33 @@ func (h *Handler) RegisterCRUD(nc *otelnats.Conn) error {
 
 func (h *Handler) natsCreateRoom(m otelnats.Msg) {
 	ctx := wrappedCtx(m)
-	resp, err := h.handleCreateRoom(ctx, m.Msg.Data)
+	resp, err := h.handleCreateRoom(ctx, m.Msg.Subject, m.Msg.Data)
 	if err != nil {
-		natsutil.ReplyError(m.Msg, err.Error())
+		var dmExists *dmExistsError
+		if errors.As(err, &dmExists) {
+			h.replyDMExists(m.Msg, dmExists.RoomID())
+			return
+		}
+		slog.Error("create-room failed", "error", err, "subject", m.Msg.Subject)
+		natsutil.ReplyError(m.Msg, sanitizeError(err))
 		return
 	}
 	if err := m.Msg.Respond(resp); err != nil {
-		slog.Error("failed to respond to message", "error", err)
+		slog.Error("failed to respond to create-room", "error", err)
+	}
+}
+
+func (h *Handler) replyDMExists(msg *nats.Msg, existingRoomID string) {
+	body, err := json.Marshal(model.ErrorResponse{
+		Error:  "dm already exists",
+		RoomID: existingRoomID,
+	})
+	if err != nil {
+		natsutil.ReplyError(msg, "internal error")
+		return
+	}
+	if err := msg.Respond(body); err != nil {
+		slog.Error("failed to respond DM exists", "error", err)
 	}
 }
 
@@ -109,61 +141,212 @@ func (h *Handler) natsGetRoom(m otelnats.Msg) {
 	natsutil.ReplyJSON(m.Msg, room)
 }
 
-func (h *Handler) handleCreateRoom(ctx context.Context, data []byte) ([]byte, error) {
+func (h *Handler) handleCreateRoom(ctx context.Context, subj string, data []byte) ([]byte, error) {
+	requesterAccount, ok := subject.ParseRoomCreateSubject(subj)
+	if !ok {
+		return nil, fmt.Errorf("invalid create-room subject: %s", subj)
+	}
+
+	requestID := natsutil.RequestIDFromContext(ctx)
+	if requestID == "" {
+		return nil, errMissingRequestID
+	}
+	if !idgen.IsValidUUID(requestID) {
+		return nil, errInvalidRequestID
+	}
+
 	var req model.CreateRoomRequest
 	if err := json.Unmarshal(data, &req); err != nil {
 		return nil, fmt.Errorf("invalid request: %w", err)
 	}
 
-	now := time.Now().UTC()
+	roomType, err := classifyAndValidate(&req, requesterAccount)
+	if err != nil {
+		return nil, err
+	}
 
-	var roomID string
-	switch req.Type {
-	case model.RoomTypeChannel:
-		roomID = idgen.GenerateID()
-	case model.RoomTypeDM:
-		if len(req.Members) != 1 {
-			return nil, fmt.Errorf("DM requires exactly one other member, got %d", len(req.Members))
+	requester, err := h.store.GetUser(ctx, requesterAccount)
+	if err != nil {
+		if errors.Is(err, ErrUserNotFound) {
+			return nil, errUserNotFound
 		}
-		roomID = idgen.BuildDMRoomID(req.CreatedBy, req.Members[0])
-		// TODO(idgen-rework follow-up): persist a second Subscription for req.Members[0] so DMs are two-sided.
-		// DMs have no add-member/role-update flow, so the recipient is currently un-enrolled.
-		// Needs the recipient's Account (store lookup or extend CreateRoomRequest with MembersAccount). Also bump Room.UserCount to 2.
+		return nil, fmt.Errorf("get requester: %w", err)
+	}
+	if requester.EngName == "" || requester.ChineseName == "" {
+		return nil, errInvalidUserData
+	}
+
+	switch roomType {
+	case model.RoomTypeChannel:
+		return h.handleCreateRoomChannel(ctx, &req, requester, requesterAccount, roomType)
+	case model.RoomTypeDM, model.RoomTypeBotDM:
+		return h.handleCreateRoomDMOrBotDM(ctx, &req, requester, roomType)
 	default:
-		return nil, fmt.Errorf("unsupported room type %q", req.Type)
+		return nil, fmt.Errorf("unknown room type: %s", roomType)
+	}
+}
+
+// classifyAndValidate runs all input-only validations in priority order
+// (empty → self-DM → channel-name → channel-name-length → bot-in-channel)
+// and returns the classified room type. No DB calls.
+//
+// Dedup/strip of req.Users happens after the empty check and before
+// self-DM detection: the post-strip length, combined with the pre-strip
+// dedup'd length, lets us detect "users == [requester]" (self-DM) in
+// a single pass.
+func classifyAndValidate(req *model.CreateRoomRequest, requesterAccount string) (model.RoomType, error) {
+	if req.Name == "" && len(req.Users) == 0 && len(req.Orgs) == 0 && len(req.Channels) == 0 {
+		return "", errEmptyCreateRequest
 	}
 
-	room := model.Room{
-		ID:        roomID,
-		Name:      req.Name,
-		Type:      req.Type,
-		CreatedBy: req.CreatedBy,
-		SiteID:    req.SiteID,
-		UserCount: 1,
-		CreatedAt: now,
-		UpdatedAt: now,
+	// Single dedup + strip pass; capture the pre-strip dedup'd length so we
+	// can detect self-DM (originalUsers == [requesterAccount]) without a
+	// second pass.
+	deduped := dedup(req.Users)
+	req.Users = stripAccount(deduped, requesterAccount)
+
+	if req.Name == "" && len(req.Orgs) == 0 && len(req.Channels) == 0 {
+		if len(deduped) == 1 && len(req.Users) == 0 {
+			// Pre-strip set was [requester] and post-strip is empty →
+			// self-DM.
+			return "", errSelfDM
+		}
 	}
 
-	if err := h.store.CreateRoom(ctx, &room); err != nil {
-		return nil, fmt.Errorf("create room: %w", err)
+	roomType := determineRoomType(req)
+
+	if roomType == model.RoomTypeChannel {
+		if strings.TrimSpace(req.Name) == "" {
+			return "", errChannelNameRequired
+		}
+		if utf8.RuneCountInString(req.Name) > maxChannelNameRunes {
+			return "", errChannelNameTooLong
+		}
+		for _, a := range req.Users {
+			if isBot(a) {
+				return "", errBotInChannel
+			}
+		}
 	}
 
-	// Auto-create owner subscription
-	sub := model.Subscription{
-		ID:                 idgen.GenerateUUIDv7(),
-		User:               model.SubscriptionUser{ID: req.CreatedBy, Account: req.CreatedByAccount},
-		RoomID:             room.ID,
-		RoomType:           req.Type,
-		SiteID:             req.SiteID,
-		Roles:              []model.Role{model.RoleOwner},
-		HistorySharedSince: &now,
-		JoinedAt:           now,
+	return roomType, nil
+}
+
+// maxChannelNameRunes caps the rune length of a client-supplied channel name.
+const maxChannelNameRunes = 100
+
+func (h *Handler) handleCreateRoomDMOrBotDM(ctx context.Context, req *model.CreateRoomRequest, requester *model.User, roomType model.RoomType) ([]byte, error) {
+	otherAccount := req.Users[0]
+	other, err := h.store.GetUser(ctx, otherAccount)
+	if err != nil {
+		if errors.Is(err, ErrUserNotFound) {
+			return nil, errUserNotFound
+		}
+		return nil, fmt.Errorf("get counterpart: %w", err)
 	}
-	if err := h.store.CreateSubscription(ctx, &sub); err != nil {
-		slog.Warn("create owner subscription failed", "error", err)
+	if roomType == model.RoomTypeDM && (other.EngName == "" || other.ChineseName == "") {
+		// botDMs counterpart is an app/bot whose users-collection record
+		// typically has empty name fields; the GetApp + Assistant.Enabled
+		// check below is the right validation for that case.
+		return nil, errInvalidUserData
 	}
 
-	return json.Marshal(room)
+	req.RoomID = idgen.BuildDMRoomID(requester.ID, other.ID)
+	// DM/BotDM resolved set matches the literal counterpart list — there is no expansion.
+	req.ResolvedUsers = append([]string(nil), req.Users...)
+
+	// Dedup BEFORE bot-availability check so an existing botDM still resolves
+	// to the existing roomId even if the bot was later disabled — preserves
+	// the deterministic "open-or-create" contract for DMs.
+	existing, err := h.store.FindDMSubscription(ctx, requester.Account, other.Account)
+	if err == nil && existing != nil {
+		return nil, newDMExistsError(existing.RoomID)
+	}
+	if err != nil && !errors.Is(err, model.ErrSubscriptionNotFound) {
+		return nil, fmt.Errorf("dm dedup check: %w", err)
+	}
+
+	if roomType == model.RoomTypeBotDM {
+		app, err := h.store.GetApp(ctx, other.Account)
+		if err != nil {
+			if errors.Is(err, ErrAppNotFound) {
+				return nil, errBotNotAvailable
+			}
+			return nil, fmt.Errorf("get app: %w", err)
+		}
+		if app.Assistant == nil || !app.Assistant.Enabled {
+			return nil, errBotNotAvailable
+		}
+	}
+
+	return h.publishCreateRoom(ctx, req, requester, roomType)
+}
+
+func (h *Handler) handleCreateRoomChannel(ctx context.Context, req *model.CreateRoomRequest, requester *model.User, requesterAccount string, roomType model.RoomType) ([]byte, error) {
+	channelOrgIDs, channelAccounts, err := h.expandChannelRefs(ctx, requester.Account, req.Channels)
+	if err != nil {
+		return nil, fmt.Errorf("expand channels: %w", err)
+	}
+	// Strip bots from channel-ref expansion so they can't leak into a new channel.
+	channelAccounts = filterBots(channelAccounts)
+	allOrgs := dedup(append(append([]string{}, req.Orgs...), channelOrgIDs...))
+	allUsers := stripAccount(dedup(append(append([]string{}, req.Users...), channelAccounts...)), requesterAccount)
+
+	if len(allUsers) == 0 && len(allOrgs) == 0 {
+		return nil, errEmptyCreateRequest
+	}
+
+	// Pass requesterAccount as excludeAccount: the requester was stripped from
+	// allUsers but can still be re-added by org expansion (when their account
+	// is in any of the resolved orgs). Excluding them from the count lets us
+	// add exactly +1 below for the owner row without double-counting.
+	newCount, err := h.store.CountNewMembers(ctx, allOrgs, allUsers, "", requesterAccount)
+	if err != nil {
+		return nil, fmt.Errorf("count new members: %w", err)
+	}
+	if newCount == 0 {
+		return nil, errEmptyCreateRequest
+	}
+	// Creator is added implicitly as the channel owner. Count them in the
+	// capacity check so a maxRoomSize=N bound caps the materialized room at
+	// N members, not N+1.
+	totalMembers := 1 + newCount
+	if totalMembers > h.maxRoomSize {
+		return nil, fmt.Errorf("exceeds maximum capacity (%d): would create %d members", h.maxRoomSize, totalMembers)
+	}
+
+	// Preserve req.Users / req.Orgs as the literal client request for sys-message payloads.
+	// The worker uses ResolvedUsers / ResolvedOrgs for capacity and member materialization.
+	req.ResolvedUsers = allUsers
+	req.ResolvedOrgs = allOrgs
+	req.RoomID = idgen.GenerateID()
+	return h.publishCreateRoom(ctx, req, requester, roomType)
+}
+
+func (h *Handler) publishCreateRoom(ctx context.Context, req *model.CreateRoomRequest, requester *model.User, roomType model.RoomType) ([]byte, error) {
+	req.RequesterID = requester.ID
+	req.RequesterAccount = requester.Account
+	req.Timestamp = time.Now().UTC().UnixMilli()
+	if span := trace.SpanFromContext(ctx); span.IsRecording() {
+		span.SetAttributes(
+			attribute.String("room.id", req.RoomID),
+			attribute.String("room.type", string(roomType)),
+			attribute.String("site.id", h.siteID),
+		)
+	}
+
+	payload, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("marshal canonical event: %w", err)
+	}
+	if err := h.publishToStream(ctx, subject.RoomCanonical(h.siteID, "create"), payload); err != nil {
+		return nil, fmt.Errorf("publish canonical: %w", err)
+	}
+	return json.Marshal(model.CreateRoomReply{
+		Status:   model.CreateRoomReplyAccepted,
+		RoomID:   req.RoomID,
+		RoomType: string(roomType),
+	})
 }
 
 // NatsHandleRemoveMember handles remove-member authorization requests.
@@ -459,18 +642,30 @@ func (h *Handler) handleAddMembers(ctx context.Context, subj string, data []byte
 		return nil, fmt.Errorf("invalid request: room ID mismatch")
 	}
 
+	// Reject direct bots up front — mirrors classifyAndValidate in
+	// create-channel: a client that explicitly lists a bot must see a hard
+	// error rather than a silent drop.
+	for _, a := range req.Users {
+		if isBot(a) {
+			return nil, errBotInChannel
+		}
+	}
+
 	// 5. Expand channels
 	channelOrgIDs, channelAccounts, err := h.expandChannelRefs(ctx, requester, req.Channels)
 	if err != nil {
 		return nil, fmt.Errorf("expand channels: %w", err)
 	}
+	// Strip bots from channel-ref expansion so a source channel can never
+	// silently inject a bot into this channel. Mirrors create-channel.
+	channelAccounts = filterBots(channelAccounts)
 
 	// 6. Dedup orgs and direct accounts
 	allOrgs := dedup(append(req.Orgs, channelOrgIDs...))
 	allUsers := dedup(append(req.Users, channelAccounts...))
 
 	// 7. Count net-new members (count-only — actual list materialized in room-worker)
-	newCount, err := h.store.CountNewMembers(ctx, allOrgs, allUsers, roomID)
+	newCount, err := h.store.CountNewMembers(ctx, allOrgs, allUsers, roomID, "")
 	if err != nil {
 		return nil, fmt.Errorf("count new members: %w", err)
 	}
@@ -509,20 +704,38 @@ func (h *Handler) expandChannelRefs(ctx context.Context, requester string, refs 
 	for _, ref := range refs {
 		var members []model.RoomMember
 
+		// Per-ref deadline so a slow same-site Mongo query or unresponsive
+		// remote site cannot stall the create/add request indefinitely; a
+		// timeout here surfaces to the caller as channelExpandTimeoutError
+		// with site+roomId so the requester can see which channel stalled.
+		refCtx, cancel := h.contextWithMemberListTimeout(ctx)
+
 		if ref.SiteID == h.siteID {
-			if _, subErr := h.store.GetSubscription(ctx, requester, ref.RoomID); subErr != nil {
+			if _, subErr := h.store.GetSubscription(refCtx, requester, ref.RoomID); subErr != nil {
+				cancel()
+				if errors.Is(subErr, context.DeadlineExceeded) {
+					return nil, nil, newChannelExpandTimeoutError(ref.SiteID, ref.RoomID)
+				}
 				if errors.Is(subErr, model.ErrSubscriptionNotFound) {
 					return nil, nil, errNotRoomMember
 				}
 				return nil, nil, fmt.Errorf("subscription check %s: %w", ref.RoomID, subErr)
 			}
-			members, err = h.store.ListRoomMembers(ctx, ref.RoomID, &listLimit, nil, false)
+			members, err = h.store.ListRoomMembers(refCtx, ref.RoomID, &listLimit, nil, false)
+			cancel()
 			if err != nil {
+				if errors.Is(err, context.DeadlineExceeded) {
+					return nil, nil, newChannelExpandTimeoutError(ref.SiteID, ref.RoomID)
+				}
 				return nil, nil, fmt.Errorf("local list-members %s: %w", ref.RoomID, err)
 			}
 		} else {
-			members, err = h.memberListClient.ListMembers(ctx, requester, ref, listLimit)
+			members, err = h.memberListClient.ListMembers(refCtx, requester, ref, listLimit)
+			cancel()
 			if err != nil {
+				if errors.Is(err, context.DeadlineExceeded) {
+					return nil, nil, newChannelExpandTimeoutError(ref.SiteID, ref.RoomID)
+				}
 				// Pass the sentinel through unwrapped so same-site and cross-site "not a member"
 				// produce identical behavior — errors.Is(err, errNotRoomMember) matches both.
 				if errors.Is(err, errNotRoomMember) {

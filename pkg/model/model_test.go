@@ -461,6 +461,25 @@ func TestSubscriptionJSON_ThreadUnreadOmittedAlertAlwaysPresent(t *testing.T) {
 	assert.False(t, dst.Alert)
 }
 
+func TestRoomBotDMRoundtrip(t *testing.T) {
+	r := model.Room{
+		ID:        "r1",
+		Name:      "weather chat",
+		Type:      model.RoomTypeBotDM,
+		SiteID:    "site-A",
+		UserCount: 1,
+		AppCount:  1,
+		CreatedAt: time.Date(2026, 4, 28, 0, 0, 0, 0, time.UTC),
+		UpdatedAt: time.Date(2026, 4, 28, 0, 0, 0, 0, time.UTC),
+	}
+
+	var dst model.Room
+	roundTrip(t, &r, &dst)
+	assert.Equal(t, model.RoomTypeBotDM, dst.Type)
+	assert.Equal(t, "botDM", string(dst.Type))
+	assert.Equal(t, 1, dst.AppCount)
+}
+
 func TestRoomTypeValues(t *testing.T) {
 	if model.RoomTypeChannel != "channel" {
 		t.Errorf("RoomTypeChannel = %q", model.RoomTypeChannel)
@@ -1130,6 +1149,49 @@ func TestMemberAddEventJSON(t *testing.T) {
 	})
 }
 
+func TestMemberAddEventCarriesRoomName(t *testing.T) {
+	evt := model.MemberAddEvent{
+		Type:      "member_added",
+		RoomID:    "r1",
+		RoomName:  "deal team",
+		Accounts:  []string{"bob"},
+		SiteID:    "site-A",
+		JoinedAt:  1,
+		Timestamp: 1,
+	}
+	data, err := json.Marshal(evt)
+	require.NoError(t, err)
+
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(data, &raw))
+	assert.Equal(t, "deal team", raw["roomName"])
+
+	var dst model.MemberAddEvent
+	require.NoError(t, json.Unmarshal(data, &dst))
+	assert.Equal(t, "deal team", dst.RoomName)
+}
+
+func TestMemberAddEventRoomNameOmitemptyOnZero(t *testing.T) {
+	evt := model.MemberAddEvent{
+		Type:      "member_added",
+		RoomID:    "r1",
+		Accounts:  []string{},
+		SiteID:    "site-a",
+		Timestamp: 1,
+	}
+	data, err := json.Marshal(evt)
+	require.NoError(t, err)
+
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(data, &raw))
+	// Note: RoomName is NOT omitempty, so empty string still appears
+	assert.Equal(t, "", raw["roomName"])
+
+	var dst model.MemberAddEvent
+	require.NoError(t, json.Unmarshal(data, &dst))
+	assert.Empty(t, dst.RoomName)
+}
+
 func TestListRoomMembersRequestJSON(t *testing.T) {
 	t.Run("with limit and offset", func(t *testing.T) {
 		limit, offset := 10, 5
@@ -1635,6 +1697,160 @@ func TestMessage_QuotedParentMessage_JSON(t *testing.T) {
 	})
 }
 
+func TestSubscriptionNewFields(t *testing.T) {
+	t.Run("channel sub round-trips with empty IsSubscribed", func(t *testing.T) {
+		sub := model.Subscription{
+			ID:       "s1",
+			User:     model.SubscriptionUser{ID: "u1", Account: "alice"},
+			RoomID:   "r1",
+			SiteID:   "site-A",
+			Roles:    []model.Role{model.RoleOwner},
+			Name:     "deal team",
+			RoomType: model.RoomTypeChannel,
+			JoinedAt: time.Date(2026, 4, 28, 0, 0, 0, 0, time.UTC),
+		}
+		raw, err := json.Marshal(sub)
+		require.NoError(t, err)
+		var dst model.Subscription
+		require.NoError(t, json.Unmarshal(raw, &dst))
+		assert.Equal(t, "deal team", dst.Name)
+		assert.Equal(t, model.RoomTypeChannel, dst.RoomType)
+		assert.False(t, dst.IsSubscribed)
+		assert.NotContains(t, string(raw), "isSubscribed")
+	})
+	t.Run("botDM human sub round-trips", func(t *testing.T) {
+		sub := model.Subscription{
+			ID:           "s2",
+			User:         model.SubscriptionUser{ID: "u1", Account: "alice"},
+			RoomID:       "r2",
+			SiteID:       "site-A",
+			Name:         "weather.bot",
+			RoomType:     model.RoomTypeBotDM,
+			IsSubscribed: true,
+			JoinedAt:     time.Date(2026, 4, 28, 0, 0, 0, 0, time.UTC),
+		}
+		raw, err := json.Marshal(sub)
+		require.NoError(t, err)
+		var dst model.Subscription
+		require.NoError(t, json.Unmarshal(raw, &dst))
+		assert.Equal(t, "weather.bot", dst.Name)
+		assert.Equal(t, model.RoomTypeBotDM, dst.RoomType)
+		assert.True(t, dst.IsSubscribed)
+		assert.Contains(t, string(raw), `"isSubscribed":true`)
+	})
+}
+
+func TestSubscriptionJSON_NoSidebarName(t *testing.T) {
+	s := model.Subscription{
+		ID:       "s1",
+		User:     model.SubscriptionUser{ID: "u1", Account: "alice"},
+		RoomID:   "r1",
+		RoomType: model.RoomTypeChannel,
+		Name:     "deal team",
+	}
+	data, err := json.Marshal(&s)
+	require.NoError(t, err)
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(data, &raw))
+	_, hasSidebar := raw["sidebarName"]
+	assert.False(t, hasSidebar, "sidebarName must not appear in Subscription JSON")
+}
+
+func TestCreateRoomRequestRoundtrip(t *testing.T) {
+	req := model.CreateRoomRequest{
+		Name:             "team",
+		Users:            []string{"bob", "carol"},
+		Orgs:             []string{"org-fx"},
+		Channels:         []model.ChannelRef{{RoomID: "r0", SiteID: "site-A"}},
+		RoomID:           "r_xyz",
+		RequesterID:      "u_alice",
+		RequesterAccount: "alice",
+		Timestamp:        1740000000000,
+	}
+	var dst model.CreateRoomRequest
+	roundTrip(t, &req, &dst)
+	assert.Equal(t, "team", dst.Name)
+	assert.Equal(t, []string{"bob", "carol"}, dst.Users)
+	assert.Equal(t, "r_xyz", dst.RoomID)
+	assert.Equal(t, "u_alice", dst.RequesterID)
+	assert.Equal(t, int64(1740000000000), dst.Timestamp)
+}
+
+func TestRoomCreatedOutboxRoundtrip(t *testing.T) {
+	out := model.RoomCreatedOutbox{
+		RoomID:           "r1",
+		RoomType:         model.RoomTypeChannel,
+		RoomName:         "deal team",
+		HomeSiteID:       "site-A",
+		Accounts:         []string{"bob", "ian"},
+		RequesterAccount: "alice",
+		Timestamp:        1740000000000,
+	}
+	data, err := json.Marshal(&out)
+	require.NoError(t, err)
+	var dst model.RoomCreatedOutbox
+	require.NoError(t, json.Unmarshal(data, &dst))
+	assert.Equal(t, model.RoomTypeChannel, dst.RoomType)
+	assert.Equal(t, []string{"bob", "ian"}, dst.Accounts)
+	assert.NotContains(t, string(data), "appName")
+}
+
+func TestErrorResponseRoomIDOmitempty(t *testing.T) {
+	er := model.ErrorResponse{Error: "internal"}
+	body, err := json.Marshal(er)
+	require.NoError(t, err)
+	assert.NotContains(t, string(body), "roomId")
+
+	er2 := model.ErrorResponse{Error: "dm already exists", RoomID: "r1"}
+	body2, err := json.Marshal(er2)
+	require.NoError(t, err)
+	assert.Contains(t, string(body2), `"roomId":"r1"`)
+}
+
+func TestAsyncJobResultShape(t *testing.T) {
+	r := model.AsyncJobResult{
+		RequestID: "req-1",
+		Operation: model.AsyncJobOpRoomCreate,
+		Status:    "ok",
+		RoomID:    "r1",
+		Timestamp: 1,
+	}
+	data, err := json.Marshal(&r)
+	require.NoError(t, err)
+	var dst model.AsyncJobResult
+	require.NoError(t, json.Unmarshal(data, &dst))
+	assert.Equal(t, "ok", dst.Status)
+	assert.Equal(t, model.AsyncJobOpRoomCreate, dst.Operation)
+	assert.Equal(t, "r1", dst.RoomID)
+	assert.NotContains(t, string(data), `"job"`)
+	assert.NotContains(t, string(data), `"success"`)
+
+	r2 := model.AsyncJobResult{Operation: model.AsyncJobOpRoomMemberAdd, Status: "error", Error: "failed"}
+	raw2, err := json.Marshal(r2)
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw2), `"roomId"`)
+}
+
+func TestAsyncJobResultOpConstants(t *testing.T) {
+	assert.Equal(t, "room.create", model.AsyncJobOpRoomCreate)
+	assert.Equal(t, "room.member.add", model.AsyncJobOpRoomMemberAdd)
+	assert.Equal(t, "room.member.remove", model.AsyncJobOpRoomMemberRemove)
+	assert.Equal(t, "room.member.remove_org", model.AsyncJobOpRoomMemberRemoveOrg)
+	assert.Equal(t, "room.member.role_update", model.AsyncJobOpRoomMemberRoleUpdate)
+}
+
+func TestAddMembersRequestNoRequestIDField(t *testing.T) {
+	body, err := json.Marshal(model.AddMembersRequest{
+		RoomID:           "r1",
+		Users:            []string{"bob"},
+		RequesterID:      "u_alice",
+		RequesterAccount: "alice",
+		Timestamp:        1,
+	})
+	require.NoError(t, err)
+	assert.NotContains(t, string(body), "requestId")
+}
+
 // roundTrip marshals src to JSON, unmarshals into dst, and compares.
 func roundTrip[T any](t *testing.T, src *T, dst *T) {
 	t.Helper()
@@ -1648,4 +1864,97 @@ func roundTrip[T any](t *testing.T, src *T, dst *T) {
 	if !reflect.DeepEqual(*src, *dst) {
 		t.Errorf("round-trip mismatch:\n  got  %+v\n  want %+v", *dst, *src)
 	}
+}
+
+func TestAppRoundtrip(t *testing.T) {
+	a := model.App{
+		ID:          "app1",
+		Name:        "Weather Bot",
+		Description: "Forecasts and alerts",
+		Assistant: &model.AppAssistant{
+			Enabled:     true,
+			Name:        "weather.bot",
+			SettingsURL: "https://example.com/weather/settings",
+		},
+		Sponsors: []model.AppSponsor{
+			{Name: "Alice", Phone: "555-0100"},
+		},
+	}
+	var dst model.App
+	roundTrip(t, &a, &dst)
+	require.NotNil(t, dst.Assistant)
+	assert.True(t, dst.Assistant.Enabled)
+	assert.Equal(t, "weather.bot", dst.Assistant.Name)
+	assert.Equal(t, "Weather Bot", dst.Name)
+	assert.Len(t, dst.Sponsors, 1)
+	assert.Equal(t, "Alice", dst.Sponsors[0].Name)
+}
+
+func TestAppAssistantDisabledRoundtrip(t *testing.T) {
+	a := model.App{
+		ID:        "app2",
+		Name:      "Disabled Bot",
+		Assistant: &model.AppAssistant{Enabled: false, Name: "disabled.bot"},
+	}
+	var dst model.App
+	roundTrip(t, &a, &dst)
+	require.NotNil(t, dst.Assistant)
+	assert.False(t, dst.Assistant.Enabled)
+}
+
+func TestCreateRoomReplyRoundtrip(t *testing.T) {
+	r := model.CreateRoomReply{
+		Status:   model.CreateRoomReplyAccepted,
+		RoomID:   "r-abc123",
+		RoomType: string(model.RoomTypeChannel),
+	}
+	var dst model.CreateRoomReply
+	roundTrip(t, &r, &dst)
+	assert.Equal(t, model.CreateRoomReplyAccepted, dst.Status)
+	assert.Equal(t, "r-abc123", dst.RoomID)
+	assert.Equal(t, string(model.RoomTypeChannel), dst.RoomType)
+}
+
+func TestCreateRoomReplyAcceptedConstant(t *testing.T) {
+	assert.Equal(t, "accepted", model.CreateRoomReplyAccepted)
+}
+
+func TestCreateRoomReplyBotDMRoundtrip(t *testing.T) {
+	r := model.CreateRoomReply{
+		Status:   model.CreateRoomReplyAccepted,
+		RoomID:   "dm-r1",
+		RoomType: string(model.RoomTypeBotDM),
+	}
+	data, err := json.Marshal(&r)
+	require.NoError(t, err)
+	var dst model.CreateRoomReply
+	require.NoError(t, json.Unmarshal(data, &dst))
+	assert.Equal(t, string(model.RoomTypeBotDM), dst.RoomType)
+	assert.Contains(t, string(data), `"roomType":"botDM"`)
+}
+
+func TestRoomCreatedRoundtrip(t *testing.T) {
+	rc := model.RoomCreated{
+		Name:  "deal team",
+		Users: []string{"alice", "bob"},
+		Orgs:  []string{"org-fx"},
+		Channels: []model.ChannelRef{
+			{RoomID: "r-src", SiteID: "site-b"},
+		},
+		AddedUsersCount: 3,
+	}
+	var dst model.RoomCreated
+	roundTrip(t, &rc, &dst)
+	assert.Equal(t, "deal team", dst.Name)
+	assert.Equal(t, []string{"alice", "bob"}, dst.Users)
+	assert.Equal(t, []string{"org-fx"}, dst.Orgs)
+	assert.Equal(t, []model.ChannelRef{{RoomID: "r-src", SiteID: "site-b"}}, dst.Channels)
+	assert.Equal(t, 3, dst.AddedUsersCount)
+}
+
+func TestMessageTypeAndAsyncJobStatusConstants(t *testing.T) {
+	assert.Equal(t, "room_created", model.MessageTypeRoomCreated)
+	assert.Equal(t, "members_added", model.MessageTypeMembersAdded)
+	assert.Equal(t, "ok", model.AsyncJobStatusOK)
+	assert.Equal(t, "error", model.AsyncJobStatusError)
 }

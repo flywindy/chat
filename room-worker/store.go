@@ -2,9 +2,13 @@ package main
 
 import (
 	"context"
+	"errors"
 
 	"github.com/hmchangw/chat/pkg/model"
 )
+
+// ErrUserNotFound is returned by GetUser when the account does not exist.
+var ErrUserNotFound = errors.New("user not found")
 
 //go:generate mockgen -destination=mock_store_test.go -package=main . SubscriptionStore
 
@@ -32,11 +36,10 @@ type SubscriptionStore interface {
 	CreateSubscription(ctx context.Context, sub *model.Subscription) error
 	BulkCreateSubscriptions(ctx context.Context, subs []*model.Subscription) error
 	ListByRoom(ctx context.Context, roomID string) ([]model.Subscription, error)
-	// ReconcileUserCount sets rooms.userCount to the current subscription count
-	// in one atomic $set. Idempotent under JetStream redelivery — unlike $inc,
-	// repeated calls converge to the correct value even if an earlier write
-	// succeeded but the ack was lost.
-	ReconcileUserCount(ctx context.Context, roomID string) error
+	// ReconcileMemberCounts recomputes Room.UserCount (non-bot subs) and
+	// Room.AppCount (bot subs) by scanning the subscriptions collection,
+	// then writes both back to the rooms collection in a single update.
+	ReconcileMemberCounts(ctx context.Context, roomID string) error
 	GetRoom(ctx context.Context, roomID string) (*model.Room, error)
 	GetSubscription(ctx context.Context, account, roomID string) (*model.Subscription, error)
 	GetUser(ctx context.Context, account string) (*model.User, error)
@@ -65,4 +68,17 @@ type SubscriptionStore interface {
 	// Delegates to pkg/pipelines.GetNewMembersPipeline + a $group/$addToSet
 	// terminal stage.
 	ListNewMembers(ctx context.Context, orgIDs, directAccounts []string, roomID string) ([]string, error)
+
+	// CreateRoom inserts the room doc. Returns mongo.ErrDuplicateKey
+	// when the _id collides; the handler's idempotency logic handles
+	// matching-existing-room as success-on-redelivery.
+	CreateRoom(ctx context.Context, room *model.Room) error
+
+	// ListNewMembersForNewRoom is the empty-roomID variant of
+	// ListNewMembers — same dedup + bot filter, no "already-subscribed"
+	// pruning since the room doesn't exist yet. excludeAccount drops one
+	// account from the candidate set; create-channel passes the requester's
+	// account so they aren't materialized as a regular member in addition to
+	// being added separately as the owner.
+	ListNewMembersForNewRoom(ctx context.Context, orgIDs, accounts []string, excludeAccount string) ([]string, error)
 }

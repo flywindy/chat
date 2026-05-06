@@ -95,6 +95,7 @@ type OutboxEvent struct {
 type MemberAddEvent struct {
 	Type               string   `json:"type"               bson:"type"`
 	RoomID             string   `json:"roomId"             bson:"roomId"`
+	RoomName           string   `json:"roomName"           bson:"roomName"`
 	Accounts           []string `json:"accounts"           bson:"accounts"`
 	SiteID             string   `json:"siteId"             bson:"siteId"`
 	JoinedAt           int64    `json:"joinedAt"           bson:"joinedAt"`
@@ -164,8 +165,59 @@ type MemberRemoveEvent struct {
 // AsyncJobResult signals to the requester's client that an async room-worker job has completed.
 type AsyncJobResult struct {
 	RequestID string `json:"requestId"`
-	Job       string `json:"job"` // "add_members" | "remove_member" | "remove_org" | "role_update"
-	Success   bool   `json:"success"`
+	Operation string `json:"operation"`
+	Status    string `json:"status"`
+	RoomID    string `json:"roomId,omitempty"`
 	Error     string `json:"error,omitempty"`
 	Timestamp int64  `json:"timestamp"`
+}
+
+const (
+	AsyncJobOpRoomCreate           = "room.create"
+	AsyncJobOpRoomMemberAdd        = "room.member.add"
+	AsyncJobOpRoomMemberRemove     = "room.member.remove"
+	AsyncJobOpRoomMemberRemoveOrg  = "room.member.remove_org"
+	AsyncJobOpRoomMemberRoleUpdate = "room.member.role_update"
+)
+
+const (
+	// MessageTypeRoomCreated is the system-message type emitted on room creation (channels only).
+	MessageTypeRoomCreated = "room_created"
+	// MessageTypeMembersAdded is the system-message type emitted when members are added.
+	MessageTypeMembersAdded = "members_added"
+)
+
+const (
+	// OutboxTypeRoomCreated is the cross-site outbox event type emitted when a room is created.
+	// Distinct from MessageTypeRoomCreated (system-message type) so destination sites can
+	// route on event semantics without collision.
+	OutboxTypeRoomCreated = "room_created"
+)
+
+const (
+	// AsyncJobStatusOK indicates a successful async job result.
+	AsyncJobStatusOK = "ok"
+	// AsyncJobStatusError indicates a failed async job result.
+	AsyncJobStatusError = "error"
+)
+
+// CreateRoomReply is the sync NATS reply returned after publishing the canonical create event.
+type CreateRoomReply struct {
+	Status   string `json:"status"`
+	RoomID   string `json:"roomId"`
+	RoomType string `json:"roomType"`
+}
+
+// CreateRoomReplyAccepted means validated + queued; persistence happens later in room-worker.
+const CreateRoomReplyAccepted = "accepted"
+
+// RoomCreatedOutbox is the cross-site payload (wrapped in OutboxEvent) when a remote member exists.
+type RoomCreatedOutbox struct {
+	RoomID           string   `json:"roomId"`
+	RoomType         RoomType `json:"roomType"`
+	RoomName         string   `json:"roomName"`
+	HomeSiteID       string   `json:"homeSiteId"`
+	Accounts         []string `json:"accounts"`
+	RequesterAccount string   `json:"requesterAccount"`
+	Timestamp        int64    `json:"timestamp"`
 }

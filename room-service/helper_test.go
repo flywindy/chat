@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/hmchangw/chat/pkg/model"
 )
@@ -133,4 +134,127 @@ func TestSanitizeError_RemoteMemberListWithContext(t *testing.T) {
 func TestSanitizeError_TransportFailureStillOpaque(t *testing.T) {
 	// Generic transport failure from the client — no user-safe substring — must still be "internal error".
 	assert.Equal(t, "internal error", sanitizeError(errors.New("member.list request to site-eu: nats: timeout")))
+}
+
+func TestNewSentinelErrorsExist(t *testing.T) {
+	assert.Equal(t, "request must include at least one of users, orgs, channels, or name", errEmptyCreateRequest.Error())
+	assert.Equal(t, "cannot create a DM with yourself", errSelfDM.Error())
+	assert.Equal(t, "bots cannot be added to a channel", errBotInChannel.Error())
+	assert.Equal(t, "bot not available", errBotNotAvailable.Error())
+	assert.Equal(t, "user is missing required name fields", errInvalidUserData.Error())
+	assert.Equal(t, "missing X-Request-ID header", errMissingRequestID.Error())
+	assert.Equal(t, "invalid X-Request-ID format", errInvalidRequestID.Error())
+	assert.Equal(t, "channel name is required", errChannelNameRequired.Error())
+	assert.Equal(t, "channel name must be at most 100 characters", errChannelNameTooLong.Error())
+	assert.Equal(t, "user not found", errUserNotFound.Error())
+}
+
+func TestDMExistsErrorWrapsCorrectly(t *testing.T) {
+	e := newDMExistsError("r_existing")
+	assert.Equal(t, "dm already exists", e.Error())
+	assert.Equal(t, "r_existing", e.RoomID())
+
+	var sentinel *dmExistsError
+	assert.True(t, errors.Is(e, sentinel))
+
+	wrapped := fmt.Errorf("validation failed: %w", e)
+	var target *dmExistsError
+	require.True(t, errors.As(wrapped, &target))
+	assert.Equal(t, "r_existing", target.RoomID())
+}
+
+func TestStripAccount(t *testing.T) {
+	tests := map[string]struct {
+		in      []string
+		account string
+		want    []string
+	}{
+		"present":        {[]string{"alice", "bob", "carol"}, "bob", []string{"alice", "carol"}},
+		"absent":         {[]string{"alice", "carol"}, "bob", []string{"alice", "carol"}},
+		"first":          {[]string{"alice", "bob"}, "alice", []string{"bob"}},
+		"only-element":   {[]string{"alice"}, "alice", []string{}},
+		"multiple-occur": {[]string{"alice", "alice", "bob"}, "alice", []string{"bob"}},
+		"empty":          {[]string{}, "alice", []string{}},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			got := stripAccount(tc.in, tc.account)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestSanitizeErrorPassesThroughCreateRoomSentinels(t *testing.T) {
+	cases := []error{
+		errEmptyCreateRequest,
+		errSelfDM,
+		errBotInChannel,
+		errBotNotAvailable,
+		errInvalidUserData,
+		errMissingRequestID,
+		errUserNotFound,
+		newDMExistsError("r_existing"),
+		fmt.Errorf("validation: %w", errSelfDM),
+	}
+	for _, e := range cases {
+		t.Run(e.Error(), func(t *testing.T) {
+			assert.Equal(t, e.Error(), sanitizeError(e))
+		})
+	}
+}
+
+func TestSanitizeErrorCollapsesUnknown(t *testing.T) {
+	got := sanitizeError(errors.New("mongo: connection refused: tcp 127.0.0.1:27017"))
+	assert.Equal(t, "internal error", got)
+}
+
+func TestDetermineRoomType(t *testing.T) {
+	tests := []struct {
+		name string
+		req  model.CreateRoomRequest
+		want model.RoomType
+	}{
+		{
+			name: "single user no name → DM",
+			req:  model.CreateRoomRequest{Users: []string{"bob"}},
+			want: model.RoomTypeDM,
+		},
+		{
+			name: "single bot user no name → botDM",
+			req:  model.CreateRoomRequest{Users: []string{"helper.bot"}},
+			want: model.RoomTypeBotDM,
+		},
+		{
+			name: "single user with name → channel",
+			req:  model.CreateRoomRequest{Name: "general", Users: []string{"bob"}},
+			want: model.RoomTypeChannel,
+		},
+		{
+			name: "multiple users no name → channel",
+			req:  model.CreateRoomRequest{Users: []string{"bob", "charlie"}},
+			want: model.RoomTypeChannel,
+		},
+		{
+			name: "name only no users → channel",
+			req:  model.CreateRoomRequest{Name: "general"},
+			want: model.RoomTypeChannel,
+		},
+		{
+			name: "org only → channel",
+			req:  model.CreateRoomRequest{Orgs: []string{"eng"}},
+			want: model.RoomTypeChannel,
+		},
+		{
+			name: "channel ref only → channel",
+			req:  model.CreateRoomRequest{Channels: []model.ChannelRef{{RoomID: "r1", SiteID: "site-a"}}},
+			want: model.RoomTypeChannel,
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			got := determineRoomType(&tt.req)
+			assert.Equal(t, tt.want, got)
+		})
+	}
 }

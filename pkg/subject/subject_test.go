@@ -103,6 +103,22 @@ func TestSubjectBuilders(t *testing.T) {
 		})
 	}
 
+	t.Run("RoomCreate", func(t *testing.T) {
+		got := subject.RoomCreate("alice", "site-A")
+		want := "chat.user.alice.request.room.site-A.create"
+		if got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	})
+
+	t.Run("RoomCreateWildcard", func(t *testing.T) {
+		got := subject.RoomCreateWildcard("site-A")
+		want := "chat.user.*.request.room.site-A.create"
+		if got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	})
+
 	t.Run("InboxMemberEventSubjects", func(t *testing.T) {
 		got := subject.InboxMemberEventSubjects("site-a")
 		want := []string{
@@ -241,6 +257,63 @@ func TestParseOrgMembersSubject(t *testing.T) {
 			}
 			if got != tt.wantOrg {
 				t.Errorf("orgID = %q, want %q", got, tt.wantOrg)
+			}
+		})
+	}
+}
+
+func TestParseRoomCreateSubject(t *testing.T) {
+	tests := []struct {
+		name        string
+		subj        string
+		wantAccount string
+		wantOK      bool
+	}{
+		{"valid", "chat.user.alice.request.room.site-A.create", "alice", true},
+		{"different account", "chat.user.bob.request.room.site-B.create", "bob", true},
+		{"too many tokens", "chat.user.alice.request.room.site-A.member.add", "", false},
+		{"too few tokens", "chat.user.alice.request.room.site-A", "", false},
+		{"wrong suffix", "chat.user.alice.request.room.site-A.member", "", false},
+		{"wrong prefix", "foo.user.alice.request.room.site-A.create", "", false},
+		{"empty", "", "", false},
+		// Wildcard guard: NATS '*' / '>' must never leak into the parsed account.
+		{"account is wildcard star", "chat.user.*.request.room.site-A.create", "", false},
+		{"account is wildcard tail", "chat.user.>.request.room.site-A.create", "", false},
+		{"account contains star", "chat.user.al*ce.request.room.site-A.create", "", false},
+		{"account contains tail", "chat.user.al>ce.request.room.site-A.create", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := subject.ParseRoomCreateSubject(tt.subj)
+			if ok != tt.wantOK {
+				t.Fatalf("ok = %v, want %v for %q", ok, tt.wantOK, tt.subj)
+			}
+			if got != tt.wantAccount {
+				t.Errorf("account = %q, want %q", got, tt.wantAccount)
+			}
+		})
+	}
+}
+
+func TestRoomCanonicalOperation(t *testing.T) {
+	tests := map[string]struct {
+		subject string
+		want    string
+		ok      bool
+	}{
+		"member.add": {"chat.room.canonical.site-A.member.add", "member.add", true},
+		"create":     {"chat.room.canonical.site-A.create", "create", true},
+		"unrelated":  {"chat.user.alice.request.room.site-A.create", "", false},
+		"too short":  {"chat.room.canonical.site-A", "", false},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			op, ok := subject.RoomCanonicalOperation(tc.subject)
+			if ok != tc.ok {
+				t.Errorf("ok = %v, want %v", ok, tc.ok)
+			}
+			if op != tc.want {
+				t.Errorf("op = %q, want %q", op, tc.want)
 			}
 		})
 	}

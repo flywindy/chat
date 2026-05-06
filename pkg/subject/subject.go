@@ -320,6 +320,16 @@ func MemberAddWildcard(siteID string) string {
 	return fmt.Sprintf("chat.user.*.request.room.*.%s.member.add", siteID)
 }
 
+// RoomCreate: client→room-service create subject; siteID is the requester's site.
+func RoomCreate(account, siteID string) string {
+	return fmt.Sprintf("chat.user.%s.request.room.%s.create", account, siteID)
+}
+
+// RoomCreateWildcard is the queue-subscribe pattern for room-service.
+func RoomCreateWildcard(siteID string) string {
+	return fmt.Sprintf("chat.user.*.request.room.%s.create", siteID)
+}
+
 func RoomMemberEvent(roomID string) string {
 	return fmt.Sprintf("chat.room.%s.event.member", roomID)
 }
@@ -353,4 +363,44 @@ func SearchMessagesPattern() string {
 // SearchRoomsPattern is the natsrouter pattern for room search.
 func SearchRoomsPattern() string {
 	return "chat.user.{account}.request.search.rooms"
+}
+
+// isValidAccountToken rejects empty tokens and tokens containing NATS wildcard
+// characters ('*' or '>'). Subject parsers use it as the boundary guard for the
+// account token so wildcard semantics never leak into identity parsing.
+func isValidAccountToken(token string) bool {
+	return token != "" && !strings.ContainsAny(token, "*>")
+}
+
+// ParseRoomCreateSubject extracts the account from chat.user.{account}.request.room.{siteID}.create.
+func ParseRoomCreateSubject(s string) (account string, ok bool) {
+	parts := strings.Split(s, ".")
+	if len(parts) != 7 {
+		return "", false
+	}
+	if parts[0] != "chat" || parts[1] != "user" || parts[3] != "request" || parts[4] != "room" || parts[6] != "create" {
+		return "", false
+	}
+	if !isValidAccountToken(parts[2]) {
+		return "", false
+	}
+	return parts[2], true
+}
+
+// RoomCanonicalOperation returns the trailing op (e.g. "member.add") from chat.room.canonical.{siteID}.{op}.
+func RoomCanonicalOperation(s string) (string, bool) {
+	const prefix = "chat.room.canonical."
+	if !strings.HasPrefix(s, prefix) {
+		return "", false
+	}
+	rest := strings.TrimPrefix(s, prefix)
+	dot := strings.IndexByte(rest, '.')
+	if dot == -1 {
+		return "", false
+	}
+	op := rest[dot+1:]
+	if op == "" {
+		return "", false
+	}
+	return op, true
 }
