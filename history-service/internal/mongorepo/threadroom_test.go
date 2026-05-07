@@ -12,6 +12,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 
 	"github.com/hmchangw/chat/pkg/model"
+	"github.com/hmchangw/chat/pkg/mongoutil"
 )
 
 func insertThreadRoom(t *testing.T, db *mongo.Database, tr model.ThreadRoom) {
@@ -42,7 +43,7 @@ func TestThreadRoomRepo_GetThreadRooms(t *testing.T) {
 	insertThreadRoom(t, db, model.ThreadRoom{ID: "tr-other", RoomID: "r2", ParentMessageID: "p4", ThreadParentCreatedAt: base.Add(1 * time.Hour), LastMsgAt: base.Add(4 * time.Hour), CreatedAt: base, UpdatedAt: base})
 
 	// Page 1: limit 2 — gets tr-old (5h) and tr-1 (3h); total is 4
-	page, err := repo.GetThreadRooms(ctx, "r1", nil, NewOffsetPageRequest(0, 2))
+	page, err := repo.GetThreadRooms(ctx, "r1", nil, mongoutil.NewOffsetPageRequest(0, 2))
 	require.NoError(t, err)
 	assert.Equal(t, int64(4), page.Total)
 	require.Len(t, page.Data, 2)
@@ -50,14 +51,14 @@ func TestThreadRoomRepo_GetThreadRooms(t *testing.T) {
 	assert.Equal(t, "tr-1", page.Data[1].ID)
 
 	// Page 2: offset 2, limit 2 — gets tr-3 (2h) and tr-2 (1h); total still 4
-	page2, err := repo.GetThreadRooms(ctx, "r1", nil, NewOffsetPageRequest(2, 2))
+	page2, err := repo.GetThreadRooms(ctx, "r1", nil, mongoutil.NewOffsetPageRequest(2, 2))
 	require.NoError(t, err)
 	assert.Equal(t, int64(4), page2.Total)
 	require.Len(t, page2.Data, 2)
 
 	// accessSince = base: excludes tr-old (threadParentCreatedAt = base-1h < base)
 	afterBase := base
-	page3, err := repo.GetThreadRooms(ctx, "r1", &afterBase, NewOffsetPageRequest(0, 10))
+	page3, err := repo.GetThreadRooms(ctx, "r1", &afterBase, mongoutil.NewOffsetPageRequest(0, 10))
 	require.NoError(t, err)
 	assert.Equal(t, int64(3), page3.Total)
 	for _, tr := range page3.Data {
@@ -75,7 +76,7 @@ func TestThreadRoomRepo_GetFollowingThreadRooms(t *testing.T) {
 	insertThreadRoom(t, db, model.ThreadRoom{ID: "tr-2", RoomID: "r1", ParentMessageID: "p2", ThreadParentCreatedAt: base.Add(2 * time.Hour), LastMsgAt: base.Add(1 * time.Hour), ReplyAccounts: []string{"bob"}, CreatedAt: base, UpdatedAt: base})
 	insertThreadRoom(t, db, model.ThreadRoom{ID: "tr-3", RoomID: "r1", ParentMessageID: "p3", ThreadParentCreatedAt: base.Add(3 * time.Hour), LastMsgAt: base.Add(3 * time.Hour), ReplyAccounts: []string{"alice"}, CreatedAt: base, UpdatedAt: base})
 
-	page, err := repo.GetFollowingThreadRooms(ctx, "r1", "alice", nil, NewOffsetPageRequest(0, 10))
+	page, err := repo.GetFollowingThreadRooms(ctx, "r1", "alice", nil, mongoutil.NewOffsetPageRequest(0, 10))
 	require.NoError(t, err)
 	assert.Equal(t, int64(2), page.Total)
 	require.Len(t, page.Data, 2)
@@ -120,7 +121,7 @@ func TestThreadRoomRepo_GetUnreadThreadRooms(t *testing.T) {
 		ThreadParentCreatedAt: base.Add(4 * time.Hour), LastMsgAt: base.Add(4 * time.Hour),
 		CreatedAt: base, UpdatedAt: base})
 
-	page, err := repo.GetUnreadThreadRooms(ctx, "r1", "alice", nil, NewOffsetPageRequest(0, 10))
+	page, err := repo.GetUnreadThreadRooms(ctx, "r1", "alice", nil, mongoutil.NewOffsetPageRequest(0, 10))
 	require.NoError(t, err)
 	// tr-1 (unread) and tr-3 (nil lastSeenAt); sorted lastMsgAt desc: tr-1 (5h) first
 	assert.Equal(t, int64(2), page.Total)
@@ -130,13 +131,13 @@ func TestThreadRoomRepo_GetUnreadThreadRooms(t *testing.T) {
 
 	// accessSince excludes tr-1 (threadParentCreatedAt = 1h < 2h threshold)
 	since := base.Add(2 * time.Hour)
-	page2, err := repo.GetUnreadThreadRooms(ctx, "r1", "alice", &since, NewOffsetPageRequest(0, 10))
+	page2, err := repo.GetUnreadThreadRooms(ctx, "r1", "alice", &since, mongoutil.NewOffsetPageRequest(0, 10))
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), page2.Total)
 	assert.Equal(t, "tr-3", page2.Data[0].ID)
 
 	// user with no subscriptions → zero results
-	pageNone, err := repo.GetUnreadThreadRooms(ctx, "r1", "nobody", nil, NewOffsetPageRequest(0, 10))
+	pageNone, err := repo.GetUnreadThreadRooms(ctx, "r1", "nobody", nil, mongoutil.NewOffsetPageRequest(0, 10))
 	require.NoError(t, err)
 	assert.Equal(t, int64(0), pageNone.Total)
 	assert.Empty(t, pageNone.Data)

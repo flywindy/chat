@@ -1,4 +1,4 @@
-package mongorepo
+package mongoutil
 
 type OffsetPageRequest struct {
 	Offset int64

@@ -1,4 +1,4 @@
-package mongorepo
+package mongoutil
 
 import (
 	"context"
@@ -7,10 +7,10 @@ import (
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
-// Collection is a type-safe wrapper around *mongo.Collection that normalises
-// ErrNoDocuments and wraps errors consistently.
+// Collection wraps *mongo.Collection. Goroutine-safe.
 type Collection[T any] struct {
 	col  *mongo.Collection
 	name string
@@ -20,7 +20,7 @@ func NewCollection[T any](col *mongo.Collection) *Collection[T] {
 	return &Collection[T]{col: col, name: col.Name()}
 }
 
-// FindOne returns the first matching document, or (nil, nil) when none match.
+// FindOne returns (nil, nil) on no match.
 func (c *Collection[T]) FindOne(ctx context.Context, filter any, opts ...QueryOption) (*T, error) {
 	var result T
 	err := c.col.FindOne(ctx, filter, apply(opts).findOneOpts()).Decode(&result)
@@ -37,7 +37,7 @@ func (c *Collection[T]) FindByID(ctx context.Context, id string, opts ...QueryOp
 	return c.FindOne(ctx, bson.M{"_id": id}, opts...)
 }
 
-// FindMany returns all matching documents; returns empty (not nil) when none match.
+// FindMany returns []T{} (not nil) on no match so JSON marshals to [].
 func (c *Collection[T]) FindMany(ctx context.Context, filter any, opts ...QueryOption) ([]T, error) {
 	cursor, err := c.col.Find(ctx, filter, apply(opts).findOpts())
 	if err != nil {
@@ -53,10 +53,8 @@ func (c *Collection[T]) FindMany(ctx context.Context, filter any, opts ...QueryO
 	return results, nil
 }
 
-// Raw returns the underlying *mongo.Collection for escape-hatch scenarios.
 func (c *Collection[T]) Raw() *mongo.Collection { return c.col }
 
-// Aggregate runs the pipeline; no QueryOption — the pipeline encodes all query logic.
 func (c *Collection[T]) Aggregate(ctx context.Context, pipeline bson.A) ([]T, error) {
 	cursor, err := c.col.Aggregate(ctx, pipeline)
 	if err != nil {
@@ -72,7 +70,7 @@ func (c *Collection[T]) Aggregate(ctx context.Context, pipeline bson.A) ([]T, er
 	return results, nil
 }
 
-// AggregatePaged appends a $facet: skip+limit data branch + count branch → OffsetPage[T].
+// AggregatePaged appends a $facet stage. Watch the 16 MB BSON limit on the facet output.
 func (c *Collection[T]) AggregatePaged(ctx context.Context, pipeline bson.A, req OffsetPageRequest) (OffsetPage[T], error) {
 	facet := bson.D{{Key: "$facet", Value: bson.M{
 		"data": bson.A{
@@ -109,7 +107,6 @@ func (c *Collection[T]) AggregatePaged(ctx context.Context, pipeline bson.A, req
 	return OffsetPage[T]{Data: data, Total: total}, nil
 }
 
-// facetResult decodes the single document emitted by the $facet stage.
 type facetResult[T any] struct {
 	Data  []T           `bson:"data"`
 	Total []countResult `bson:"total"`
@@ -117,4 +114,61 @@ type facetResult[T any] struct {
 
 type countResult struct {
 	Count int64 `bson:"count"`
+}
+
+// BulkWrite executes models unordered. Partial failure returns (*BulkResult, err); empty input -> (nil, nil).
+func (c *Collection[T]) BulkWrite(ctx context.Context, models []mongo.WriteModel) (*BulkResult, error) {
+	if len(models) == 0 {
+		return nil, nil
+	}
+	res, err := c.col.BulkWrite(ctx, models, options.BulkWrite().SetOrdered(false))
+	mapped := fromDriverResult(res)
+	if err != nil {
+		return mapped, fmt.Errorf("bulk write %s: %w", c.name, err)
+	}
+	return mapped, nil
+}
+
+// BulkUpsert sends $set per item (MERGE not REPLACE) with _id stripped; createdAt-style fields are rewritten every call.
+// Empty input -> (nil, nil).
+func (c *Collection[T]) BulkUpsert(ctx context.Context, items []T, filter func(T) any) (*BulkResult, error) {
+	if len(items) == 0 {
+		return nil, nil
+	}
+	models := make([]mongo.WriteModel, 0, len(items))
+	for _, it := range items {
+		setDoc, err := bsonSetWithoutID(it)
+		if err != nil {
+			return nil, fmt.Errorf("bulk upsert %s marshal item: %w", c.name, err)
+		}
+		models = append(models, UpsertModel(filter(it), bson.M{"$set": setDoc}))
+	}
+	return c.BulkWrite(ctx, models)
+}
+
+// BulkUpsertByID is BulkUpsert with bson.M{"_id": idFn(item)} as the filter.
+func (c *Collection[T]) BulkUpsertByID(ctx context.Context, items []T, idFn func(T) string) (*BulkResult, error) {
+	return c.BulkUpsert(ctx, items, func(item T) any {
+		return bson.M{"_id": idFn(item)}
+	})
+}
+
+// InsertMany unordered. Returns count of successes; detect collisions with mongo.IsDuplicateKeyError.
+func (c *Collection[T]) InsertMany(ctx context.Context, items []T) (int64, error) {
+	if len(items) == 0 {
+		return 0, nil
+	}
+	docs := make([]any, 0, len(items))
+	for _, it := range items {
+		docs = append(docs, it)
+	}
+	res, err := c.col.InsertMany(ctx, docs, options.InsertMany().SetOrdered(false))
+	var inserted int64
+	if res != nil {
+		inserted = int64(len(res.InsertedIDs))
+	}
+	if err != nil {
+		return inserted, fmt.Errorf("insert many %s: %w", c.name, err)
+	}
+	return inserted, nil
 }

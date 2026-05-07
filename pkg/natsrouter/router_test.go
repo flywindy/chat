@@ -659,3 +659,94 @@ func TestRequestIDMiddleware_OtherCtxKeysStillReadable(t *testing.T) {
 	runChain(c, chain)
 	assert.True(t, called, "downstream handler must run")
 }
+
+func TestRouter_DefaultIsUnbounded(t *testing.T) {
+	r := New(nil, "test")
+	assert.Nil(t, r.sem, "default router has no admission semaphore (unbounded spawn)")
+}
+
+func TestRouter_WithMaxConcurrency_Overrides(t *testing.T) {
+	r := New(nil, "test", WithMaxConcurrency(7))
+	assert.Equal(t, 7, cap(r.sem))
+}
+
+func TestRouter_WithMaxConcurrency_IgnoresNonPositive(t *testing.T) {
+	r := New(nil, "test", WithMaxConcurrency(0))
+	assert.Nil(t, r.sem, "WithMaxConcurrency(0) leaves the router unbounded")
+	r2 := New(nil, "test", WithMaxConcurrency(-1))
+	assert.Nil(t, r2.sem, "WithMaxConcurrency(-1) leaves the router unbounded")
+}
+
+// TestRouter_replyBusy_NoReplySubject verifies that fire-and-forget
+// messages (empty Reply subject) trigger the silent-drop path with a
+// Warn log and no panic. In-package unit test — no NATS connection
+// required because replyBusy short-circuits before touching the wire.
+func TestRouter_replyBusy_NoReplySubject(t *testing.T) {
+	r := New(nil, "test")
+	msg := &nats.Msg{Subject: "void.subject", Reply: ""}
+	// Must not panic. Reply == "" hits the early-return path.
+	r.replyBusy(msg)
+}
+
+func TestDefault_PreInstallsMiddleware(t *testing.T) {
+	r := Default(nil, "test")
+	// Recovery, RequestID, Logging — three middleware functions.
+	assert.Len(t, r.middleware, 3, "Default should pre-install Recovery, RequestID, Logging")
+}
+
+func TestDefault_ForwardsOptions(t *testing.T) {
+	r := Default(nil, "test", WithMaxConcurrency(7))
+	require.NotNil(t, r.sem, "WithMaxConcurrency through Default must set the semaphore")
+	assert.Equal(t, 7, cap(r.sem))
+}
+
+// TestRouter_admit_Unbounded verifies that on an unbounded router
+// (sem == nil) admit always succeeds and returns a non-nil no-op
+// release that can be called safely.
+func TestRouter_admit_Unbounded(t *testing.T) {
+	r := New(nil, "test")
+	require.Nil(t, r.sem)
+
+	admitted, release := r.admit()
+	require.True(t, admitted, "unbounded router must always admit")
+	require.NotNil(t, release, "release must be non-nil on admitted path")
+	require.NotPanics(t, release, "no-op release must not panic")
+	require.NotPanics(t, release, "release must be safe to call repeatedly when no-op")
+}
+
+// TestRouter_admit_BoundedAvailable verifies the bounded acquire path:
+// a slot is taken from the semaphore on success, and release returns it.
+func TestRouter_admit_BoundedAvailable(t *testing.T) {
+	r := New(nil, "test", WithMaxConcurrency(1))
+	require.NotNil(t, r.sem)
+	require.Equal(t, 0, len(r.sem), "fresh sem must be empty")
+
+	admitted, release := r.admit()
+	require.True(t, admitted)
+	require.NotNil(t, release)
+	require.Equal(t, 1, len(r.sem), "successful admit must occupy one slot")
+
+	release()
+	require.Equal(t, 0, len(r.sem), "release must free the slot")
+
+	// Subsequent admit must succeed since the slot was freed.
+	admitted2, release2 := r.admit()
+	require.True(t, admitted2)
+	release2()
+}
+
+// TestRouter_admit_BoundedSaturated verifies the rejection path: when
+// the semaphore is full, admit returns (false, nil). The nil release
+// is intentional — see admit() doc — so any caller that blindly
+// `defer release()` before the admitted-check will panic loudly.
+func TestRouter_admit_BoundedSaturated(t *testing.T) {
+	r := New(nil, "test", WithMaxConcurrency(1))
+
+	admitted1, release1 := r.admit()
+	require.True(t, admitted1)
+	defer release1()
+
+	admitted2, release2 := r.admit()
+	require.False(t, admitted2)
+	require.Nil(t, release2, "rejected admit must return nil release (footgun protection)")
+}

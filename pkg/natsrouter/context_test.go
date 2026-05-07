@@ -6,6 +6,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -112,4 +113,50 @@ func TestContext_KeysIndependentPerRequest(t *testing.T) {
 	_, ok := c2.Get("leak")
 	assert.False(t, ok, "keys set on a released context must not be visible on the next acquire")
 	releaseContext(c2)
+}
+
+// TestContext_GetHeader covers all four reachable branches of GetHeader:
+// nil Msg (test-context path), nil Header map, key present, key absent.
+// NATS headers are case-sensitive, so a key set with one casing is NOT
+// reachable via a different casing — covered by an explicit assertion.
+func TestContext_GetHeader(t *testing.T) {
+	t.Run("nil Msg returns empty string", func(t *testing.T) {
+		c := NewContext(nil)
+		assert.Equal(t, "", c.GetHeader("X-Request-ID"))
+	})
+
+	t.Run("nil Header map returns empty string", func(t *testing.T) {
+		c := NewContext(nil)
+		c.Msg = &nats.Msg{}
+		assert.Equal(t, "", c.GetHeader("X-Request-ID"))
+	})
+
+	t.Run("present key returns value", func(t *testing.T) {
+		c := NewContext(nil)
+		c.Msg = &nats.Msg{Header: nats.Header{}}
+		c.Msg.Header.Set("X-Foo", "bar")
+		assert.Equal(t, "bar", c.GetHeader("X-Foo"))
+	})
+
+	t.Run("absent key returns empty string", func(t *testing.T) {
+		c := NewContext(nil)
+		c.Msg = &nats.Msg{Header: nats.Header{}}
+		c.Msg.Header.Set("X-Foo", "bar")
+		assert.Equal(t, "", c.GetHeader("X-Missing"))
+	})
+
+	t.Run("case-sensitive lookup miss", func(t *testing.T) {
+		// NATS headers are case-sensitive (unlike net/http). A key set
+		// with lowercase is NOT reachable via canonical case. This test
+		// pins the documented behavior so an accidental future switch
+		// to case-insensitive (e.g. via textproto.CanonicalMIMEHeaderKey)
+		// would fail loudly here.
+		c := NewContext(nil)
+		c.Msg = &nats.Msg{Header: nats.Header{}}
+		c.Msg.Header.Set("authorization", "token")
+		assert.Equal(t, "", c.GetHeader("Authorization"),
+			"NATS headers are case-sensitive; lowercase set should not match canonical-case lookup")
+		assert.Equal(t, "token", c.GetHeader("authorization"),
+			"exact case match must succeed")
+	})
 }

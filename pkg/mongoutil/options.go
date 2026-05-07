@@ -1,7 +1,8 @@
-package mongorepo
+package mongoutil
 
 import "go.mongodb.org/mongo-driver/v2/mongo/options"
 
+// queryOptions: WithSort/Limit/Skip only affect FindMany; FindOne uses projection only.
 type queryOptions struct {
 	projection any
 	sort       any
@@ -9,7 +10,6 @@ type queryOptions struct {
 	skip       *int64
 }
 
-// findOneOpts only applies projection — sort/limit/skip are irrelevant for single-document lookups.
 func (qo *queryOptions) findOneOpts() *options.FindOneOptionsBuilder {
 	opts := options.FindOne()
 	if qo.projection != nil {
@@ -38,30 +38,19 @@ func (qo *queryOptions) findOpts() *options.FindOptionsBuilder {
 type QueryOption func(*queryOptions)
 
 func WithProjection(projection any) QueryOption {
-	return func(o *queryOptions) {
-		o.projection = projection
-	}
+	return func(o *queryOptions) { o.projection = projection }
 }
 
-// WithSort only applies to FindMany.
 func WithSort(sort any) QueryOption {
-	return func(o *queryOptions) {
-		o.sort = sort
-	}
+	return func(o *queryOptions) { o.sort = sort }
 }
 
-// WithLimit only applies to FindMany.
 func WithLimit(limit int64) QueryOption {
-	return func(o *queryOptions) {
-		o.limit = &limit
-	}
+	return func(o *queryOptions) { o.limit = &limit }
 }
 
-// WithSkip only applies to FindMany.
 func WithSkip(skip int64) QueryOption {
-	return func(o *queryOptions) {
-		o.skip = &skip
-	}
+	return func(o *queryOptions) { o.skip = &skip }
 }
 
 func apply(opts []QueryOption) *queryOptions {

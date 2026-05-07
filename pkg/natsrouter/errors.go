@@ -62,6 +62,10 @@ const (
 	CodeForbidden  = "forbidden"
 	CodeConflict   = "conflict"
 	CodeInternal   = "internal"
+	// CodeUnavailable signals the service is temporarily over capacity and
+	// the caller should retry. Used by the router's admission control when
+	// the per-pod handler concurrency cap is reached.
+	CodeUnavailable = "unavailable"
 )
 
 // ErrBadRequest creates a user-facing bad request error.
@@ -78,3 +82,8 @@ func ErrConflict(message string) *RouteError { return ErrWithCode(CodeConflict, 
 
 // ErrInternal creates a user-facing internal error.
 func ErrInternal(message string) *RouteError { return ErrWithCode(CodeInternal, message) }
+
+// ErrUnavailable creates a user-facing service-busy error. Returned by the
+// router's admission control when the per-pod handler concurrency cap is
+// reached. Callers should retry with backoff.
+func ErrUnavailable(message string) *RouteError { return ErrWithCode(CodeUnavailable, message) }

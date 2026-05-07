@@ -10,6 +10,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"github.com/hmchangw/chat/pkg/model"
+	"github.com/hmchangw/chat/pkg/mongoutil"
 )
 
 const threadRoomsCollection = "thread_rooms"
@@ -18,13 +19,13 @@ const threadRoomsCollection = "thread_rooms"
 var threadRoomSort = bson.D{{Key: "lastMsgAt", Value: -1}, {Key: "threadParentCreatedAt", Value: 1}}
 
 type ThreadRoomRepo struct {
-	threadRooms         *Collection[model.ThreadRoom]
+	threadRooms         *mongoutil.Collection[model.ThreadRoom]
 	threadSubscriptions *mongo.Collection
 }
 
 func NewThreadRoomRepo(db *mongo.Database) *ThreadRoomRepo {
 	return &ThreadRoomRepo{
-		threadRooms:         NewCollection[model.ThreadRoom](db.Collection(threadRoomsCollection)),
+		threadRooms:         mongoutil.NewCollection[model.ThreadRoom](db.Collection(threadRoomsCollection)),
 		threadSubscriptions: db.Collection("thread_subscriptions"),
 	}
 }
@@ -64,27 +65,27 @@ func (r *ThreadRoomRepo) EnsureIndexes(ctx context.Context) error {
 	return nil
 }
 
-func (r *ThreadRoomRepo) GetThreadRooms(ctx context.Context, roomID string, accessSince *time.Time, req OffsetPageRequest) (OffsetPage[model.ThreadRoom], error) {
+func (r *ThreadRoomRepo) GetThreadRooms(ctx context.Context, roomID string, accessSince *time.Time, req mongoutil.OffsetPageRequest) (mongoutil.OffsetPage[model.ThreadRoom], error) {
 	page, err := r.threadRooms.AggregatePaged(ctx, allThreadsPipeline(roomID, accessSince), req)
 	if err != nil {
-		return OffsetPage[model.ThreadRoom]{}, fmt.Errorf("querying thread rooms: %w", err)
+		return mongoutil.OffsetPage[model.ThreadRoom]{}, fmt.Errorf("querying thread rooms: %w", err)
 	}
 	return page, nil
 }
 
-func (r *ThreadRoomRepo) GetFollowingThreadRooms(ctx context.Context, roomID, account string, accessSince *time.Time, req OffsetPageRequest) (OffsetPage[model.ThreadRoom], error) {
+func (r *ThreadRoomRepo) GetFollowingThreadRooms(ctx context.Context, roomID, account string, accessSince *time.Time, req mongoutil.OffsetPageRequest) (mongoutil.OffsetPage[model.ThreadRoom], error) {
 	page, err := r.threadRooms.AggregatePaged(ctx, followingThreadsPipeline(roomID, account, accessSince), req)
 	if err != nil {
-		return OffsetPage[model.ThreadRoom]{}, fmt.Errorf("querying following thread rooms: %w", err)
+		return mongoutil.OffsetPage[model.ThreadRoom]{}, fmt.Errorf("querying following thread rooms: %w", err)
 	}
 	return page, nil
 }
 
 // Unread = subscribed AND lastMsgAt > lastSeenAt.
-func (r *ThreadRoomRepo) GetUnreadThreadRooms(ctx context.Context, roomID, account string, accessSince *time.Time, req OffsetPageRequest) (OffsetPage[model.ThreadRoom], error) {
+func (r *ThreadRoomRepo) GetUnreadThreadRooms(ctx context.Context, roomID, account string, accessSince *time.Time, req mongoutil.OffsetPageRequest) (mongoutil.OffsetPage[model.ThreadRoom], error) {
 	page, err := r.threadRooms.AggregatePaged(ctx, unreadThreadsPipeline(roomID, account, accessSince), req)
 	if err != nil {
-		return OffsetPage[model.ThreadRoom]{}, fmt.Errorf("querying unread thread rooms: %w", err)
+		return mongoutil.OffsetPage[model.ThreadRoom]{}, fmt.Errorf("querying unread thread rooms: %w", err)
 	}
 	return page, nil
 }

@@ -16,8 +16,8 @@ import (
 
 	cassrepo "github.com/hmchangw/chat/history-service/internal/cassrepo"
 	models "github.com/hmchangw/chat/history-service/internal/models"
-	mongorepo "github.com/hmchangw/chat/history-service/internal/mongorepo"
 	model "github.com/hmchangw/chat/pkg/model"
+	mongoutil "github.com/hmchangw/chat/pkg/mongoutil"
 	roomkeystore "github.com/hmchangw/chat/pkg/roomkeystore"
 	gomock "go.uber.org/mock/gomock"
 )
@@ -467,10 +467,10 @@ func (m *MockThreadRoomRepository) EXPECT() *MockThreadRoomRepositoryMockRecorde
 }
 
 // GetFollowingThreadRooms mocks base method.
-func (m *MockThreadRoomRepository) GetFollowingThreadRooms(ctx context.Context, roomID, account string, accessSince *time.Time, req mongorepo.OffsetPageRequest) (mongorepo.OffsetPage[model.ThreadRoom], error) {
+func (m *MockThreadRoomRepository) GetFollowingThreadRooms(ctx context.Context, roomID, account string, accessSince *time.Time, req mongoutil.OffsetPageRequest) (mongoutil.OffsetPage[model.ThreadRoom], error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetFollowingThreadRooms", ctx, roomID, account, accessSince, req)
-	ret0, _ := ret[0].(mongorepo.OffsetPage[model.ThreadRoom])
+	ret0, _ := ret[0].(mongoutil.OffsetPage[model.ThreadRoom])
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -482,10 +482,10 @@ func (mr *MockThreadRoomRepositoryMockRecorder) GetFollowingThreadRooms(ctx, roo
 }
 
 // GetThreadRooms mocks base method.
-func (m *MockThreadRoomRepository) GetThreadRooms(ctx context.Context, roomID string, accessSince *time.Time, req mongorepo.OffsetPageRequest) (mongorepo.OffsetPage[model.ThreadRoom], error) {
+func (m *MockThreadRoomRepository) GetThreadRooms(ctx context.Context, roomID string, accessSince *time.Time, req mongoutil.OffsetPageRequest) (mongoutil.OffsetPage[model.ThreadRoom], error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetThreadRooms", ctx, roomID, accessSince, req)
-	ret0, _ := ret[0].(mongorepo.OffsetPage[model.ThreadRoom])
+	ret0, _ := ret[0].(mongoutil.OffsetPage[model.ThreadRoom])
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -497,10 +497,10 @@ func (mr *MockThreadRoomRepositoryMockRecorder) GetThreadRooms(ctx, roomID, acce
 }
 
 // GetUnreadThreadRooms mocks base method.
-func (m *MockThreadRoomRepository) GetUnreadThreadRooms(ctx context.Context, roomID, account string, accessSince *time.Time, req mongorepo.OffsetPageRequest) (mongorepo.OffsetPage[model.ThreadRoom], error) {
+func (m *MockThreadRoomRepository) GetUnreadThreadRooms(ctx context.Context, roomID, account string, accessSince *time.Time, req mongoutil.OffsetPageRequest) (mongoutil.OffsetPage[model.ThreadRoom], error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetUnreadThreadRooms", ctx, roomID, account, accessSince, req)
-	ret0, _ := ret[0].(mongorepo.OffsetPage[model.ThreadRoom])
+	ret0, _ := ret[0].(mongoutil.OffsetPage[model.ThreadRoom])
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }

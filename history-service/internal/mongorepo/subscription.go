@@ -8,17 +8,18 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 
 	"github.com/hmchangw/chat/pkg/model"
+	"github.com/hmchangw/chat/pkg/mongoutil"
 )
 
 const subscriptionsCollection = "subscriptions"
 
 type SubscriptionRepo struct {
-	subscriptions *Collection[model.Subscription]
+	subscriptions *mongoutil.Collection[model.Subscription]
 }
 
 func NewSubscriptionRepo(db *mongo.Database) *SubscriptionRepo {
 	return &SubscriptionRepo{
-		subscriptions: NewCollection[model.Subscription](db.Collection(subscriptionsCollection)),
+		subscriptions: mongoutil.NewCollection[model.Subscription](db.Collection(subscriptionsCollection)),
 	}
 }
 
@@ -31,7 +32,7 @@ func (r *SubscriptionRepo) GetSubscription(ctx context.Context, account, roomID 
 func (r *SubscriptionRepo) GetHistorySharedSince(ctx context.Context, account, roomID string) (*time.Time, bool, error) {
 	sub, err := r.subscriptions.FindOne(ctx,
 		bson.M{"u.account": account, "roomId": roomID},
-		WithProjection(bson.M{"historySharedSince": 1, "_id": 0}),
+		mongoutil.WithProjection(bson.M{"historySharedSince": 1, "_id": 0}),
 	)
 	if err != nil {
 		return nil, false, err

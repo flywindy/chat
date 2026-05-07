@@ -1,4 +1,4 @@
-package mongorepo
+package mongoutil
 
 import (
 	"testing"

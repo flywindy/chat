@@ -2,6 +2,7 @@ package natsrouter_test
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/nats-io/nats.go"
 
@@ -37,17 +38,17 @@ func Example_basicUsage() {
 	)
 }
 
-// Example_withMiddleware demonstrates using built-in middleware.
+// Example_withMiddleware demonstrates the recommended baseline stack
+// via Default(), then opts into a per-handler timeout. Default
+// pre-installs Recovery, RequestID, and Logging — mirroring
+// gin.Default()'s shape. Add HandlerTimeout (or any other middleware)
+// via r.Use after Default returns.
 func Example_withMiddleware() {
 	nc, _ := otelnats.Connect(nats.DefaultURL)
-	router := natsrouter.New(nc, "my-service")
+	router := natsrouter.Default(nc, "my-service")
+	router.Use(natsrouter.HandlerTimeout(5 * time.Second))
 
-	// Recovery catches panics, Logging logs subject + duration.
-	// Order matters: Recovery should be first to catch panics from all middleware.
-	router.Use(natsrouter.Recovery())
-	router.Use(natsrouter.Logging())
-
-	natsrouter.Register[GreetRequest, GreetResponse](
+	natsrouter.Register(
 		router,
 		"chat.user.{account}.greet",
 		func(c *natsrouter.Context, req GreetRequest) (*GreetResponse, error) {

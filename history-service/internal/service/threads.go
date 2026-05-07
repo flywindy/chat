@@ -5,8 +5,8 @@ import (
 	"log/slog"
 
 	"github.com/hmchangw/chat/history-service/internal/models"
-	"github.com/hmchangw/chat/history-service/internal/mongorepo"
 	pkgmodel "github.com/hmchangw/chat/pkg/model"
+	"github.com/hmchangw/chat/pkg/mongoutil"
 	"github.com/hmchangw/chat/pkg/natsrouter"
 )
 
@@ -96,9 +96,9 @@ func (s *HistoryService) GetThreadParentMessages(c *natsrouter.Context, req mode
 		return nil, err
 	}
 
-	pageReq := mongorepo.NewOffsetPageRequest(req.Offset, req.Limit)
+	pageReq := mongoutil.NewOffsetPageRequest(req.Offset, req.Limit)
 
-	var threadPage mongorepo.OffsetPage[pkgmodel.ThreadRoom]
+	var threadPage mongoutil.OffsetPage[pkgmodel.ThreadRoom]
 	switch filter {
 	case models.ThreadFilterAll:
 		threadPage, err = s.threadRooms.GetThreadRooms(c, roomID, accessSince, pageReq)

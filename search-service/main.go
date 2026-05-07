@@ -152,14 +152,12 @@ func main() {
 	)
 
 	shutdown.Wait(ctx, 25*time.Second,
-		// Drain NATS first so no new requests are accepted while metrics
-		// keep recording the in-flight ones.
+		// Wait for in-flight handlers BEFORE nc.Drain so they can't touch torn-down deps.
+		func(ctx context.Context) error { return router.Shutdown(ctx) },
 		func(ctx context.Context) error { return nc.Drain() },
-		// tracerShutdown + valkey disconnect: internal plumbing, any order.
 		func(ctx context.Context) error { return tracerShutdown(ctx) },
 		func(_ context.Context) error { valkeyutil.Disconnect(valkey); return nil },
-		// Keep /metrics open LAST so Prometheus can scrape the final
-		// drain-window observations before the listener closes.
+		// /metrics last so Prometheus can scrape the final drain-window observations.
 		func(ctx context.Context) error { return metricsServer.Shutdown(ctx) },
 	)
 }

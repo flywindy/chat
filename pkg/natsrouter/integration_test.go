@@ -62,6 +62,8 @@ type echoResp struct {
 // against a real NATS server under heavy concurrency: context pool reuse,
 // middleware keys, and Copy() handed to an async goroutine that outlives
 // the handler. With -race, this must stay clean.
+// The unbounded default is sufficient for this test — no WithMaxConcurrency
+// override is needed.
 func TestIntegration_ConcurrentRequestsWithCopy(t *testing.T) {
 	nc := setupNATS(t)
 	r := natsrouter.New(nc, "integration-concurrent")
@@ -191,6 +193,215 @@ func TestIntegration_ShutdownUnderLoad(t *testing.T) {
 			t.Logf("cycle %d completed %d/%d handlers", cycle, completed.Load(), inflight)
 			assert.Greater(t, completed.Load(), int64(0), "at least some handlers must run")
 		})
+	}
+}
+
+// TestIntegration_BusyReplyOnSaturation verifies that requests arriving
+// while the per-pod concurrency cap is exhausted receive an ErrUnavailable
+// reply rather than blocking.
+func TestIntegration_BusyReplyOnSaturation(t *testing.T) {
+	nc := setupNATS(t)
+	r := natsrouter.New(nc, "integration-busy", natsrouter.WithMaxConcurrency(1))
+
+	gate := make(chan struct{})
+	// Safety net: if any assertion below fails before we close the gate,
+	// the spawned client and handler goroutines would block on `<-gate`
+	// forever (bounded only by nc.Request's 5s timeout). This idempotent
+	// closer guarantees release on every test exit path.
+	defer func() {
+		select {
+		case <-gate:
+		default:
+			close(gate)
+		}
+	}()
+
+	// Synchronize on real handler entry instead of polling: the handler
+	// signals `entered` before blocking on `gate`, so the busy-reply poll
+	// only starts once the slot is genuinely held.
+	entered := make(chan struct{}, 1)
+	natsrouter.Register(r, "busy.{id}",
+		func(c *natsrouter.Context, req echoReq) (*echoResp, error) {
+			select {
+			case entered <- struct{}{}:
+			default:
+			}
+			<-gate
+			return &echoResp{Seq: req.Seq}, nil
+		})
+
+	// First request occupies the only slot.
+	first := make(chan struct {
+		resp []byte
+		err  error
+	}, 1)
+	go func() {
+		data, _ := json.Marshal(echoReq{Seq: 1})
+		resp, err := nc.Request(context.Background(), "busy.1", data, 5*time.Second)
+		var b []byte
+		if resp != nil {
+			b = resp.Data
+		}
+		first <- struct {
+			resp []byte
+			err  error
+		}{b, err}
+	}()
+
+	// Wait for handler to actually be in the gate before polling for busy.
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first handler never entered the chain")
+	}
+
+	// A second request must now get busy because the slot is held.
+	data, _ := json.Marshal(echoReq{Seq: 2})
+	resp, err := nc.Request(context.Background(), "busy.2", data, 2*time.Second)
+	require.NoError(t, err)
+	var re natsrouter.RouteError
+	require.NoError(t, json.Unmarshal(resp.Data, &re))
+	assert.Equal(t, natsrouter.CodeUnavailable, re.Code, "expected busy reply once slot is held")
+
+	// Release the gate; first request must complete normally.
+	close(gate)
+	got := <-first
+	require.NoError(t, got.err)
+	var ok echoResp
+	require.NoError(t, json.Unmarshal(got.resp, &ok))
+	assert.Equal(t, 1, ok.Seq)
+}
+
+// TestIntegration_SpawnSitePanicBackstop verifies that a handler panic
+// without Recovery middleware is caught by the spawn-site backstop:
+// the process survives, the caller receives an "internal error" reply,
+// and subsequent requests still work (semaphore slot released, WG
+// decremented).
+func TestIntegration_SpawnSitePanicBackstop(t *testing.T) {
+	nc := setupNATS(t)
+	// Note: NO Recovery middleware installed. We're testing the spawn-site
+	// backstop, not the middleware path.
+	//
+	// MaxConcurrency=1 is load-bearing: with cap=1, a leaked semaphore slot
+	// would block every subsequent request. cap=2 (or higher) would let
+	// the follow-up "ok" request acquire a slot even if cleanup were
+	// broken, masking the regression. cap=1 forces the test to actually
+	// observe slot release.
+	r := natsrouter.New(nc, "integration-panic-backstop", natsrouter.WithMaxConcurrency(1))
+
+	natsrouter.Register(r, "boom.{id}",
+		func(c *natsrouter.Context, req echoReq) (*echoResp, error) {
+			panic("intentional handler panic")
+		})
+
+	// Panicking request must receive a reply (not time out) and the
+	// reply must indicate an error.
+	data, _ := json.Marshal(echoReq{Seq: 1})
+	resp, err := nc.Request(context.Background(), "boom.1", data, 5*time.Second)
+	require.NoError(t, err, "panicking handler should still produce a reply via backstop")
+
+	var payload struct {
+		Error string `json:"error"`
+	}
+	require.NoError(t, json.Unmarshal(resp.Data, &payload))
+	assert.Equal(t, "internal error", payload.Error, "expected internal error reply from backstop")
+
+	// Process survived: a follow-up normal request must succeed.
+	natsrouter.Register(r, "ok.{id}",
+		func(c *natsrouter.Context, req echoReq) (*echoResp, error) {
+			return &echoResp{Seq: req.Seq}, nil
+		})
+	data, _ = json.Marshal(echoReq{Seq: 2})
+	resp, err = nc.Request(context.Background(), "ok.42", data, 5*time.Second)
+	require.NoError(t, err)
+	var ok echoResp
+	require.NoError(t, json.Unmarshal(resp.Data, &ok))
+	assert.Equal(t, 2, ok.Seq)
+}
+
+// TestIntegration_ShutdownWaitsForSpawnedHandlers verifies that Shutdown
+// blocks until handler goroutines (spawned by the semaphore admission
+// model) have returned, not merely until the dispatcher has stopped.
+func TestIntegration_ShutdownWaitsForSpawnedHandlers(t *testing.T) {
+	nc := setupNATS(t)
+	r := natsrouter.New(nc, "integration-shutdown-wg", natsrouter.WithMaxConcurrency(8))
+
+	gate := make(chan struct{})
+	// Safety net: any test failure before close(gate) below would pin
+	// the spawned client goroutines and the gated handler goroutines
+	// for up to nc.Request's 5s timeout. This idempotent closer
+	// guarantees release on every exit path (success, t.Fatal, or
+	// require failure).
+	defer func() {
+		select {
+		case <-gate:
+		default:
+			close(gate)
+		}
+	}()
+	var entered atomic.Int64
+	var completed atomic.Int64
+	natsrouter.Register(r, "wg.{id}",
+		func(c *natsrouter.Context, req echoReq) (*echoResp, error) {
+			entered.Add(1)
+			<-gate
+			completed.Add(1)
+			return &echoResp{Seq: req.Seq}, nil
+		})
+
+	const inflight = 4
+	var clientsWG sync.WaitGroup
+	reqErrCh := make(chan error, inflight)
+	for i := 0; i < inflight; i++ {
+		clientsWG.Add(1)
+		go func(i int) {
+			defer clientsWG.Done()
+			data, _ := json.Marshal(echoReq{Seq: i})
+			if _, err := nc.Request(context.Background(), fmt.Sprintf("wg.%d", i), data, 5*time.Second); err != nil {
+				reqErrCh <- fmt.Errorf("wg.%d request failed: %w", i, err)
+			}
+		}(i)
+	}
+
+	// Synchronise on a real signal: every handler increments `entered` on
+	// arrival and then blocks on `gate`. Once entered==inflight, all four
+	// goroutines are inside the chain and Shutdown will have to wait on
+	// the WaitGroup for them.
+	require.Eventually(t, func() bool {
+		return entered.Load() == int64(inflight)
+	}, 5*time.Second, 20*time.Millisecond, "all %d handlers must enter before Shutdown is called", inflight)
+
+	// Shutdown in a goroutine; it must NOT return before we close gate.
+	shutdownDone := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		shutdownDone <- r.Shutdown(ctx)
+	}()
+
+	// Give Shutdown 200ms to (incorrectly) return early.
+	select {
+	case err := <-shutdownDone:
+		t.Fatalf("Shutdown returned before handlers completed: err=%v", err)
+	case <-time.After(200 * time.Millisecond):
+		// expected — Shutdown is still blocked on the WaitGroup.
+	}
+
+	close(gate)
+
+	select {
+	case err := <-shutdownDone:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Shutdown did not return after handlers completed")
+	}
+	assert.Equal(t, int64(inflight), completed.Load(), "every gated handler must complete")
+
+	// Join client goroutines and surface any nc.Request errors.
+	clientsWG.Wait()
+	close(reqErrCh)
+	for err := range reqErrCh {
+		require.NoError(t, err)
 	}
 }
 

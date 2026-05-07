@@ -154,6 +154,36 @@ func (c *Context) Param(key string) string {
 	return c.Params.Get(key)
 }
 
+// GetHeader returns the value of `key` from the inbound NATS message
+// header. Returns "" if the message has no headers, no Msg at all
+// (NewContext-constructed test context), or the key is absent.
+// Shortcut for c.Msg.Header.Get(key); name and shape match gin's
+// gin.Context.GetHeader.
+//
+// IMPORTANT — case sensitivity. Unlike net/http (which canonicalises
+// header keys via textproto.CanonicalMIMEHeaderKey), NATS headers are
+// CASE-SENSITIVE. The wire decoder preserves whatever case the sender
+// used. So a sender that calls msg.Header.Set("authorization", token)
+// will not be readable via GetHeader("Authorization") — those are two
+// different keys to nats.go. Pick a canonical case (the project
+// convention is the canonical "X-Request-ID" / "Authorization" form)
+// and use it on both ends.
+//
+// IMPORTANT — request ID. GetHeader("X-Request-ID") returns the ID
+// supplied on the INBOUND message, not necessarily the ID the router
+// is using. RequestID middleware reads the inbound header and, if
+// missing or invalid, mints a new ID and stores it via c.Set and on
+// the underlying context. To get the ID the router actually uses,
+// read c.Get("requestID") or natsutil.RequestIDFrom(c.Context()).
+func (c *Context) GetHeader(key string) string {
+	if c.Msg == nil {
+		return ""
+	}
+	// nats.Header.Get already handles a nil receiver, so no second guard
+	// is needed (it returns "" for nil maps).
+	return c.Msg.Header.Get(key)
+}
+
 // ReplyJSON marshals v as JSON and sends it as the reply.
 func (c *Context) ReplyJSON(v any) {
 	natsutil.ReplyJSON(c.Msg, v)

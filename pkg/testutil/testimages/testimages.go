@@ -36,4 +36,7 @@ const (
 	// Valkey is the Redis-compatible cache used by room-service and
 	// pkg/roomkeystore.
 	Valkey = "valkey/valkey:8"
+
+	// MinIO is the image for every MinIO-backed integration test.
+	MinIO = "minio/minio:RELEASE.2025-01-20T14-49-07Z"
 )

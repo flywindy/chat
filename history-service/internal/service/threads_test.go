@@ -11,9 +11,9 @@ import (
 
 	"github.com/hmchangw/chat/history-service/internal/cassrepo"
 	"github.com/hmchangw/chat/history-service/internal/models"
-	"github.com/hmchangw/chat/history-service/internal/mongorepo"
 	"github.com/hmchangw/chat/history-service/internal/service"
 	pkgmodel "github.com/hmchangw/chat/pkg/model"
+	"github.com/hmchangw/chat/pkg/mongoutil"
 	"github.com/hmchangw/chat/pkg/natsrouter"
 )
 
@@ -33,8 +33,8 @@ func makeCassMessages() []models.Message {
 	}
 }
 
-func makeThreadPage(total int64) mongorepo.OffsetPage[pkgmodel.ThreadRoom] {
-	return mongorepo.OffsetPage[pkgmodel.ThreadRoom]{Data: makeThreadRooms(), Total: total}
+func makeThreadPage(total int64) mongoutil.OffsetPage[pkgmodel.ThreadRoom] {
+	return mongoutil.OffsetPage[pkgmodel.ThreadRoom]{Data: makeThreadRooms(), Total: total}
 }
 
 // ============================================================
@@ -347,7 +347,7 @@ func TestHistoryService_GetThreadParentMessages_Empty(t *testing.T) {
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, true, nil)
 	threadRooms.EXPECT().GetThreadRooms(gomock.Any(), "r1", nil, gomock.Any()).Return(
-		mongorepo.OffsetPage[pkgmodel.ThreadRoom]{Data: []pkgmodel.ThreadRoom{}, Total: 0}, nil,
+		mongoutil.OffsetPage[pkgmodel.ThreadRoom]{Data: []pkgmodel.ThreadRoom{}, Total: 0}, nil,
 	)
 
 	resp, err := svc.GetThreadParentMessages(c, models.GetThreadParentMessagesRequest{Limit: 20})
@@ -373,7 +373,7 @@ func TestHistoryService_GetThreadParentMessages_ThreadRoomError(t *testing.T) {
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, true, nil)
 	threadRooms.EXPECT().GetThreadRooms(gomock.Any(), "r1", nil, gomock.Any()).Return(
-		mongorepo.OffsetPage[pkgmodel.ThreadRoom]{}, fmt.Errorf("mongo down"),
+		mongoutil.OffsetPage[pkgmodel.ThreadRoom]{}, fmt.Errorf("mongo down"),
 	)
 
 	_, err := svc.GetThreadParentMessages(c, models.GetThreadParentMessagesRequest{Limit: 20})
@@ -419,7 +419,7 @@ func TestHistoryService_GetThreadParentMessages_DeduplicatesParentIDs(t *testing
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, true, nil)
 
 	// Two thread rooms pointing to the same ParentMessageID — seenIDs must deduplicate.
-	dupPage := mongorepo.OffsetPage[pkgmodel.ThreadRoom]{
+	dupPage := mongoutil.OffsetPage[pkgmodel.ThreadRoom]{
 		Data: []pkgmodel.ThreadRoom{
 			{ID: "tr-1", RoomID: "r1", ParentMessageID: "p1"},
 			{ID: "tr-2", RoomID: "r1", ParentMessageID: "p1"},
@@ -616,7 +616,7 @@ func TestHistoryService_GetThreadParentMessages_PostHydrationAccessCheck(t *test
 		ID: "tr-early", RoomID: "r1", ParentMessageID: "p-early",
 		// ThreadParentCreatedAt is zero — absent from original event, bypasses $match
 	}
-	page := mongorepo.OffsetPage[pkgmodel.ThreadRoom]{Data: []pkgmodel.ThreadRoom{threadRoom}, Total: 1}
+	page := mongoutil.OffsetPage[pkgmodel.ThreadRoom]{Data: []pkgmodel.ThreadRoom{threadRoom}, Total: 1}
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(&joinTime, true, nil)
 	threadRooms.EXPECT().GetThreadRooms(gomock.Any(), "r1", &joinTime, gomock.Any()).Return(page, nil)
