@@ -130,7 +130,9 @@ func TestLog_FiresOnTransportError(t *testing.T) {
 	c := New("http://"+addr, WithTimeout(500*time.Millisecond))
 	_, err = c.R().Get("/")
 	require.Error(t, err)
-	assert.Contains(t, buf.String(), `"msg":"http error"`)
+	out := buf.String()
+	assert.Contains(t, out, `"msg":"http error"`)
+	assert.Contains(t, out, `"level":"ERROR"`, "transport errors must log at ERROR per codebase convention")
 }
 
 type roundTripperFunc func(*http.Request) (*http.Response, error)

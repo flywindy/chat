@@ -55,7 +55,7 @@ func logResponse(_ *resty.Client, resp *resty.Response) error {
 }
 
 func logError(req *resty.Request, err error) {
-	slog.Debug("http error", logFields(req, 0, time.Since(req.Time), err)...)
+	slog.Error("http error", logFields(req, 0, time.Since(req.Time), err)...)
 }
 
 func logFields(req *resty.Request, status int, dur time.Duration, err error) []any {
