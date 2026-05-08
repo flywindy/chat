@@ -3,6 +3,7 @@ package otelutil
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
@@ -14,9 +15,14 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 )
 
-// InitTracer creates and registers a TracerProvider with OTLP gRPC exporter.
-// Returns a shutdown function.
+// InitTracer is a no-op (propagator only) when no OTLP endpoint env var is
+// set, to avoid `traces export: connection refused` spam in dev / CI.
 func InitTracer(ctx context.Context, serviceName string) (func(context.Context) error, error) {
+	if os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT") == "" && os.Getenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT") == "" {
+		otel.SetTextMapPropagator(propagation.TraceContext{})
+		return func(context.Context) error { return nil }, nil
+	}
+
 	exp, err := otlptracegrpc.New(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("otlp exporter: %w", err)

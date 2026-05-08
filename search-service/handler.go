@@ -20,6 +20,7 @@ type handlerConfig struct {
 	RecentWindow            time.Duration
 	RequestTimeout          time.Duration
 	UserRoomIndex           string
+	SpotlightIndex          string
 }
 
 type handler struct {
@@ -136,7 +137,7 @@ func (h *handler) searchRooms(c *natsrouter.Context, req model.SearchRoomsReques
 	}
 
 	observeESDone := observeES()
-	raw, err := h.store.Search(ctx, []string{SpotlightIndex}, body)
+	raw, err := h.store.Search(ctx, []string{h.cfg.SpotlightIndex}, body)
 	observeESDone()
 	if err != nil {
 		slog.Error("room search backend failed", "account", account, "error", err)

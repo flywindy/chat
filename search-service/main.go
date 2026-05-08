@@ -48,7 +48,8 @@ type SearchConfig struct {
 	RestrictedRoomsCacheTTL time.Duration `env:"RESTRICTED_ROOMS_CACHE_TTL" envDefault:"5m"`
 	RecentWindow            time.Duration `env:"RECENT_WINDOW"              envDefault:"8760h"`
 	RequestTimeout          time.Duration `env:"REQUEST_TIMEOUT"            envDefault:"10s"`
-	UserRoomIndex           string        `env:"USER_ROOM_INDEX"            envDefault:""`
+	UserRoomIndex           string        `env:"USER_ROOM_INDEX,required"`
+	SpotlightIndex          string        `env:"SPOTLIGHT_INDEX,required"`
 	MetricsAddr             string        `env:"METRICS_ADDR"               envDefault:":9090"`
 }
 
@@ -116,6 +117,7 @@ func main() {
 		RecentWindow:            cfg.Search.RecentWindow,
 		RequestTimeout:          cfg.Search.RequestTimeout,
 		UserRoomIndex:           cfg.Search.UserRoomIndex,
+		SpotlightIndex:          cfg.Search.SpotlightIndex,
 	})
 
 	router := natsrouter.New(nc, "search-service")

@@ -8,11 +8,6 @@ import (
 	"github.com/hmchangw/chat/pkg/natsrouter"
 )
 
-// SpotlightIndex is the (local-only) room-typeahead index. Always one
-// document per (user, room) pair — the spotlight index keeps search-as-you-
-// type docs locally even when messages live on remote sites.
-const SpotlightIndex = "spotlight"
-
 // room scope filter values accepted on SearchRoomsRequest.Scope.
 const (
 	scopeAll     = "all"

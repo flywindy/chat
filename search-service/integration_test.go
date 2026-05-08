@@ -125,6 +125,7 @@ func setupCCSFixture(t *testing.T) *ccsFixture {
 		RestrictedRoomsCacheTTL: 5 * time.Minute,
 		RecentWindow:            365 * 24 * time.Hour,
 		UserRoomIndex:           userRoomIndex,
+		SpotlightIndex:          "spotlight-test",
 	})
 
 	router := natsrouter.New(serverNC, "search-service-test")

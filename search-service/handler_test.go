@@ -14,6 +14,8 @@ import (
 	"github.com/hmchangw/chat/pkg/natsrouter"
 )
 
+const testSpotlightIndex = "spotlight"
+
 type fakeStore struct {
 	searchCalls   []searchCall
 	searchBody    json.RawMessage
@@ -84,6 +86,7 @@ func newTestHandler(store SearchStore, cache RestrictedRoomCache) *handler {
 		MaxDocCounts:            100,
 		RestrictedRoomsCacheTTL: 5 * time.Minute,
 		RecentWindow:            365 * 24 * time.Hour,
+		SpotlightIndex:          testSpotlightIndex,
 	})
 }
 
@@ -234,7 +237,7 @@ func TestHandler_SearchRooms_ScopeAllHappyPath(t *testing.T) {
 	assert.Equal(t, "r1", resp.Results[0].RoomID)
 
 	require.Len(t, store.searchCalls, 1)
-	assert.Equal(t, []string{SpotlightIndex}, store.searchCalls[0].indices)
+	assert.Equal(t, []string{testSpotlightIndex}, store.searchCalls[0].indices)
 }
 
 func TestHandler_SearchRooms_ScopeAppRejected(t *testing.T) {
