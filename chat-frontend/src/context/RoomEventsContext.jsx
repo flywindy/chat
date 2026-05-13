@@ -43,7 +43,8 @@ export function RoomEventsProvider({ children }) {
 
     const openChannelSub = (roomId) => {
       if (channelSubs.current.has(roomId)) return
-      const sub = subscribe(roomEvent(roomId), (evt) => {
+      const subj = roomEvent(roomId)
+      const sub = subscribe(subj, (evt) => {
         if (evt?.type === 'new_message') {
           const hasMention = (evt.mentions ?? []).some(
             (p) => p.account === user.account
@@ -68,7 +69,13 @@ export function RoomEventsProvider({ children }) {
         request(roomsGet(user.account, evt.subscription.roomId), {})
           .then((room) => {
             if (cancelledRef.current || !room) return
-            safeDispatch({ type: 'ROOM_ADDED', room })
+            // DM rooms have no canonical Room.Name server-side — the friendly
+            // text lives on the user's Subscription. Stash that here so the
+            // sidebar + header can fall back to it via roomDisplayName(room).
+            const merged = evt.subscription?.name
+              ? { ...room, subscriptionName: evt.subscription.name }
+              : room
+            safeDispatch({ type: 'ROOM_ADDED', room: merged })
             if (room.type === 'channel') openChannelSub(room.id)
           })
           .catch(() => {})

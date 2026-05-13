@@ -21,7 +21,19 @@ vi.mock('../components/RoomList', () => ({
     </div>
   ),
 }))
-vi.mock('../components/MessageArea', () => ({ default: () => <div data-testid="message-area" /> }))
+// MessageArea now owns the per-room "N members" badge in its header — the
+// mock surfaces a clickable members button when a channel is passed in so
+// ChatPage's wiring tests (open dialog on click, refresh after close) keep
+// working without rendering the real MessageArea + its NATS deps.
+vi.mock('../components/MessageArea', () => ({
+  default: ({ room, onOpenMembers }) => (
+    <div data-testid="message-area">
+      {room?.type === 'channel' && (
+        <button onClick={onOpenMembers}>{`${room.userCount ?? 0} members`}</button>
+      )}
+    </div>
+  ),
+}))
 vi.mock('../components/MessageInput', () => ({ default: () => <div data-testid="message-input" /> }))
 vi.mock('../components/CreateRoomDialog', () => ({ default: () => null }))
 vi.mock('../components/SearchBar', () => ({
@@ -50,7 +62,6 @@ vi.mock('../components/InRoomSearch', () => ({
 vi.mock('../components/ThemeToggle', () => ({
   default: () => <button data-testid="theme-toggle" />,
 }))
-
 import { useNats } from '../context/NatsContext'
 import { useRoomSummaries } from '../context/RoomEventsContext'
 
@@ -73,39 +84,41 @@ beforeEach(() => {
   })
 })
 
-describe('ChatPage header buttons', () => {
-  it('hides Members and Leave when no room is selected', () => {
+describe('ChatPage room actions', () => {
+  it('hides the members badge when no room is selected', () => {
     render(<ChatPage />)
-    expect(screen.queryByRole('button', { name: /^Members$/ })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /^Leave$/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /members$/ })).not.toBeInTheDocument()
   })
 
-  it('hides Members and Leave on a DM room', () => {
+  it('hides the members badge on a DM room (no manage flow for DMs)', () => {
     render(<ChatPage />)
     fireEvent.click(screen.getByText('pick-dm'))
-    expect(screen.queryByRole('button', { name: /^Members$/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /members$/ })).not.toBeInTheDocument()
+  })
+
+  it('shows the "N members" badge inside the MessageArea header for a channel', () => {
+    // The badge now lives in MessageArea's header (replacing the static
+    // "N members" span). Leave is reachable via the dialog's roster
+    // (self-row → Leave). The global header keeps only chat-wide actions:
+    // search, theme, logout.
+    render(<ChatPage />)
+    fireEvent.click(screen.getByText('pick-channel'))
+    expect(screen.getByRole('button', { name: /members$/ })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /^Leave$/ })).not.toBeInTheDocument()
   })
 
-  it('shows Members and Leave on a channel room', () => {
-    render(<ChatPage />)
-    fireEvent.click(screen.getByText('pick-channel'))
-    expect(screen.getByRole('button', { name: /^Members$/ })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /^Leave$/ })).toBeInTheDocument()
-  })
-
-  it('opens ManageMembersDialog when Members is clicked', () => {
+  it('clicking the members badge opens ManageMembersDialog', () => {
     render(<ChatPage />)
     fireEvent.click(screen.getByText('pick-channel'))
     expect(screen.queryByRole('heading', { name: /Manage Members/i })).not.toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: /^Members$/ }))
+    fireEvent.click(screen.getByRole('button', { name: /members$/ }))
     expect(screen.getByRole('heading', { name: /Manage Members — general/i })).toBeInTheDocument()
   })
 
-  it('closes ManageMembersDialog when Close is clicked', () => {
+  it('closing the dialog dismisses it (and bumps the badge refresh key)', () => {
     render(<ChatPage />)
     fireEvent.click(screen.getByText('pick-channel'))
-    fireEvent.click(screen.getByRole('button', { name: /^Members$/ }))
+    fireEvent.click(screen.getByRole('button', { name: /members$/ }))
     fireEvent.click(screen.getByRole('button', { name: /^Close$/ }))
     expect(screen.queryByRole('heading', { name: /Manage Members/i })).not.toBeInTheDocument()
   })

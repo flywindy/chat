@@ -24,6 +24,12 @@ function toSummary(room) {
   return {
     id: room.id,
     name: room.name,
+    // Per-user friendly name (DM display fallback). RoomEventsContext sets
+    // this from the inbound subscription.update event; rooms loaded via the
+    // initial rooms.list don't carry it today (server returns Room, not
+    // Subscription), so it'll be undefined on first paint — roomDisplayName
+    // falls back to a placeholder until subscription.update lands.
+    subscriptionName: room.subscriptionName,
     type: room.type,
     siteId: room.siteId,
     userCount: room.userCount,
@@ -96,30 +102,43 @@ export function roomEventsReducer(state, action) {
     }
     case 'MESSAGE_RECEIVED': {
       const evt = action.event
-      // Channel rooms broadcast encrypted-only events (Message zeroed,
-      // EncryptedMessage populated). Without client-side crypto we can't
-      // render those, so just skip them rather than crash on the missing
-      // .id below. DM rooms always carry a populated .message and proceed
-      // normally. The DEV_MODE plaintext fallback in broadcast-worker
-      // populates .message for channels too, so dev sees them.
-      if (!evt.message || !evt.message.id) {
-        return state
+      // Normalize the message payload across the two possible broadcast-worker
+      // modes: plaintext (evt.message populated) and encrypted-only (only
+      // evt.encryptedMessage populated; .message is dropped via Go's
+      // json:omitempty). Until client-side crypto lands we can't decrypt,
+      // but silently swallowing the event leaves the room visually frozen —
+      // synthesize a "[encrypted message]" placeholder from the top-level
+      // lastMsgId/lastMsgAt instead so the user sees something happened.
+      // The `encrypted: true` marker lets the UI render it differently if
+      // it wants to (italics, lock icon, etc.); the default message renderer
+      // just shows the placeholder text.
+      let msg = evt.message
+      if ((!msg || !msg.id) && evt.encryptedMessage) {
+        if (!evt.lastMsgId) return state
+        msg = {
+          id: evt.lastMsgId,
+          roomId: evt.roomId,
+          content: '[encrypted message]',
+          createdAt: evt.lastMsgAt ?? new Date(evt.timestamp ?? Date.now()).toISOString(),
+          encrypted: true,
+        }
       }
+      if (!msg || !msg.id) return state
       const roomId = evt.roomId
       const prev = state.roomState[roomId] ?? emptyRoomState()
       const isActive = state.activeRoomId === roomId
       if (prev.bufferMode === BUFFER_MODE.HISTORICAL) {
         if (
-          prev.messages.some((m) => m.id === evt.message.id) ||
-          prev.pendingLiveMessages.some((m) => m.id === evt.message.id)
+          prev.messages.some((m) => m.id === msg.id) ||
+          prev.pendingLiveMessages.some((m) => m.id === msg.id)
         ) {
           return state
         }
-        const pendingLiveMessages = [...prev.pendingLiveMessages, evt.message]
+        const pendingLiveMessages = [...prev.pendingLiveMessages, msg]
         const nextRoomState = {
           ...prev,
           pendingLiveMessages,
-          lastMsgAt: evt.lastMsgAt ?? prev.lastMsgAt,
+          lastMsgAt: evt.lastMsgAt ?? msg.createdAt ?? prev.lastMsgAt,
           lastMsgId: evt.lastMsgId ?? prev.lastMsgId,
           unreadCount: isActive ? prev.unreadCount : prev.unreadCount + 1,
           hasMention: isActive ? false : prev.hasMention || !!evt.hasMention,
@@ -146,12 +165,12 @@ export function roomEventsReducer(state, action) {
           roomState: { ...state.roomState, [roomId]: nextRoomState },
         }
       }
-      if (prev.messages.some((m) => m.id === evt.message.id)) return state
-      const messages = appendBounded(prev.messages, evt.message)
+      if (prev.messages.some((m) => m.id === msg.id)) return state
+      const messages = appendBounded(prev.messages, msg)
       const nextRoomState = {
         ...prev,
         messages,
-        lastMsgAt: evt.lastMsgAt ?? prev.lastMsgAt,
+        lastMsgAt: evt.lastMsgAt ?? msg.createdAt ?? prev.lastMsgAt,
         lastMsgId: evt.lastMsgId ?? prev.lastMsgId,
         unreadCount: isActive ? prev.unreadCount : prev.unreadCount + 1,
         hasMention: isActive ? false : prev.hasMention || !!evt.hasMention,

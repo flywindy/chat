@@ -187,6 +187,45 @@ describe('roomEventsReducer: MESSAGE_RECEIVED', () => {
     expect(next.summaries[0].unreadCount).toBe(1)
   })
 
+  it('renders a placeholder when only encryptedMessage is present (no plaintext .message)', () => {
+    // broadcast-worker with ENCRYPTION_ENABLED=true emits events where
+    // ClientMessage is encrypted into evt.encryptedMessage and evt.message
+    // is dropped via json:omitempty. Until client-side crypto lands we
+    // can't decrypt — but silently swallowing the event makes the room
+    // look frozen. Synthesize a "[encrypted message]" placeholder from
+    // the top-level lastMsgId/lastMsgAt so the user at least sees that
+    // a message arrived (and can tell their broadcast-worker is encrypting).
+    const next = roomEventsReducer(initialState, {
+      type: 'MESSAGE_RECEIVED',
+      event: {
+        type: 'new_message',
+        roomId: 'a',
+        lastMsgAt: '2026-04-17T12:00:00Z',
+        lastMsgId: 'm-enc',
+        encryptedMessage: { v: 1, ciphertext: 'AAA' },
+        // no .message field — the omitempty drop
+        timestamp: 1,
+      },
+    })
+    expect(next.roomState.a.messages).toHaveLength(1)
+    expect(next.roomState.a.messages[0]).toMatchObject({
+      id: 'm-enc',
+      content: '[encrypted message]',
+      encrypted: true,
+    })
+  })
+
+  it('does not drop an event that has both message and encryptedMessage — plaintext wins', () => {
+    // Forward-compatible: if a future broadcaster sends both lanes (e.g.
+    // during a rollout), the plaintext path is authoritative.
+    const next = roomEventsReducer(initialState, {
+      type: 'MESSAGE_RECEIVED',
+      event: newMessageEvent({ encryptedMessage: { v: 1, ciphertext: 'XX' } }),
+    })
+    expect(next.roomState.a.messages[0].content).toBe('hi')
+    expect(next.roomState.a.messages[0].encrypted).not.toBe(true)
+  })
+
   it('caps the cached messages at MAX_CACHED, dropping oldest', async () => {
     const { MAX_CACHED } = await import('./roomEventsReducer')
     let state = initialState

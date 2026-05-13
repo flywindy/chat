@@ -13,31 +13,27 @@ const room = { id: 'r1', siteId: 'site-A', name: 'general', type: 'channel' }
 beforeEach(() => {
   useNats.mockReset()
   useNats.mockReturnValue({
-    user: { account: 'alice' },
-    request: vi.fn().mockResolvedValue({ status: 'accepted' }),
+    user: { account: 'alice', siteId: 'site-A' },
+    request: vi.fn().mockResolvedValue({ members: [] }),
+    requestWithAsyncResult: vi.fn().mockResolvedValue({ sync: { status: 'accepted' }, async: { status: 'ok' } }),
   })
 })
 
 describe('ManageMembersDialog', () => {
-  it('shows the Add tab by default', () => {
+  it('shows the Members tab by default with the roster', () => {
     render(<ManageMembersDialog room={room} onClose={vi.fn()} />)
-    expect(screen.getByRole('tab', { name: /^Add$/ })).toHaveAttribute('aria-selected', 'true')
-    expect(screen.getByLabelText(/Accounts \(comma-separated\)/i)).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: /^Members$/ })).toHaveAttribute('aria-selected', 'true')
+    // The roster renders either members or an empty notice — both are fine
+    expect(screen.getByRole('heading', { name: /Members/i })).toBeInTheDocument()
   })
 
-  it('switches tabs when a tab button is clicked', () => {
+  it('switches to the Add tab and renders the picker-based form', () => {
     render(<ManageMembersDialog room={room} onClose={vi.fn()} />)
-
-    fireEvent.click(screen.getByRole('tab', { name: /^Remove$/ }))
-    expect(screen.getByRole('tab', { name: /^Remove$/ })).toHaveAttribute('aria-selected', 'true')
-    expect(screen.getByLabelText(/^Account$/i)).toBeInTheDocument()
-    expect(screen.queryByLabelText(/Accounts \(comma-separated\)/i)).not.toBeInTheDocument()
-
-    fireEvent.click(screen.getByRole('tab', { name: /^Role$/ }))
-    expect(screen.getByLabelText(/^Role$/i)).toBeInTheDocument()
-
-    fireEvent.click(screen.getByRole('tab', { name: /Remove Org/i }))
-    expect(screen.getByLabelText(/Org ID/i)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('tab', { name: /^Add$/ }))
+    expect(screen.getByRole('tab', { name: /^Add$/ })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByLabelText(/Users/i)).toBeInTheDocument()
+    expect(screen.getByLabelText(/Orgs/i)).toBeInTheDocument()
+    expect(screen.getByLabelText(/Channels/i)).toBeInTheDocument()
   })
 
   it('calls onClose when Close is clicked', () => {

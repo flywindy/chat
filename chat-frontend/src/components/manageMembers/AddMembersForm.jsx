@@ -1,19 +1,23 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNats } from '../../context/NatsContext'
 import { memberAdd } from '../../lib/subjects'
-import { parseList } from '../../lib/parseList'
 import { HISTORY_MODE_ALL, HISTORY_MODE_NONE } from '../../lib/constants'
+import { formatAsyncJobError } from '../../lib/asyncJob'
+import MemberPicker from '../MemberPicker'
+
+const SUCCESS_BANNER_MS = 3000
 
 export default function AddMembersForm({ room }) {
-  const { user, request } = useNats()
-  const [accounts, setAccounts] = useState('')
-  const [orgs, setOrgs] = useState('')
-  const [channels, setChannels] = useState('')
+  const { user, requestWithAsyncResult } = useNats()
+  const [users, setUsers] = useState([])
+  const [orgs, setOrgs] = useState([])
+  const [channels, setChannels] = useState([])
   const [shareHistory, setShareHistory] = useState(true)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [success, setSuccess] = useState(false)
   const successTimer = useRef(null)
+  const pickerRef = useRef(null)
 
   useEffect(() => {
     return () => {
@@ -21,67 +25,50 @@ export default function AddMembersForm({ room }) {
     }
   }, [])
 
-  const users = parseList(accounts)
-  const orgList = parseList(orgs)
-  const channelList = parseList(channels)
-  const canSubmit = users.length + orgList.length + channelList.length > 0
-
   const handleSubmit = async (e) => {
     e.preventDefault()
-    if (!canSubmit || !user) return
+    if (!user) return
+    // Flush any typed-but-uncommitted text in the picker (comma-split into
+    // entries) so users can paste "alice, bob" and click Add without first
+    // pressing Enter.
+    const { users: finalUsers, orgs: finalOrgs, channels: finalChannels } =
+      pickerRef.current?.flushAndGetEntries() ?? { users, orgs, channels }
+    if (finalUsers.length + finalOrgs.length + finalChannels.length === 0) return
     setLoading(true)
     setError(null)
     setSuccess(false)
     try {
-      await request(memberAdd(user.account, room.id, room.siteId), {
+      await requestWithAsyncResult(memberAdd(user.account, room.id, room.siteId), {
         roomId: room.id,
-        users,
-        orgs: orgList,
-        channels: channelList,
+        users: finalUsers,
+        orgs: finalOrgs,
+        channels: finalChannels,
         history: { mode: shareHistory ? HISTORY_MODE_ALL : HISTORY_MODE_NONE },
       })
-      setAccounts('')
-      setOrgs('')
-      setChannels('')
+      setUsers([])
+      setOrgs([])
+      setChannels([])
       setSuccess(true)
       if (successTimer.current) clearTimeout(successTimer.current)
-      successTimer.current = setTimeout(() => setSuccess(false), 3000)
+      successTimer.current = setTimeout(() => setSuccess(false), SUCCESS_BANNER_MS)
     } catch (err) {
-      setError(err.message)
+      setError(formatAsyncJobError(err))
     } finally {
       setLoading(false)
     }
   }
 
+
   return (
     <form onSubmit={handleSubmit}>
-      <label htmlFor="add-accounts">Accounts (comma-separated)</label>
-      <input
-        id="add-accounts"
-        type="text"
-        value={accounts}
-        onChange={(e) => setAccounts(e.target.value)}
-        placeholder="e.g. bob, charlie"
-        disabled={loading}
-      />
-
-      <label htmlFor="add-orgs">Orgs (comma-separated)</label>
-      <input
-        id="add-orgs"
-        type="text"
-        value={orgs}
-        onChange={(e) => setOrgs(e.target.value)}
-        placeholder="e.g. eng-frontend"
-        disabled={loading}
-      />
-
-      <label htmlFor="add-channels">Channels (comma-separated room IDs)</label>
-      <input
-        id="add-channels"
-        type="text"
-        value={channels}
-        onChange={(e) => setChannels(e.target.value)}
-        placeholder="e.g. r-existing"
+      <MemberPicker
+        ref={pickerRef}
+        users={users}
+        orgs={orgs}
+        channels={channels}
+        onUsersChange={setUsers}
+        onOrgsChange={setOrgs}
+        onChannelsChange={setChannels}
         disabled={loading}
       />
 
@@ -96,11 +83,11 @@ export default function AddMembersForm({ room }) {
       </label>
 
       {error && <div className="dialog-error">{error}</div>}
-      {success && <div className="dialog-success">Accepted</div>}
+      {success && <div className="dialog-success">Added</div>}
 
       <div className="dialog-actions">
-        <button type="submit" disabled={loading || !canSubmit}>
-          {loading ? 'Adding...' : 'Add'}
+        <button type="submit" disabled={loading}>
+          {loading ? 'Adding…' : 'Add'}
         </button>
       </div>
     </form>

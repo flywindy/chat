@@ -6,7 +6,6 @@ import MessageArea from '../components/MessageArea'
 import MessageInput from '../components/MessageInput'
 import CreateRoomDialog from '../components/CreateRoomDialog'
 import ManageMembersDialog from '../components/ManageMembersDialog'
-import LeaveRoomButton from '../components/LeaveRoomButton'
 import SearchBar from '../components/SearchBar'
 import SearchResultsPane from './SearchResultsPane'
 import InRoomSearch from '../components/InRoomSearch'
@@ -18,6 +17,11 @@ export default function ChatPage() {
   const [selectedRoom, setSelectedRoom] = useState(null)
   const [showCreateRoom, setShowCreateRoom] = useState(false)
   const [showMembers, setShowMembers] = useState(false)
+  // Bumped each time ManageMembersDialog closes so RoomMembersBadge refetches
+  // its count — a member-add/remove inside the dialog should be reflected in
+  // the badge immediately when the dialog dismisses, without waiting for the
+  // next room switch.
+  const [membersRefreshKey, setMembersRefreshKey] = useState(0)
   const [searchQuery, setSearchQuery] = useState(null)
   const [inRoomSearchOpen, setInRoomSearchOpen] = useState(false)
 
@@ -91,18 +95,6 @@ export default function ChatPage() {
             }}
           />
         </div>
-        {isChannel && (
-          <>
-            <button
-              type="button"
-              className="chat-header-logout"
-              onClick={() => setShowMembers(true)}
-            >
-              Members
-            </button>
-            <LeaveRoomButton room={selectedRoom} />
-          </>
-        )}
         <span className="chat-header-user">
           {user?.account} &middot; {user?.siteId}
         </span>
@@ -135,7 +127,11 @@ export default function ChatPage() {
           ) : (
             <div className="chat-main-with-side-panel">
               <div className="chat-main-content">
-                <MessageArea room={selectedRoom} />
+                <MessageArea
+                  room={selectedRoom}
+                  onOpenMembers={() => setShowMembers(true)}
+                  membersRefreshKey={membersRefreshKey}
+                />
                 <MessageInput room={selectedRoom} />
               </div>
               {inRoomSearchOpen && selectedRoom && (
@@ -158,7 +154,10 @@ export default function ChatPage() {
       {showMembers && selectedRoom && (
         <ManageMembersDialog
           room={selectedRoom}
-          onClose={() => setShowMembers(false)}
+          onClose={() => {
+            setShowMembers(false)
+            setMembersRefreshKey((k) => k + 1)
+          }}
         />
       )}
     </div>

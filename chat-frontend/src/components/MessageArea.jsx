@@ -1,8 +1,9 @@
 import { useEffect, useRef } from 'react'
 import { useRoomEvents } from '../context/RoomEventsContext'
 import { BUFFER_MODE } from '../lib/roomEventsReducer'
-import { roomPrefix } from '../lib/roomFormat'
+import { roomPrefix, roomDisplayName } from '../lib/roomFormat'
 import MessageActionMenu from './MessageActionMenu'
+import RoomMembersBadge from './RoomMembersBadge'
 
 function formatTime(dateStr) {
   const d = new Date(dateStr)
@@ -20,7 +21,7 @@ function messageContent(msg) {
   return msg.content || msg.msg || ''
 }
 
-export default function MessageArea({ room }) {
+export default function MessageArea({ room, onOpenMembers, membersRefreshKey }) {
   const {
     messages,
     hasLoadedHistory,
@@ -80,9 +81,13 @@ export default function MessageArea({ room }) {
     <div className="message-area">
       <div className="message-area-header">
         <span className="message-area-room-name">
-          {roomPrefix(room.type)}{room.name}
+          {roomPrefix(room.type)}{roomDisplayName(room)}
         </span>
-        <span className="message-area-members">{room.userCount} members</span>
+        <RoomMembersBadge
+          room={room}
+          onOpen={onOpenMembers}
+          refreshKey={membersRefreshKey}
+        />
       </div>
       <div className="message-list" ref={listRef}>
         {!hasLoadedHistory && !historyError && <div className="message-loading">Loading messages...</div>}

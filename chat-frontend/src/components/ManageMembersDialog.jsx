@@ -1,20 +1,14 @@
 import { useState } from 'react'
 import AddMembersForm from './manageMembers/AddMembersForm'
-import RemoveMemberForm from './manageMembers/RemoveMemberForm'
-import RoleUpdateForm from './manageMembers/RoleUpdateForm'
-import RemoveOrgForm from './manageMembers/RemoveOrgForm'
+import MemberRoster from './manageMembers/MemberRoster'
 
 const TABS = [
-  { id: 'add', label: 'Add', Form: AddMembersForm },
-  { id: 'remove', label: 'Remove', Form: RemoveMemberForm },
-  { id: 'role', label: 'Role', Form: RoleUpdateForm },
-  { id: 'removeOrg', label: 'Remove Org', Form: RemoveOrgForm },
+  { id: 'roster', label: 'Members' },
+  { id: 'add', label: 'Add' },
 ]
 
 export default function ManageMembersDialog({ room, onClose }) {
-  const [mode, setMode] = useState('add')
-  const active = TABS.find((t) => t.id === mode)
-  const ActiveForm = active.Form
+  const [mode, setMode] = useState('roster')
 
   return (
     <div className="dialog-overlay" onClick={onClose}>
@@ -36,7 +30,7 @@ export default function ManageMembersDialog({ room, onClose }) {
           ))}
         </div>
 
-        <ActiveForm room={room} />
+        {mode === 'roster' ? <MemberRoster room={room} /> : <AddMembersForm room={room} />}
 
         <div className="dialog-actions manage-members-footer">
           <button type="button" className="dialog-cancel" onClick={onClose}>

@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid'
 import { useNats } from '../context/NatsContext'
 import { msgSend } from '../lib/subjects'
 import { generateMessageID } from '../lib/idgen'
+import { roomPrefix, roomDisplayName } from '../lib/roomFormat'
 
 export default function MessageInput({ room }) {
   const { user, publish } = useNats()
@@ -41,7 +42,7 @@ export default function MessageInput({ room }) {
         value={text}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={handleKeyDown}
-        placeholder={room ? `Message #${room.name}` : 'Select a room...'}
+        placeholder={room ? `Message ${roomPrefix(room.type)}${roomDisplayName(room)}` : 'Select a room...'}
         disabled={!room}
       />
       <button type="submit" disabled={!room || !text.trim()}>

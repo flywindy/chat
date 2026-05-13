@@ -629,6 +629,142 @@ body {
   margin-top: 0.75rem;
 }
 
+/* Roster (Members tab body): single list of orgs first then individuals.
+   Each row is split into two flex areas — `.roster-row-info` on the left
+   (name + secondary + optional owner badge) and `.roster-row-actions` on
+   the right (buttons or empty for non-owner viewers). justify-content
+   space-between keeps the same visual layout regardless of viewer role,
+   so non-owners see the same spacing pattern as owners — the actions
+   area just collapses to zero width when empty. */
+.roster-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.roster-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.5rem 0.75rem;
+  background: var(--bg-elevated);
+  border-radius: 4px;
+}
+
+.roster-row-info {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.roster-row-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+.roster-name {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.roster-secondary {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.roster-badge {
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  font-size: 0.7rem;
+  padding: 0.1rem 0.5rem;
+  border-radius: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.roster-empty {
+  color: var(--text-muted);
+  font-style: italic;
+  padding: 1rem 0;
+}
+
+.roster-loading {
+  color: var(--text-muted);
+  padding: 0.75rem;
+}
+
+/* Expandable org rows. The li switches to column layout so the children
+   <ul> can sit underneath the existing info+actions header. The toggle
+   button is styled as a label, not a button, so the org row looks like a
+   regular member row with a chevron prefix. */
+.roster-row-org {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.roster-row-org-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.roster-org-toggle {
+  background: transparent;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.roster-org-toggle:hover .roster-name {
+  text-decoration: underline;
+}
+
+.roster-chevron {
+  display: inline-block;
+  width: 1em;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+/* Nested member list under an expanded org. Indented with a subtle left
+   border so the visual nesting is clear; each child has no action area
+   because the parent org row's Remove already owns the lifecycle. */
+.roster-org-children {
+  list-style: none;
+  margin: 0.5rem 0 0 1.5rem;
+  padding: 0 0 0 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  border-left: 2px solid var(--border-subtle);
+}
+
+.roster-org-child {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.25rem 0.5rem;
+}
+
+.roster-org-status {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
 /* Header search bar — Teams-style centered overlay. Absolute positioning
  * keeps it anchored to the header center regardless of how wide the title
  * or right-side controls grow. */
@@ -881,6 +1017,24 @@ body {
   flex-direction: column;
   flex: 1;
   min-width: 0;
+}
+
+/* The members-count badge lives in the message-area-header, replacing
+   the old static "N members" span. Same channel-only visibility as before;
+   clicking it opens ManageMembersDialog. */
+.room-members-badge {
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  padding: 2px 10px;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.room-members-badge:hover {
+  background: var(--bg-input);
+  color: var(--text-primary);
 }
 
 .in-room-search {

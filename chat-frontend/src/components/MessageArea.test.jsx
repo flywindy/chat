@@ -14,6 +14,16 @@ beforeEach(() => {
 vi.mock('../context/RoomEventsContext', () => ({
   useRoomEvents: vi.fn(),
 }))
+// Badge lives inside MessageArea's header now. Stub it so MessageArea
+// tests don't have to set up NatsContext + a member.list responder; the
+// badge's own test file (RoomMembersBadge.test.jsx) covers the fetch +
+// click in isolation.
+vi.mock('./RoomMembersBadge', () => ({
+  default: ({ room, onOpen }) =>
+    room?.type === 'channel' ? (
+      <button onClick={onOpen}>{`${room.userCount ?? 0} members`}</button>
+    ) : null,
+}))
 
 vi.mock('../context/NatsContext', () => ({
   useNats: vi.fn(),
@@ -63,6 +73,30 @@ describe('MessageArea', () => {
     })
     render(<MessageArea room={{ id: 'r1', name: 'general', type: 'channel', userCount: 2 }} />)
     expect(loadHistory).toHaveBeenCalled()
+  })
+
+  it('renders the members badge in the header and forwards clicks to onOpenMembers', () => {
+    useRoomEvents.mockReturnValue({
+      messages: [], hasLoadedHistory: true, historyError: null, loadHistory: vi.fn().mockResolvedValue(),
+    })
+    const onOpenMembers = vi.fn()
+    render(
+      <MessageArea
+        room={{ id: 'r1', name: 'general', type: 'channel', userCount: 3 }}
+        onOpenMembers={onOpenMembers}
+      />
+    )
+    const btn = screen.getByRole('button', { name: /3 members/ })
+    fireEvent.click(btn)
+    expect(onOpenMembers).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not render the members badge for DM rooms (membership is fixed)', () => {
+    useRoomEvents.mockReturnValue({
+      messages: [], hasLoadedHistory: true, historyError: null, loadHistory: vi.fn().mockResolvedValue(),
+    })
+    render(<MessageArea room={{ id: 'r-dm', type: 'dm', userCount: 2 }} onOpenMembers={vi.fn()} />)
+    expect(screen.queryByRole('button', { name: /members$/ })).not.toBeInTheDocument()
   })
 
   it('shows the jump-to-latest pill in historical mode and resets to live on click', () => {
