@@ -1004,3 +1004,99 @@ body {
   color: var(--text-muted);
   font-size: 11px;
 }
+
+/* Message action menu (kebab + popover + read-receipt + reader tooltip) */
+.message {
+  position: relative;
+}
+
+.message-action-menu {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+}
+
+.message-action-kebab {
+  background: transparent;
+  border: 0;
+  padding: 2px 6px;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  color: var(--text-muted);
+  opacity: 0;
+  transition: opacity 80ms ease;
+}
+
+.message:hover .message-action-kebab,
+.message-action-kebab:focus-visible,
+.message-action-menu:focus-within .message-action-kebab {
+  opacity: 1;
+}
+
+.message-action-popover {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  min-width: 180px;
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  box-shadow: var(--shadow-dialog);
+  padding: 4px 0;
+  z-index: 20;
+}
+
+.read-receipt-row {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  padding: 6px 12px;
+  font: inherit;
+  color: inherit;
+  cursor: default;
+  position: relative;
+}
+
+.read-receipt-row[role='menuitem']:not([aria-disabled='true']) {
+  cursor: help;
+}
+
+.read-receipt-row[role='menuitem']:not([aria-disabled='true']):hover,
+.read-receipt-row[role='menuitem']:not([aria-disabled='true']):focus-visible {
+  background: var(--bg-hover);
+  outline: none;
+}
+
+.read-receipt-loading,
+.read-receipt-empty {
+  color: var(--text-muted);
+}
+
+.read-receipt-error {
+  color: var(--status-error);
+}
+
+.read-receipt-tooltip {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin: 4px 0 0 0;
+  padding: 6px 10px;
+  list-style: none;
+  min-width: 160px;
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  box-shadow: var(--shadow-dialog);
+  z-index: 21;
+}
+
+.read-receipt-tooltip li {
+  padding: 2px 0;
+  white-space: nowrap;
+}

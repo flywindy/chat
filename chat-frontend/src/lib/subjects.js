@@ -53,6 +53,10 @@ export function memberRoleUpdate(account, roomId, siteId) {
   return `chat.user.${account}.request.room.${roomId}.${siteId}.member.role-update`
 }
 
+export function readReceipt(account, roomId, siteId) {
+  return `chat.user.${account}.request.room.${roomId}.${siteId}.message.read-receipt`
+}
+
 export function searchRooms(account) {
   return `chat.user.${account}.request.search.rooms`
 }

@@ -8,6 +8,7 @@ import {
   searchRooms,
   searchMessages,
   msgSurrounding,
+  readReceipt,
 } from './subjects'
 
 describe('subjects', () => {
@@ -48,6 +49,12 @@ describe('subjects', () => {
   it('msgSurrounding builds the surrounding-messages request subject', () => {
     expect(msgSurrounding('alice', 'r1', 'site-A')).toBe(
       'chat.user.alice.request.room.r1.site-A.msg.surrounding'
+    )
+  })
+
+  it('readReceipt builds the request subject for the read-receipt RPC', () => {
+    expect(readReceipt('alice', 'room1', 'site1')).toBe(
+      'chat.user.alice.request.room.room1.site1.message.read-receipt'
     )
   })
 })

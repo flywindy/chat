@@ -5,13 +5,22 @@ import { BUFFER_MODE } from '../lib/roomEventsReducer'
 
 beforeEach(() => {
   window.HTMLElement.prototype.scrollIntoView = vi.fn()
+  useNats.mockReturnValue({
+    user: { account: 'alice', siteId: 'siteA' },
+    request: vi.fn().mockReturnValue(new Promise(() => {})),
+  })
 })
 
 vi.mock('../context/RoomEventsContext', () => ({
   useRoomEvents: vi.fn(),
 }))
 
+vi.mock('../context/NatsContext', () => ({
+  useNats: vi.fn(),
+}))
+
 import { useRoomEvents } from '../context/RoomEventsContext'
+import { useNats } from '../context/NatsContext'
 
 describe('MessageArea', () => {
   it('shows the empty-state when no room is selected', () => {
@@ -147,6 +156,32 @@ describe('MessageArea', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('renders MessageActionMenu kebab for the current user\'s own messages', () => {
+    useRoomEvents.mockReturnValue({
+      messages: [
+        { id: 'm1', content: 'mine', createdAt: '2026-04-17T12:00:00Z', sender: { account: 'alice', engName: 'Alice' } },
+      ],
+      hasLoadedHistory: true,
+      historyError: null,
+      loadHistory: vi.fn().mockResolvedValue(),
+    })
+    render(<MessageArea room={{ id: 'r1', name: 'general', type: 'channel', userCount: 2 }} />)
+    expect(screen.getByRole('button', { name: /Message actions/i })).toBeInTheDocument()
+  })
+
+  it('does not render a kebab for other users\' messages', () => {
+    useRoomEvents.mockReturnValue({
+      messages: [
+        { id: 'm1', content: 'theirs', createdAt: '2026-04-17T12:00:00Z', sender: { account: 'bob', engName: 'Bob' } },
+      ],
+      hasLoadedHistory: true,
+      historyError: null,
+      loadHistory: vi.fn().mockResolvedValue(),
+    })
+    render(<MessageArea room={{ id: 'r1', name: 'general', type: 'channel', userCount: 2 }} />)
+    expect(screen.queryByRole('button', { name: /Message actions/i })).not.toBeInTheDocument()
   })
 
   it('does not auto-scroll to bottom while in historical mode', () => {

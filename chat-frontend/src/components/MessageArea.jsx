@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import { useRoomEvents } from '../context/RoomEventsContext'
 import { BUFFER_MODE } from '../lib/roomEventsReducer'
 import { roomPrefix } from '../lib/roomFormat'
+import MessageActionMenu from './MessageActionMenu'
 
 function formatTime(dateStr) {
   const d = new Date(dateStr)
@@ -91,6 +92,7 @@ export default function MessageArea({ room }) {
             <span className="message-sender">{senderName(msg)}</span>
             <span className="message-time">{formatTime(msg.createdAt)}</span>
             <div className="message-content">{messageContent(msg)}</div>
+            <MessageActionMenu message={msg} room={room} />
           </div>
         ))}
         <div ref={bottomRef} />
