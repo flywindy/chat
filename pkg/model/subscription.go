@@ -40,3 +40,27 @@ type Subscription struct {
 	ThreadUnread       []string         `json:"threadUnread,omitempty" bson:"threadUnread,omitempty"`
 	Alert              bool             `json:"alert" bson:"alert"`
 }
+
+// SubscriptionHRInfo carries the counterpart's HR-directory record on a
+// DM subscription. Used to render the DM-room display label
+// (engName + name) on the sidebar/header. All three fields are always
+// populated when the parent pointer is present.
+type SubscriptionHRInfo struct {
+	Account string `json:"account" bson:"account"`
+	Name    string `json:"name"    bson:"name"`
+	EngName string `json:"engName" bson:"engName"`
+}
+
+// DMSubscription is the wire/storage shape for DM-type subscriptions:
+// the base Subscription record plus the counterpart's HRInfo. The
+// embedded pointer flattens at JSON marshal time, so a DMSubscription
+// on the wire is a Subscription with one extra top-level `hrInfo` field.
+//
+// Backend emits this wrapper only for `RoomType == RoomTypeDM`
+// subscriptions; channels, botDMs, and discussions ship plain
+// Subscription (no hrInfo). Frontend mirrors this split in
+// chat-frontend/src/api/types.ts.
+type DMSubscription struct {
+	*Subscription
+	HRInfo *SubscriptionHRInfo `json:"hrInfo,omitempty" bson:"hrInfo,omitempty"`
+}

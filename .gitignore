@@ -48,3 +48,7 @@ bin/
 # Frontend
 node_modules/
 chat-frontend/dist/
+
+# Vitest cache (created when vitest is run from a non-package directory)
+.vite/
+chat-frontend/.vite/

@@ -1,0 +1,50 @@
+/* ────────────────────────────────────────────────────────────────
+   Thread panel (right rail)
+   ──────────────────────────────────────────────────────────────── */
+.thread-rightbar {
+  display: flex;
+  flex-direction: column;
+  width: 400px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  min-height: 0;
+}
+
+.thread-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-md) var(--space-lg);
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  min-height: 56px;
+}
+
+.thread-header-title {
+  font-weight: var(--font-semibold);
+  font-size: var(--text-md);
+  color: var(--text-primary);
+  letter-spacing: -0.01em;
+}
+
+.thread-header-close {
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  font-size: var(--text-lg);
+  color: var(--text-muted);
+  padding: var(--space-xs) var(--space-sm);
+  border-radius: var(--radius-sm);
+  line-height: 1;
+  transition: background var(--motion-fast) var(--easing),
+              color var(--motion-fast) var(--easing);
+}
+.thread-header-close:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.thread-rightbar .message-input-form {
+  border-top: 1px solid var(--border-subtle);
+}

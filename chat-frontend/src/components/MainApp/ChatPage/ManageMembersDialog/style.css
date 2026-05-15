@@ -1,0 +1,54 @@
+/* Manage Members dialog */
+.manage-members-dialog {
+  width: 520px;
+}
+
+.manage-members-tabs {
+  display: flex;
+  gap: var(--space-xs);
+  margin: 0 calc(-1 * var(--space-xl)) var(--space-md);
+  padding: 0 var(--space-xl);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.manage-members-tab {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  padding: var(--space-sm) var(--space-md);
+  font-size: var(--text-sm);
+  font-weight: var(--font-medium);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  transition: color var(--motion-fast) var(--easing),
+              border-color var(--motion-fast) var(--easing);
+}
+
+.manage-members-tab:hover {
+  color: var(--text-primary);
+}
+
+.manage-members-tab-active,
+.manage-members-tab-active:hover {
+  color: var(--text-primary);
+  border-bottom-color: var(--accent);
+}
+
+/* The footer Close-button row sits as a flex child of .dialog — the
+   dialog already supplies a --space-md gap between siblings, so adding
+   another margin-top here was stacking spacing on top of spacing. */
+.manage-members-footer {
+  margin-top: 0;
+}
+
+/* The ManageMembers tabs + form + footer are flex children of .dialog;
+   when the form itself contains MemberPicker + checkbox + actions we
+   want THOSE to have consistent spacing too. Without this the
+   checkbox is flush against the chip input and the inner Add-button
+   row collapses against the field. */
+.manage-members-dialog form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}

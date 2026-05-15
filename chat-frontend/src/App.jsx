@@ -1,9 +1,11 @@
 import { useEffect, useState, useCallback } from 'react'
-import { NatsProvider, useNats } from './context/NatsContext'
-import { RoomEventsProvider } from './context/RoomEventsContext'
-import LoginPage from './pages/LoginPage'
-import ChatPage from './pages/ChatPage'
-import OidcCallback from './pages/OidcCallback'
+import { NatsProvider, useNats } from '@/context/NatsContext'
+import { RoomEventsProvider } from '@/context/RoomEventsContext'
+import { ThreadEventsProvider } from '@/context/ThreadEventsContext'
+import LoginPage from '@/pages/LoginPage'
+import MainApp from '@/components/MainApp/MainApp'
+import OidcCallback from '@/pages/OidcCallback'
+import ErrorBoundary from '@/components/shared/ErrorBoundary'
 
 function AppContent() {
   const { connected } = useNats()
@@ -34,15 +36,21 @@ function AppContent() {
 
   return (
     <RoomEventsProvider>
-      <ChatPage />
+      <ThreadEventsProvider>
+        <MainApp />
+      </ThreadEventsProvider>
     </RoomEventsProvider>
   )
 }
 
 export default function App() {
+  // The boundary wraps NatsProvider so an error inside the provider's
+  // initial render (e.g. a malformed runtime config) also caught.
   return (
-    <NatsProvider>
-      <AppContent />
-    </NatsProvider>
+    <ErrorBoundary>
+      <NatsProvider>
+        <AppContent />
+      </NatsProvider>
+    </ErrorBoundary>
   )
 }

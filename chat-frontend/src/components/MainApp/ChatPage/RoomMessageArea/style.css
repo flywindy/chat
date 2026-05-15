@@ -1,0 +1,63 @@
+/* Message Area */
+.message-area {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bg-surface);
+}
+
+.message-area-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-muted);
+  font-size: var(--text-base);
+}
+
+.message-area-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-md) var(--space-lg);
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  flex-shrink: 0;
+}
+
+.message-area-room-name {
+  font-weight: var(--font-semibold);
+  font-size: var(--text-md);
+  color: var(--text-primary);
+}
+
+.message-area-members {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.jump-latest-pill {
+  position: absolute;
+  bottom: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: var(--space-xs) var(--space-md);
+  background: var(--accent);
+  border-radius: var(--radius-pill);
+  text-align: center;
+  box-shadow: var(--shadow-md);
+  z-index: 3;
+}
+
+.jump-latest-pill button {
+  background: none;
+  border: none;
+  color: var(--text-on-accent);
+  cursor: pointer;
+  font-size: var(--text-sm);
+  font-weight: var(--font-medium);
+}
+
+.jump-latest-pill button:hover {
+  text-decoration: underline;
+}

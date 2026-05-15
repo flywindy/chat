@@ -1,0 +1,25 @@
+/* The members-count badge lives in the message-area-header, replacing
+   the old static "N members" span. Same channel-only visibility as before;
+   clicking it opens ManageMembersDialog. */
+.room-members-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  padding: var(--space-2xs) var(--space-md);
+  font-size: var(--text-sm);
+  font-weight: var(--font-medium);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background var(--motion-fast) var(--easing),
+              color var(--motion-fast) var(--easing),
+              border-color var(--motion-fast) var(--easing);
+}
+
+.room-members-badge:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border-color: var(--border-strong);
+}

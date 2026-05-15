@@ -461,6 +461,94 @@ func TestSubscriptionJSON_ThreadUnreadOmittedAlertAlwaysPresent(t *testing.T) {
 	assert.False(t, dst.Alert)
 }
 
+func TestDMSubscriptionJSON_EmbeddedFlattensWithHRInfo(t *testing.T) {
+	// Verify Go's embedded *Subscription serialisation flattens onto the
+	// top-level object — the frontend depends on this in api/types.ts
+	// (DMSubscription extends Subscription).
+	d := model.DMSubscription{
+		Subscription: &model.Subscription{
+			ID:       "s-dm-1",
+			User:     model.SubscriptionUser{ID: "u-alice", Account: "alice"},
+			RoomID:   "r-dm-1",
+			SiteID:   "site-A",
+			Roles:    []model.Role{model.RoleMember},
+			Name:     "bob-dm",
+			RoomType: model.RoomTypeDM,
+			JoinedAt: time.Date(2026, 5, 14, 0, 0, 0, 0, time.UTC),
+		},
+		HRInfo: &model.SubscriptionHRInfo{
+			Account: "bob",
+			Name:    "鮑勃",
+			EngName: "Bob Chen",
+		},
+	}
+
+	data, err := json.Marshal(&d)
+	require.NoError(t, err)
+
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(data, &raw))
+
+	// Subscription fields must appear top-level (flattening).
+	assert.Equal(t, "s-dm-1", raw["id"])
+	assert.Equal(t, "r-dm-1", raw["roomId"])
+	assert.Equal(t, "dm", raw["roomType"])
+
+	// hrInfo is nested.
+	hr, ok := raw["hrInfo"].(map[string]any)
+	require.True(t, ok, "hrInfo must be a nested object on the wire")
+	assert.Equal(t, "bob", hr["account"])
+	assert.Equal(t, "鮑勃", hr["name"])
+	assert.Equal(t, "Bob Chen", hr["engName"])
+}
+
+func TestDMSubscriptionJSON_HRInfoOmittedWhenNil(t *testing.T) {
+	// `*SubscriptionHRInfo` with `omitempty` should disappear from the
+	// JSON when nil — channels/botDMs that share this wrapper shouldn't
+	// have a phantom hrInfo: null on the wire.
+	d := model.DMSubscription{
+		Subscription: &model.Subscription{
+			ID:       "s-c-1",
+			User:     model.SubscriptionUser{ID: "u-alice", Account: "alice"},
+			RoomID:   "r-c-1",
+			SiteID:   "site-A",
+			Roles:    []model.Role{model.RoleMember},
+			RoomType: model.RoomTypeChannel,
+			JoinedAt: time.Date(2026, 5, 14, 0, 0, 0, 0, time.UTC),
+		},
+	}
+
+	data, err := json.Marshal(&d)
+	require.NoError(t, err)
+
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(data, &raw))
+	_, hasHRInfo := raw["hrInfo"]
+	assert.False(t, hasHRInfo, "nil HRInfo must be omitted from JSON")
+}
+
+func TestSubscriptionHRInfoJSON(t *testing.T) {
+	// All three fields are required strings (no omitempty) — when the
+	// HRInfo pointer is non-nil, every field is on the wire.
+	hr := model.SubscriptionHRInfo{
+		Account: "bob",
+		Name:    "鮑勃",
+		EngName: "Bob Chen",
+	}
+	data, err := json.Marshal(&hr)
+	require.NoError(t, err)
+
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(data, &raw))
+	assert.Equal(t, "bob", raw["account"])
+	assert.Equal(t, "鮑勃", raw["name"])
+	assert.Equal(t, "Bob Chen", raw["engName"])
+
+	var dst model.SubscriptionHRInfo
+	require.NoError(t, json.Unmarshal(data, &dst))
+	assert.Equal(t, hr, dst)
+}
+
 func TestRoomBotDMRoundtrip(t *testing.T) {
 	r := model.Room{
 		ID:        "r1",

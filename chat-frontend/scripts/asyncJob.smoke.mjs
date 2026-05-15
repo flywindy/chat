@@ -1,15 +1,17 @@
-// Wire-level smoke test for src/lib/asyncJob.js against a real NATS server.
-// Not part of the standing test suite — invoke ad-hoc when verifying that
-// the helper survives contact with the actual nats.ws WebSocket transport,
-// header serialization, and response-subject delivery.
+// Wire-level smoke test for api/_transport/asyncJob.ts against a real
+// NATS server. Not part of the standing test suite — invoke ad-hoc when
+// verifying that the helper survives contact with the actual nats.ws
+// WebSocket transport, header serialization, and response-subject
+// delivery.
 //
 // Prereqs: a NATS server with WebSocket on ws://localhost:8443.
 //   /root/go/bin/nats-server -c /tmp/nats.conf
 //
-// Usage: node scripts/asyncJob.smoke.mjs
+// Usage: npm run smoke:asyncjob (uses Node --experimental-strip-types
+// to load the .ts source directly).
 
 import { connect, StringCodec } from 'nats.ws'
-import { requestWithAsyncResult, ASYNC_JOB_ERROR_KINDS } from '../src/lib/asyncJob.js'
+import { requestWithAsyncResult, ASYNC_JOB_ERROR_KINDS } from '../src/api/_transport/asyncJob.ts'
 import { isDMExistsReply } from '../src/lib/constants.js'
 
 const WS_URL = process.env.NATS_WS_URL || 'ws://localhost:8443'

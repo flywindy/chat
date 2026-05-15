@@ -1,0 +1,61 @@
+.chat-page {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+.chat-page .message-area {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.chat-page .message-list {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.chat-room-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  padding: var(--space-md) var(--space-lg);
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  min-height: 56px;
+}
+.chat-room-header .chat-room-name {
+  font-weight: var(--font-semibold);
+  font-size: var(--text-md);
+  color: var(--text-primary);
+  letter-spacing: -0.01em;
+}
+.chat-room-header .chat-room-header-spacer {
+  flex: 1;
+}
+
+.chat-page-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  /* Internal scrolling owned by .chat-main-content and right-rail occupants
+     (InRoomSearch today, ThreadRightBar in Chapter 7). */
+}
+
+/* In-room search (Ctrl+F): Teams-style right rail. The host wrapper uses
+ * flexbox so MessageArea + MessageInput stay full-width on the left and
+ * the panel slots in as a fixed-width column on the right. */
+.chat-main-with-side-panel {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.chat-main-content {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}

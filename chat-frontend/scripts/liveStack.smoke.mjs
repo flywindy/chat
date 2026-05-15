@@ -13,12 +13,13 @@
 //   * room-service + room-worker connected to NATS + Mongo
 //   * Users alice/bob/charlie seeded in Mongo
 //
-// Usage: npx vite-node scripts/liveStack.smoke.mjs
+// Usage: npm run smoke:livestack (Node 22+ --experimental-strip-types
+// loads the .ts modules in api/_transport/ directly).
 
 import { connect, StringCodec, jwtAuthenticator } from 'nats.ws'
 import { createUser } from 'nkeys.js'
-import { requestWithAsyncResult } from '../src/lib/asyncJob.js'
-import { roomCreate, memberList } from '../src/lib/subjects.js'
+import { requestWithAsyncResult } from '../src/api/_transport/asyncJob.ts'
+import { roomCreate, memberList } from '../src/api/_transport/subjects.ts'
 import { isDMExistsReply } from '../src/lib/constants.js'
 
 const AUTH_URL = process.env.AUTH_URL || 'http://localhost:8080'

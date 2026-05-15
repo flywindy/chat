@@ -1,0 +1,207 @@
+/* ---------------------------------------------------------------
+   Message row (new design: avatar + body, own messages mirror right).
+   Each row is a flex row with an avatar circle on the left (only for
+   OTHER users' messages — own messages omit it) and a body column on
+   the right containing header + bubble + extras. `.message-row-own`
+   reverses the layout so own messages right-align with no avatar.
+   Hover-revealed actions are scoped to .message-bubble-wrap rather
+   than the row, so the avatar / header area stays inert.
+--------------------------------------------------------------- */
+.message-row {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-md);
+  padding: var(--space-sm) var(--space-lg);
+}
+.message-row + .message-row {
+  padding-top: var(--space-xs);
+}
+
+.message-row-avatar {
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  border-radius: var(--radius-circle);
+  background: var(--accent-soft);
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
+  text-transform: uppercase;
+  user-select: none;
+}
+
+.message-row-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2xs);
+}
+
+.message-row .message-header {
+  display: flex;
+  gap: var(--space-sm);
+  align-items: baseline;
+  font-size: var(--text-sm);
+}
+.message-sender {
+  color: var(--text-primary);
+  font-weight: var(--font-semibold);
+}
+.message-time {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.message-bubble-wrap {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+}
+
+.message-bubble {
+  display: inline-block;
+  max-width: 100%;
+  padding: var(--space-sm) var(--space-md);
+  background: var(--bubble-other);
+  color: var(--text-primary);
+  border-radius: var(--radius-lg);
+  line-height: var(--line-normal);
+  word-wrap: break-word;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+/* QuotedBlock sits as a sibling of the bubble so hovering it doesn't open
+   the action toolbar. CSS keeps it visually attached to the bubble's top. */
+.message-row-body > .quoted-block-bubble {
+  display: block;
+  align-self: flex-start;
+  max-width: min(100%, 420px);
+  margin: 0;
+  padding: var(--space-xs) var(--space-md);
+  background: var(--bg-elevated);
+  border-left: 3px solid var(--accent);
+  border-top-left-radius: var(--radius-md);
+  border-top-right-radius: var(--radius-md);
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: var(--text-sm);
+  transition: background var(--motion-fast) var(--easing);
+}
+.message-row-body > .quoted-block-bubble:hover {
+  background: var(--bg-hover);
+}
+.message-row-own .message-row-body > .quoted-block-bubble {
+  align-self: flex-end;
+  border-left: 0;
+  border-right: 3px solid var(--accent);
+}
+.message-row-body > .quoted-block-bubble .quoted-block-sender {
+  font-weight: var(--font-semibold);
+  color: var(--text-primary);
+  font-size: var(--text-xs);
+}
+.message-row-body > .quoted-block-bubble .quoted-block-content {
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+/* Own messages: avatar omitted, right-aligned, distinct bubble color. */
+.message-row-own {
+  flex-direction: row-reverse;
+}
+.message-row-own .message-row-body {
+  align-items: flex-end;
+}
+.message-row-own .message-header {
+  flex-direction: row-reverse;
+}
+.message-row-own .message-bubble {
+  background: var(--bubble-own);
+  color: var(--text-primary);
+}
+
+/* Inline edit input — bubble-shaped chrome so the row's rhythm doesn't
+   break mid-edit. */
+.message-edit-input {
+  display: inline-block;
+  max-width: 100%;
+  min-width: 200px;
+  padding: var(--space-sm) var(--space-md);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-lg);
+  font: inherit;
+  line-height: var(--line-normal);
+}
+.message-edit-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: var(--bg-surface);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.message-edited {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  font-style: italic;
+}
+.message-row-own .message-actions-host {
+  left: auto;
+  right: 0;
+}
+
+.message-row-failed {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-top: var(--space-2xs);
+  padding: var(--space-xs) var(--space-sm);
+  background: var(--status-error-bg);
+  border: 1px solid var(--status-error);
+  border-radius: var(--radius-md);
+  color: var(--status-error);
+  font-size: var(--text-xs);
+}
+.message-row-failed-label {
+  font-weight: var(--font-medium);
+}
+.message-row-failed button {
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  color: var(--status-error);
+  padding: var(--space-2xs) var(--space-xs);
+  border-radius: var(--radius-sm);
+}
+.message-row-failed button:hover {
+  background: var(--status-error);
+  color: var(--text-on-accent);
+}
+
+.message-reply-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  margin-top: var(--space-xs);
+  padding: var(--space-2xs) var(--space-md);
+  background: var(--accent-soft);
+  color: var(--accent);
+  border: 0;
+  border-radius: var(--radius-pill);
+  font-size: var(--text-xs);
+  font-weight: var(--font-medium);
+  cursor: pointer;
+  transition: background var(--motion-fast) var(--easing);
+}
+.message-reply-badge:hover { background: var(--accent-soft-hover); }

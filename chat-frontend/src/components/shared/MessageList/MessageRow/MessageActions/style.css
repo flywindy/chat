@@ -1,0 +1,66 @@
+/* Hover-revealed action toolbar (Reply / Edit / Delete / Thread). Mount
+   state is driven by useHoverWithDelay in MessageRow — when not hovered,
+   the toolbar isn't in the DOM. So no opacity / pointer-events / transition
+   gymnastics here; just position the host correctly.
+
+   Smart positioning: the bubble's far edge always anchors the toolbar so
+   the toolbar extends INTO the row (toward open space), never outward off
+   the viewport.
+   - Others' messages: bubble on the LEFT, toolbar anchored `left: 0` of the
+     bubble, extends RIGHTWARD into the body.
+   - Own messages:    bubble on the RIGHT, toolbar anchored `right: 0` of
+     the bubble, extends LEFTWARD into the body. */
+.message-actions-host {
+  position: absolute;
+  top: -18px;
+  left: 0;
+  z-index: 2;
+}
+.message-actions-host .message-actions {
+  display: flex;
+  gap: var(--space-2xs);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: var(--space-2xs);
+  box-shadow: var(--shadow-md);
+}
+.message-action {
+  padding: var(--space-xs) var(--space-sm);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  font-weight: var(--font-medium);
+  line-height: 1.2;
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+  transition: background var(--motion-fast) var(--easing),
+              color var(--motion-fast) var(--easing);
+}
+.message-action:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.message-action-delete:hover {
+  background: var(--status-error-bg);
+  color: var(--status-error);
+}
+
+/* Kebab is now rendered as the trailing button INSIDE .message-actions
+   (the hover-revealed toolbar). It's no longer a standalone floating
+   element — its visibility is inherited from the toolbar's opacity. */
+.message-actions .message-action-menu {
+  position: relative;
+  display: inline-flex;
+}
+/* Popover (read-receipts) anchors to the kebab button. The kebab only
+   appears on own messages, where the toolbar is right-anchored to the
+   bubble's right edge — so the kebab sits at the bubble's right corner.
+   `right: 0` of the kebab makes the popover extend LEFTWARD into the
+   body so it can't escape the viewport. */
+.message-actions .message-action-popover {
+  top: calc(100% + 4px);
+  right: 0;
+}

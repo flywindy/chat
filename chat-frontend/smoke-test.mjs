@@ -1,8 +1,15 @@
 // Programmatic smoke test for chat-frontend integration
 // Tests: auth -> NATS WebSocket connect -> send message -> receive message -> request/reply
+//
+// Run with `npm run smoke` (uses Node's --experimental-strip-types for the
+// .ts subject builders in api/_transport). Requires a live local stack
+// (auth-service on :8080, NATS WS on :4223).
 import { connect, StringCodec, jwtAuthenticator } from 'nats.ws'
 import { createUser } from 'nkeys.js'
-import { roomEvent, roomsList, userRoomEvent } from './src/lib/subjects.js'
+// Reach into `api/_transport/` directly — smoke tests operate at the wire
+// layer (raw subjects + connections) so the public api/ barrel doesn't
+// add value here. Production code stays behind the barrel.
+import { roomEvent, roomsList, userRoomEvent } from './src/api/_transport/subjects.ts'
 
 const sc = StringCodec()
 const AUTH_URL = 'http://localhost:8080'

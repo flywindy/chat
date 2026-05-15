@@ -1,0 +1,32 @@
+/* System messages (room_created, members_added, …) render as a centered
+   strip that breaks out of the normal sender+bubble rhythm. The muted
+   colour + small type reads as metadata, not conversation. */
+.system-message-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-sm);
+  padding: var(--space-xs) var(--space-lg);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  text-align: center;
+}
+
+.system-message-text {
+  font-weight: var(--font-medium);
+}
+
+.system-message-time {
+  opacity: 0.75;
+}
+
+.system-message-text::before,
+.system-message-text::after {
+  content: '';
+  display: inline-block;
+  vertical-align: middle;
+  width: 32px;
+  height: 1px;
+  background: var(--border-subtle);
+  margin: 0 var(--space-sm);
+}

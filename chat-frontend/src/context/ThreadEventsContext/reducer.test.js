@@ -1,0 +1,193 @@
+import { describe, it, expect } from 'vitest'
+import { threadEventsReducer, initialState } from './reducer'
+
+const parent = { roomId: 'r1', siteId: 's1', messageId: 'p1', createdAtMs: 1000 }
+
+describe('threadEventsReducer — OPEN_THREAD', () => {
+  it('sets activeParent and flags loading', () => {
+    const out = threadEventsReducer(initialState, { type: 'OPEN_THREAD', parent })
+    expect(out.activeParent).toEqual(parent)
+    expect(out.historyLoading).toBe(true)
+    expect(out.messages).toEqual([])
+    expect(out.hasLoadedHistory).toBe(false)
+    expect(out.historyError).toBe(null)
+  })
+
+  it('short-circuits when the same parent is already active', () => {
+    const seed = { ...initialState, activeParent: parent, messages: [{ id: 'r1' }] }
+    const out = threadEventsReducer(seed, { type: 'OPEN_THREAD', parent })
+    expect(out).toBe(seed)
+  })
+
+  it('switches to a different parent and clears prior state', () => {
+    const seed = { ...initialState, activeParent: parent, messages: [{ id: 'old' }], hasLoadedHistory: true }
+    const next = { ...parent, messageId: 'p2' }
+    const out = threadEventsReducer(seed, { type: 'OPEN_THREAD', parent: next })
+    expect(out.activeParent).toEqual(next)
+    expect(out.messages).toEqual([])
+    expect(out.hasLoadedHistory).toBe(false)
+    expect(out.historyLoading).toBe(true)
+  })
+})
+
+describe('threadEventsReducer — CLOSE_THREAD', () => {
+  it('resets to initialState', () => {
+    const seed = { ...initialState, activeParent: parent, messages: [{ id: 'x' }] }
+    expect(threadEventsReducer(seed, { type: 'CLOSE_THREAD' })).toEqual(initialState)
+  })
+})
+
+describe('threadEventsReducer — HISTORY_LOADING', () => {
+  it('sets historyLoading=true when dispatched for the active parent', () => {
+    const open = threadEventsReducer(initialState, { type: 'OPEN_THREAD', parent })
+    const cleared = { ...open, historyLoading: false }
+    const out = threadEventsReducer(cleared, { type: 'HISTORY_LOADING', parentId: 'p1' })
+    expect(out.historyLoading).toBe(true)
+  })
+
+  it('is ignored for a non-active parent', () => {
+    const open = threadEventsReducer(initialState, { type: 'OPEN_THREAD', parent })
+    const cleared = { ...open, historyLoading: false }
+    const out = threadEventsReducer(cleared, { type: 'HISTORY_LOADING', parentId: 'other' })
+    expect(out).toBe(cleared)
+  })
+})
+
+describe('threadEventsReducer — HISTORY_LOADED', () => {
+  const open = threadEventsReducer(initialState, { type: 'OPEN_THREAD', parent })
+
+  it('hydrates messages from the response', () => {
+    const out = threadEventsReducer(open, {
+      type: 'HISTORY_LOADED',
+      parentId: 'p1',
+      resp: { messages: [{ id: 'r1' }, { id: 'r2' }], hasNext: false, nextCursor: null },
+    })
+    expect(out.messages).toEqual([{ id: 'r1' }, { id: 'r2' }])
+    expect(out.hasLoadedHistory).toBe(true)
+    expect(out.historyLoading).toBe(false)
+    expect(out.historyError).toBe(null)
+    expect(out.hasNext).toBe(false)
+    expect(out.nextCursor).toBe(null)
+  })
+
+  it('ignores results for a non-active parent', () => {
+    const out = threadEventsReducer(open, {
+      type: 'HISTORY_LOADED',
+      parentId: 'other',
+      resp: { messages: [{ id: 'r1' }], hasNext: false, nextCursor: null },
+    })
+    expect(out).toBe(open)
+  })
+
+  it('preserves any optimistic _local rows when merging history', () => {
+    const seeded = { ...open, messages: [{ id: 'opt', _local: true, content: 'mine' }] }
+    const out = threadEventsReducer(seeded, {
+      type: 'HISTORY_LOADED',
+      parentId: 'p1',
+      resp: { messages: [{ id: 'r-from-server' }], hasNext: false, nextCursor: null },
+    })
+    const ids = out.messages.map((m) => m.id)
+    expect(ids).toContain('opt')
+    expect(ids).toContain('r-from-server')
+  })
+})
+
+describe('threadEventsReducer — HISTORY_FAILED', () => {
+  it('sets historyError, clears historyLoading', () => {
+    const open = threadEventsReducer(initialState, { type: 'OPEN_THREAD', parent })
+    const out = threadEventsReducer(open, { type: 'HISTORY_FAILED', parentId: 'p1', error: 'nope' })
+    expect(out.historyError).toBe('nope')
+    expect(out.historyLoading).toBe(false)
+  })
+
+  it('ignores failures for a non-active parent', () => {
+    const open = threadEventsReducer(initialState, { type: 'OPEN_THREAD', parent })
+    const out = threadEventsReducer(open, { type: 'HISTORY_FAILED', parentId: 'other', error: 'x' })
+    expect(out).toBe(open)
+  })
+})
+
+describe('threadEventsReducer — REPLY_SENT_LOCAL', () => {
+  it('appends an optimistic message with _local: true', () => {
+    const open = threadEventsReducer(initialState, { type: 'OPEN_THREAD', parent })
+    const out = threadEventsReducer(open, {
+      type: 'REPLY_SENT_LOCAL',
+      message: { id: 'opt', content: 'hi', _local: true },
+    })
+    expect(out.messages).toEqual([{ id: 'opt', content: 'hi', _local: true }])
+  })
+
+  it('dedupes by id (no double-append)', () => {
+    const open = threadEventsReducer(initialState, { type: 'OPEN_THREAD', parent })
+    const once = threadEventsReducer(open, { type: 'REPLY_SENT_LOCAL', message: { id: 'opt', _local: true } })
+    const twice = threadEventsReducer(once, { type: 'REPLY_SENT_LOCAL', message: { id: 'opt', _local: true } })
+    expect(twice.messages).toHaveLength(1)
+  })
+})
+
+describe('threadEventsReducer — REPLY_SEND_FAILED / REPLY_RETRIED / REPLY_DISMISSED', () => {
+  const open = threadEventsReducer(initialState, { type: 'OPEN_THREAD', parent })
+  const sent = threadEventsReducer(open, {
+    type: 'REPLY_SENT_LOCAL',
+    message: { id: 'opt', _local: true, content: 'x' },
+  })
+
+  it('REPLY_SEND_FAILED marks _status: "failed" on the matching id', () => {
+    const out = threadEventsReducer(sent, { type: 'REPLY_SEND_FAILED', messageId: 'opt', error: 'nope' })
+    expect(out.messages[0]._status).toBe('failed')
+  })
+
+  it('REPLY_RETRIED clears _status on the matching id', () => {
+    const failed = threadEventsReducer(sent, { type: 'REPLY_SEND_FAILED', messageId: 'opt', error: 'nope' })
+    const out = threadEventsReducer(failed, { type: 'REPLY_RETRIED', messageId: 'opt' })
+    expect(out.messages[0]._status).toBeUndefined()
+  })
+
+  it('REPLY_DISMISSED removes the row', () => {
+    const failed = threadEventsReducer(sent, { type: 'REPLY_SEND_FAILED', messageId: 'opt', error: 'nope' })
+    const out = threadEventsReducer(failed, { type: 'REPLY_DISMISSED', messageId: 'opt' })
+    expect(out.messages).toEqual([])
+  })
+})
+
+describe('threadEventsReducer — RESET', () => {
+  it('returns to initialState', () => {
+    const seed = { ...initialState, activeParent: parent, messages: [{ id: 'x' }] }
+    expect(threadEventsReducer(seed, { type: 'RESET' })).toEqual(initialState)
+  })
+})
+
+describe('threadEventsReducer — REPLY_EDITED_LOCAL', () => {
+  it('updates content + editedAt on the matching message', () => {
+    const open = threadEventsReducer(initialState, { type: 'OPEN_THREAD', parent })
+    const seeded = { ...open, messages: [{ id: 'r1', content: 'old' }, { id: 'r2', content: 'other' }] }
+    const out = threadEventsReducer(seeded, {
+      type: 'REPLY_EDITED_LOCAL', messageId: 'r1', content: 'new', editedAt: '2026-05-13T12:00:00Z',
+    })
+    expect(out.messages[0]).toEqual({ id: 'r1', content: 'new', editedAt: '2026-05-13T12:00:00Z' })
+    expect(out.messages[1]).toEqual({ id: 'r2', content: 'other' })
+  })
+
+  it('is a no-op when the messageId is not buffered', () => {
+    const open = threadEventsReducer(initialState, { type: 'OPEN_THREAD', parent })
+    const out = threadEventsReducer(open, {
+      type: 'REPLY_EDITED_LOCAL', messageId: 'unknown', content: 'x', editedAt: 't',
+    })
+    expect(out).toBe(open)
+  })
+})
+
+describe('threadEventsReducer — REPLY_DELETED_LOCAL', () => {
+  it('flags the matching reply as deleted', () => {
+    const open = threadEventsReducer(initialState, { type: 'OPEN_THREAD', parent })
+    const seeded = { ...open, messages: [{ id: 'r1', content: 'bye' }] }
+    const out = threadEventsReducer(seeded, { type: 'REPLY_DELETED_LOCAL', messageId: 'r1' })
+    expect(out.messages[0]).toEqual({ id: 'r1', content: 'bye', deleted: true })
+  })
+
+  it('is a no-op when messageId is not buffered', () => {
+    const open = threadEventsReducer(initialState, { type: 'OPEN_THREAD', parent })
+    const out = threadEventsReducer(open, { type: 'REPLY_DELETED_LOCAL', messageId: 'r1' })
+    expect(out).toBe(open)
+  })
+})

@@ -1,0 +1,167 @@
+/* Room List */
+.room-list {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bg-sidebar);
+  color: var(--text-secondary);
+}
+
+.room-list-header {
+  padding: var(--space-md) var(--space-md) var(--space-sm);
+  font-weight: var(--font-semibold);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.room-list-items {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-2xs) 0;
+}
+
+.room-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  margin: 0 var(--space-sm);
+  cursor: pointer;
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  transition: background var(--motion-fast) var(--easing),
+              color var(--motion-fast) var(--easing);
+}
+.room-item:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.room-item-selected,
+.room-item-selected:hover {
+  background: var(--bg-selected);
+  color: var(--text-primary);
+}
+
+.room-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-base);
+}
+
+.room-meta {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.room-list-empty {
+  padding: var(--space-md);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.room-list-error {
+  padding: var(--space-sm) var(--space-md);
+  font-size: var(--text-xs);
+  color: var(--status-error);
+}
+
+.create-room-btn {
+  padding: var(--space-sm) var(--space-md);
+  margin: var(--space-sm);
+  background: transparent;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-md);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  font-weight: var(--font-medium);
+  cursor: pointer;
+  text-align: center;
+  flex-shrink: 0;
+  transition: background var(--motion-fast) var(--easing),
+              border-color var(--motion-fast) var(--easing),
+              color var(--motion-fast) var(--easing);
+}
+
+.create-room-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* Unread + mention badges */
+.room-item-unread .room-name {
+  font-weight: var(--font-semibold);
+  color: var(--text-primary);
+}
+
+.room-item-unread::before {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-circle);
+  background: var(--accent);
+  margin-right: var(--space-sm);
+  flex-shrink: 0;
+}
+
+.room-badge-unread {
+  font-size: var(--text-xs);
+  line-height: 1;
+  padding: var(--space-2xs) var(--space-sm);
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  color: var(--text-on-accent);
+  flex-shrink: 0;
+  font-weight: var(--font-semibold);
+}
+
+.room-badge-mention,
+.room-badge-mention-all {
+  font-size: 10px;
+  font-weight: var(--font-bold);
+  line-height: 1;
+  padding: var(--space-2xs) var(--space-xs);
+  border-radius: var(--radius-sm);
+  flex-shrink: 0;
+  color: var(--text-on-accent);
+  letter-spacing: 0.02em;
+}
+
+.room-badge-mention { background: var(--mention); }
+.room-badge-mention-all { background: var(--mention-all); }
+
+/* ── Three-section sidebar buckets ─────────────────────────────────────
+   Favorite / Apps / Channels and DMs each render under a collapsible
+   header. The header inherits the design tokens so dark + light + the
+   black-and-white theme all pick up correct foregrounds without any
+   per-theme overrides here. */
+.room-list-section {
+  margin-bottom: var(--space-sm);
+}
+
+.room-list-section-header {
+  padding: var(--space-sm) var(--space-md);
+  font-weight: var(--font-semibold);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+  transition: color var(--motion-fast) var(--easing);
+}
+
+.room-list-section-header:hover {
+  color: var(--text-secondary);
+}
+
+.room-list-section-collapsed .room-list-section-header {
+  opacity: 0.7;
+}

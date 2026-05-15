@@ -1,0 +1,13 @@
+.app-sidebar {
+  display: flex;
+  flex-direction: column;
+  width: 260px;
+  flex-shrink: 0;
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border-subtle);
+}
+
+.app-sidebar .room-list {
+  flex: 1;
+  overflow-y: auto;
+}

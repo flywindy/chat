@@ -1,0 +1,89 @@
+/* .message-action-menu positioning + .message-action-kebab visibility are
+   defined inside .message-bubble-wrap further down — see the row-redesign
+   block. The base kebab button styling is kept here. */
+.message-action-kebab {
+  background: transparent;
+  border: 0;
+  padding: var(--space-2xs) var(--space-xs);
+  font-size: var(--text-md);
+  line-height: 1;
+  cursor: pointer;
+  color: var(--text-secondary);
+  border-radius: var(--radius-sm);
+  transition: background var(--motion-fast) var(--easing),
+              color var(--motion-fast) var(--easing);
+}
+
+.message-action-kebab:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.message-action-popover {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  min-width: 200px;
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-dialog);
+  padding: var(--space-xs) 0;
+  z-index: 20;
+}
+
+.read-receipt-row {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  padding: var(--space-sm) var(--space-md);
+  font: inherit;
+  font-size: var(--text-sm);
+  color: var(--text-primary);
+  cursor: default;
+  position: relative;
+}
+
+.read-receipt-row[role='menuitem']:not([aria-disabled='true']) {
+  cursor: help;
+}
+
+.read-receipt-row[role='menuitem']:not([aria-disabled='true']):hover,
+.read-receipt-row[role='menuitem']:not([aria-disabled='true']):focus-visible {
+  background: var(--bg-hover);
+  outline: none;
+}
+
+.read-receipt-loading,
+.read-receipt-empty {
+  color: var(--text-muted);
+}
+
+.read-receipt-error {
+  color: var(--status-error);
+}
+
+.read-receipt-tooltip {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin: var(--space-xs) 0 0 0;
+  padding: var(--space-sm) var(--space-md);
+  list-style: none;
+  min-width: 180px;
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-dialog);
+  font-size: var(--text-sm);
+  z-index: 21;
+}
+
+.read-receipt-tooltip li {
+  padding: var(--space-2xs) 0;
+  white-space: nowrap;
+}

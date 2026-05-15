@@ -51,23 +51,29 @@ describe('roomDisplayName', () => {
 
   it('renders dm rooms using HRInfo.engName + " " + HRInfo.name', () => {
     expect(
-      roomDisplayName({ type: 'dm', id: 'r-dm', hrInfo: { engName: 'John Smith', name: '約翰史密斯' } })
+      roomDisplayName({
+        type: 'dm', id: 'r-dm',
+        hrInfo: { account: 'john', engName: 'John Smith', name: '約翰史密斯' },
+      })
     ).toBe('John Smith 約翰史密斯')
   })
 
   it('collapses dm display to a single HRInfo.name when engName equals name', () => {
     expect(
-      roomDisplayName({ type: 'dm', id: 'r-dm', hrInfo: { engName: 'John Smith', name: 'John Smith' } })
+      roomDisplayName({
+        type: 'dm', id: 'r-dm',
+        hrInfo: { account: 'john', engName: 'John Smith', name: 'John Smith' },
+      })
     ).toBe('John Smith')
   })
 
-  it('falls back to "(DM)" for dm rooms with no hrInfo', () => {
+  it('falls back to "(DM)" for dm rooms with no hrInfo (subscription not loaded yet)', () => {
     expect(roomDisplayName({ type: 'dm', id: 'r-dm' })).toBe('(DM)')
   })
-
-  it('falls back to "(DM)" for dm rooms with an empty hrInfo object', () => {
-    expect(roomDisplayName({ type: 'dm', id: 'r-dm', hrInfo: {} })).toBe('(DM)')
-  })
+  // Note: an `hrInfo: {}` (partial) case is impossible by construction —
+  // backend ships a pointer (`*HRInfo \`json:"hrInfo,omitempty"\``) whose
+  // inner fields are required strings, so the object is either absent or
+  // fully populated. The frontend type mirrors this.
 })
 
 describe('roomFromSearchHit', () => {

@@ -1,0 +1,6 @@
+/* ThemeToggle is an icon-only square; tighten padding so the icon centers. */
+.theme-toggle {
+  padding: var(--space-xs);
+  width: 32px;
+  height: 32px;
+}

@@ -1,0 +1,26 @@
+.message-list {
+  flex: 1;
+  overflow-y: auto;
+  /* Clip any horizontal overflow caused by the hover toolbar floating
+     slightly outside the bubble's bounding box on narrow rows. */
+  overflow-x: hidden;
+  padding: var(--space-md) 0;
+}
+
+.message-loading,
+.message-error {
+  padding: var(--space-md);
+  text-align: center;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.message-error {
+  color: var(--status-error);
+}
+.message-empty {
+  text-align: center;
+  color: var(--text-muted);
+  padding: var(--space-xl);
+  font-size: var(--text-sm);
+}

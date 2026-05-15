@@ -1,0 +1,62 @@
+.app-header {
+  position: relative;
+  display: flex;
+  align-items: center;
+  padding: var(--space-sm) var(--space-lg);
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  gap: var(--space-md);
+  flex-shrink: 0;
+}
+
+.chat-header-title {
+  font-weight: var(--font-semibold);
+  font-size: var(--text-md);
+  letter-spacing: -0.01em;
+}
+
+.app-header-user {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  margin-left: auto;
+}
+
+.app-header-logout,
+.chat-header-logout {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-xs);
+  padding: var(--space-xs) var(--space-md);
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  font-weight: var(--font-medium);
+  cursor: pointer;
+  transition: background var(--motion-fast) var(--easing),
+              color var(--motion-fast) var(--easing),
+              border-color var(--motion-fast) var(--easing);
+}
+
+.app-header-logout:hover,
+.chat-header-logout:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border-color: var(--text-secondary);
+}
+
+/* Header search bar — Teams-style centered overlay. Absolute positioning
+ * keeps it anchored to the header center regardless of how wide the title
+ * or right-side controls grow. */
+.app-header-search {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 520px;
+  max-width: 50%;
+  z-index: 1;
+}

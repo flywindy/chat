@@ -1,0 +1,104 @@
+.message-input input {
+  flex: 1;
+  padding: var(--space-sm) var(--space-md);
+  background: var(--bg-input);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-size: var(--text-base);
+  transition: background var(--motion-fast) var(--easing),
+              border-color var(--motion-fast) var(--easing);
+}
+.message-input input:hover { background: var(--bg-input-hover); }
+.message-input input:focus {
+  outline: none;
+  background: var(--bg-surface);
+  border-color: var(--accent);
+}
+.message-input input::placeholder { color: var(--text-muted); }
+
+.message-input button {
+  padding: var(--space-sm) var(--space-lg);
+  background: var(--accent);
+  color: var(--text-on-accent);
+  border: none;
+  border-radius: var(--radius-md);
+  font-size: var(--text-base);
+  font-weight: var(--font-medium);
+  cursor: pointer;
+  transition: background var(--motion-fast) var(--easing);
+}
+.message-input button:hover:not(:disabled) { background: var(--accent-hover); }
+.message-input button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ────────────────────────────────────────────────────────────────
+   Message Input Form (the canonical input)
+   ──────────────────────────────────────────────────────────────── */
+.message-input-form {
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-md) var(--space-lg);
+  background: var(--bg-surface);
+  border-top: 1px solid var(--border-subtle);
+  gap: var(--space-sm);
+  flex-shrink: 0;
+}
+
+.message-input-form .quoted-block-chip {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  background: var(--bg-elevated);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-md);
+  padding: var(--space-sm) var(--space-md);
+}
+
+.message-input-row {
+  display: flex;
+  gap: var(--space-sm);
+  align-items: stretch;
+}
+
+.message-input-form input[type='text'] {
+  flex: 1;
+  min-width: 0;
+  padding: var(--space-sm) var(--space-md);
+  background: var(--bg-input);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-size: var(--text-base);
+  transition: background var(--motion-fast) var(--easing),
+              border-color var(--motion-fast) var(--easing);
+}
+.message-input-form input[type='text']:hover { background: var(--bg-input-hover); }
+.message-input-form input[type='text']:focus {
+  outline: none;
+  background: var(--bg-surface);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.message-input-form input[type='text']::placeholder {
+  color: var(--text-muted);
+}
+
+.message-input-form input[type='text']:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.message-input-form button[type='submit'] {
+  padding: 0 var(--space-lg);
+  background: var(--accent);
+  color: var(--text-on-accent);
+  border: 0;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  font-size: var(--text-sm);
+  font-weight: var(--font-medium);
+  transition: background var(--motion-fast) var(--easing);
+}
+.message-input-form button[type='submit']:hover:not(:disabled) { background: var(--accent-hover); }
+.message-input-form button[type='submit']:disabled { opacity: 0.5; cursor: not-allowed; }

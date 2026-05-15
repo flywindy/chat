@@ -1,0 +1,133 @@
+/* Roster (Members tab body). */
+.roster-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+
+.roster-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--space-sm) var(--space-md);
+  background: var(--bg-elevated);
+  border-radius: var(--radius-md);
+}
+
+.roster-row-info {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  min-width: 0;
+}
+
+.roster-row-actions {
+  display: flex;
+  gap: var(--space-xs);
+  flex-shrink: 0;
+}
+
+.roster-name {
+  font-weight: var(--font-semibold);
+  color: var(--text-primary);
+  font-size: var(--text-sm);
+}
+
+.roster-secondary {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.roster-badge {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: var(--font-bold);
+  padding: var(--space-2xs) var(--space-sm);
+  border-radius: var(--radius-pill);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.roster-empty {
+  color: var(--text-muted);
+  font-style: italic;
+  padding: var(--space-lg) 0;
+  text-align: center;
+}
+
+.roster-loading {
+  color: var(--text-muted);
+  padding: var(--space-md);
+}
+
+/* Expandable org rows. The li switches to column layout so the children
+   <ul> can sit underneath the existing info+actions header. The toggle
+   button is styled as a label, not a button, so the org row looks like a
+   regular member row with a chevron prefix. */
+.roster-row-org {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.roster-row-org-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.roster-org-toggle {
+  background: transparent;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.roster-org-toggle:hover .roster-name {
+  color: var(--accent);
+}
+
+.roster-chevron {
+  display: inline-block;
+  width: 1em;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  transition: transform var(--motion-fast) var(--easing);
+}
+
+/* Nested member list under an expanded org. Indented with a subtle left
+   border so the visual nesting is clear; each child has no action area
+   because the parent org row's Remove already owns the lifecycle. */
+.roster-org-children {
+  list-style: none;
+  margin: 0.5rem 0 0 1.5rem;
+  padding: 0 0 0 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  border-left: 2px solid var(--border-subtle);
+}
+
+.roster-org-child {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.25rem 0.5rem;
+}
+
+.roster-org-status {
+  color: var(--text-muted);
+  font-style: italic;
+}
