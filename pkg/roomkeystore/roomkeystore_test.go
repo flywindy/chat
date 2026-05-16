@@ -38,6 +38,17 @@ func (f *fakeHashClient) hset(_ context.Context, key string, pub, priv string) e
 	return nil
 }
 
+func (f *fakeHashClient) hsetWithVersion(_ context.Context, key string, pub, priv string, version int) error {
+	if f.hsetErr != nil {
+		return f.hsetErr
+	}
+	if f.store == nil {
+		f.store = make(map[string]map[string]string)
+	}
+	f.store[key] = map[string]string{"pub": pub, "priv": priv, "ver": strconv.Itoa(version)}
+	return nil
+}
+
 func (f *fakeHashClient) hgetall(_ context.Context, key string) (map[string]string, error) {
 	f.hgetallCallCount++
 	if f.hgetallErr != nil && (f.hgetallErrOnCall == 0 || f.hgetallCallCount == f.hgetallErrOnCall) {
@@ -155,6 +166,42 @@ func TestValkeyStore_Set(t *testing.T) {
 			assert.Equal(t, "0", stored["ver"], "ver field should be 0")
 		})
 	}
+}
+
+func TestValkeyStore_SetWithVersion(t *testing.T) {
+	pubKey := bytes.Repeat([]byte{0xAB}, 65)
+	privKey := bytes.Repeat([]byte{0xCD}, 32)
+	pair := RoomKeyPair{PublicKey: pubKey, PrivateKey: privKey}
+
+	t.Run("writes pair at supplied version", func(t *testing.T) {
+		fake := &fakeHashClient{}
+		s := newTestStore(fake)
+		require.NoError(t, s.SetWithVersion(context.Background(), "r1", pair, 5))
+		stored := fake.store[roomkey("r1")]
+		require.NotNil(t, stored)
+		assert.Equal(t, "5", stored["ver"])
+		assert.NotEmpty(t, stored["pub"])
+		assert.NotEmpty(t, stored["priv"])
+	})
+
+	t.Run("overwrites existing version", func(t *testing.T) {
+		fake := &fakeHashClient{}
+		s := newTestStore(fake)
+		require.NoError(t, s.SetWithVersion(context.Background(), "r1", pair, 2))
+		require.NoError(t, s.SetWithVersion(context.Background(), "r1", pair, 7))
+		stored := fake.store[roomkey("r1")]
+		require.NotNil(t, stored)
+		assert.Equal(t, "7", stored["ver"])
+	})
+
+	t.Run("propagates write error", func(t *testing.T) {
+		want := errors.New("valkey down")
+		fake := &fakeHashClient{hsetErr: want}
+		s := newTestStore(fake)
+		err := s.SetWithVersion(context.Background(), "r1", pair, 3)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, want)
+	})
 }
 
 func TestValkeyStore_Get(t *testing.T) {

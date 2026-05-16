@@ -27,7 +27,9 @@ paths.
    - [3.3 search-service](#33-search-service)
    - [3.4 user-service (mock)](#34-user-service-mock)
 4. [Message Send](#4-message-send)
-5. [Error envelope reference](#5-error-envelope-reference)
+5. [Server-Pushed Events](#5-server-pushed-events)
+   - [5.1 Room Encryption Keys](#51-room-encryption-keys)
+6. [Error envelope reference](#6-error-envelope-reference)
 
 ---
 
@@ -38,8 +40,9 @@ This doc covers the public client-facing API surface only.
 **Out of scope (documented elsewhere or backend-internal):**
 
 - Backend-only JetStream subjects (MESSAGES, MESSAGES_CANONICAL, FANOUT, OUTBOX, INBOX, ROOMS streams). See [`docs/nats-subject-naming.md`](./nats-subject-naming.md).
-- Server-pushed events not triggered by a specific client RPC (federation arrivals, presence, room-key rotation, cross-site member events).
 - Server-to-server subjects (`chat.server.request.…`).
+
+Server-pushed events that clients consume (room-key generation/rotation, etc.) are documented in [§5](#5-server-pushed-events). Federation arrivals, presence, and cross-site member events remain backend-internal.
 
 ### Subject placeholders
 
@@ -157,7 +160,7 @@ Exchanges an SSO token for a signed NATS user JWT. The returned JWT is what the 
 
 #### Error response
 
-See [Error envelope](#5-error-envelope-reference). HTTP statuses:
+See [Error envelope](#6-error-envelope-reference). HTTP statuses:
 
 | Status | Meaning | Example body |
 |--------|---------|--------------|
@@ -245,7 +248,7 @@ The created `Room` object.
 
 ##### Error response
 
-See [Error envelope](#5-error-envelope-reference).
+See [Error envelope](#6-error-envelope-reference).
 
 ```json
 { "error": "DM requires exactly one other member, got 0" }
@@ -301,7 +304,7 @@ Empty. Send `{}` or no payload.
 
 ##### Error response
 
-See [Error envelope](#5-error-envelope-reference).
+See [Error envelope](#6-error-envelope-reference).
 
 ##### Triggered events — success path
 
@@ -349,7 +352,7 @@ A single `Room` object. See [Create Room](#create-room) for the `Room` schema.
 
 ##### Error response
 
-See [Error envelope](#5-error-envelope-reference).
+See [Error envelope](#6-error-envelope-reference).
 
 ```json
 { "error": "room not found" }
@@ -407,7 +410,7 @@ The fields `requesterId`, `requesterAccount`, and `timestamp` on the Go `AddMemb
 
 ##### Error response
 
-See [Error envelope](#5-error-envelope-reference). Returned synchronously when validation or authorization fails (e.g. requester not in room, room is full, room is restricted and requester is not owner).
+See [Error envelope](#6-error-envelope-reference). Returned synchronously when validation or authorization fails (e.g. requester not in room, room is full, room is restricted and requester is not owner).
 
 ```json
 { "error": "room is at maximum capacity (200): cannot add 5 members to room with 198 existing" }
@@ -505,7 +508,7 @@ Exactly one of `account` or `orgId` must be set. The fields `requester` and `tim
 
 ##### Error response
 
-See [Error envelope](#5-error-envelope-reference). Returned synchronously when validation or authorization fails (e.g. neither or both of `account`/`orgId` set, requester is not an owner, target is the last member, or org member cannot leave individually).
+See [Error envelope](#6-error-envelope-reference). Returned synchronously when validation or authorization fails (e.g. neither or both of `account`/`orgId` set, requester is not an owner, target is the last member, or org member cannot leave individually).
 
 ```json
 { "error": "exactly one of account or orgId must be set" }
@@ -599,7 +602,7 @@ The `timestamp` field on the Go `UpdateRoleRequest` is server-set — the client
 
 ##### Error response
 
-See [Error envelope](#5-error-envelope-reference). Returned synchronously when validation or authorization fails. Common errors include:
+See [Error envelope](#6-error-envelope-reference). Returned synchronously when validation or authorization fails. Common errors include:
 
 - Requester is not an owner of the room.
 - Target account is not a member of the room.
@@ -716,7 +719,7 @@ When the synchronous reply is an error envelope, no events follow. The async job
 
 ##### Error response
 
-See [Error envelope](#5-error-envelope-reference). Common errors: `"not a member of this room"`, `"limit must be > 0"`, `"offset must be >= 0"`.
+See [Error envelope](#6-error-envelope-reference). Common errors: `"not a member of this room"`, `"limit must be > 0"`, `"offset must be >= 0"`.
 
 ##### Triggered events — success path
 
@@ -751,7 +754,7 @@ The subject already carries `account` and `roomID`, so no body fields are requir
 
 ##### Error response
 
-See [Error envelope](#5-error-envelope-reference). Common errors:
+See [Error envelope](#6-error-envelope-reference). Common errors:
 
 - `"only room members can list members"` — the user has no subscription in the room (sentinel reused across membership-gated RPCs).
 - `"invalid message-read subject: …"` — the subject is malformed.
@@ -825,7 +828,7 @@ A **synchronous, sender-only** RPC. Returns the list of users on the local site 
 
 ##### Error response
 
-See [Error envelope](#5-error-envelope-reference). Common errors:
+See [Error envelope](#6-error-envelope-reference). Common errors:
 
 - `"only room members can list members"` — the requester has no subscription in the room.
 - `"message not found"` — no message matches `messageId`.
@@ -902,7 +905,7 @@ Empty. Send `{}` or no payload.
 
 ##### Error response
 
-See [Error envelope](#5-error-envelope-reference).
+See [Error envelope](#6-error-envelope-reference).
 
 ```json
 { "error": "invalid org" }
@@ -1028,7 +1031,7 @@ Used by every history-service method that returns messages. Mirrors the Cassandr
 
 ##### Error response
 
-See [Error envelope](#5-error-envelope-reference).
+See [Error envelope](#6-error-envelope-reference).
 
 ```json
 { "error": "not subscribed to room" }
@@ -1093,7 +1096,7 @@ Fetches messages newer than a cursor — the forward-pagination counterpart to L
 
 ##### Error response
 
-See [Error envelope](#5-error-envelope-reference).
+See [Error envelope](#6-error-envelope-reference).
 
 ##### Triggered events — success path
 
@@ -1152,7 +1155,7 @@ Fetches messages around a target message — useful for "jump to this message" n
 
 ##### Error response
 
-See [Error envelope](#5-error-envelope-reference).
+See [Error envelope](#6-error-envelope-reference).
 
 ##### Triggered events — success path
 
@@ -1195,7 +1198,7 @@ A single `Message` object. See [Message schema](#message-schema).
 
 ##### Error response
 
-See [Error envelope](#5-error-envelope-reference).
+See [Error envelope](#6-error-envelope-reference).
 
 ```json
 { "error": "message not found" }
@@ -1248,7 +1251,7 @@ Only the original sender may edit a message.
 
 ##### Error response
 
-See [Error envelope](#5-error-envelope-reference). Common errors: `"only the sender can edit"`, `"message not found"`, `"newMsg must not be empty"`, `"newMsg exceeds maximum size"`, `"failed to edit message"`.
+See [Error envelope](#6-error-envelope-reference). Common errors: `"only the sender can edit"`, `"message not found"`, `"newMsg must not be empty"`, `"newMsg exceeds maximum size"`, `"failed to edit message"`.
 
 ##### Triggered events — success path
 
@@ -1316,7 +1319,7 @@ Soft-deletes a message (sets `deleted=true` on the row; row is preserved for aud
 
 ##### Error response
 
-See [Error envelope](#5-error-envelope-reference). Common errors: `"only the sender can delete"`, `"message not found"`, `"failed to delete message"`.
+See [Error envelope](#6-error-envelope-reference). Common errors: `"only the sender can delete"`, `"message not found"`, `"failed to delete message"`.
 
 ##### Triggered events — success path
 
@@ -1397,7 +1400,7 @@ Returns the replies in a thread. The thread parent's `messageId` is supplied in 
 
 ##### Error response
 
-See [Error envelope](#5-error-envelope-reference).
+See [Error envelope](#6-error-envelope-reference).
 
 ##### Triggered events — success path
 
@@ -1457,7 +1460,7 @@ Lists the parent messages of threads the user has subscribed to (or all threads,
 
 ##### Error response
 
-See [Error envelope](#5-error-envelope-reference).
+See [Error envelope](#6-error-envelope-reference).
 
 ##### Triggered events — success path
 
@@ -1540,7 +1543,7 @@ Display fields (user name, room name) are intentionally NOT carried in the respo
 
 ##### Error response
 
-See [Error envelope](#5-error-envelope-reference).
+See [Error envelope](#6-error-envelope-reference).
 
 | Code | Reason |
 |---|---|
@@ -1849,7 +1852,7 @@ Delivered on `chat.user.{account}.response.{requestId}`. The body is the persist
 
 #### Error response
 
-Delivered on `chat.user.{account}.response.{requestId}`. See [Error envelope](#5-error-envelope-reference). Common errors: `"invalid message ID \"…\": must be a 20-char base62 string"`, `"content must not be empty"`, `"content exceeds maximum size of 20480 bytes"`, `"user alice is not subscribed to room …"`, `"validate thread parent fields: threadParentMessageCreatedAt is required when threadParentMessageId is set"`.
+Delivered on `chat.user.{account}.response.{requestId}`. See [Error envelope](#6-error-envelope-reference). Common errors: `"invalid message ID \"…\": must be a 20-char base62 string"`, `"content must not be empty"`, `"content exceeds maximum size of 20480 bytes"`, `"user alice is not subscribed to room …"`, `"validate thread parent fields: threadParentMessageCreatedAt is required when threadParentMessageId is set"`.
 
 ```json
 { "error": "content must not be empty" }
@@ -1968,7 +1971,52 @@ When validation fails, the gatekeeper publishes the error envelope to `chat.user
 
 ---
 
-## 5. Error envelope reference
+## 5. Server-Pushed Events
+
+Server-pushed events are delivered to clients on NATS subjects the client is already authorized for, without a corresponding client RPC. They are distinct from the "Triggered events" sections in §3 and §4, which document events that arise as a side-effect of a specific RPC.
+
+### 5.1 Room Encryption Keys
+
+Each room has a P-256 keypair generated server-side at create time. Channel rooms use the key for end-to-end message encryption: `broadcast-worker` populates `encryptedMessage` on channel events (§4.1) and clients use the private key to decrypt. DM and botDM rooms still receive a `RoomKeyEvent` at create time for implementation consistency, but currently broadcast plaintext `message` (no `encryptedMessage`), so clients may skip persisting DM/botDM keys.
+
+#### Subject
+
+```text
+chat.user.{account}.event.room.key
+```
+
+Clients are already authorized for `chat.user.{theirAccount}.>` and receive key events on this subject without additional setup.
+
+#### Payload (`RoomKeyEvent`)
+
+```json
+{
+  "roomId": "<room id>",
+  "version": 0,
+  "privateKey": "<base64-encoded 32-byte P-256 scalar>",
+  "timestamp": 1747000000000
+}
+```
+
+`[]byte` fields marshal to standard base64 in JSON. The room's public key is server-side only (used by `broadcast-worker` to encrypt outgoing messages) and is not transmitted to clients — clients only need the private key to decrypt incoming ciphertext.
+
+#### Client behavior
+
+1. On every `RoomKeyEvent`, store the key under `(roomId, version) → privateKey`.
+2. When decrypting an incoming message, use the `version` stamped in the encrypted payload to look up the corresponding private key.
+3. Retain past versions to support history scrolling. The server retains the previous version in its store for at least `VALKEY_KEY_GRACE_PERIOD` (default 24h); after that, server-side decryption of old messages may not be possible, but clients holding old keys can still decrypt locally.
+
+#### When clients receive `RoomKeyEvent`s
+
+- **Room creation (all room types):** sent to every initial member.
+- **Add member (channels only):** sent to each newly-added account; existing members do not receive a duplicate event.
+- **Remove member (channels only):** the server rotates the room key. Surviving members receive a new `RoomKeyEvent` with an incremented `version`. The removed account stops receiving events for the room.
+
+Removed members keep prior keys for decrypting historical messages but cannot decrypt anything published after the rotation.
+
+---
+
+## 6. Error envelope reference
 
 Every error response — over NATS reply subjects and HTTP — uses the same envelope:
 

@@ -93,18 +93,24 @@ func (s *mongoInboxStore) FindUsersByAccounts(ctx context.Context, accounts []st
 	return users, nil
 }
 
+// BulkCreateSubscriptions inserts the supplied subs idempotently. Each is
+// keyed by (roomId, u.account) and written via $setOnInsert so an existing
+// sub (from a previous delivery, or with read-state already accumulated) is
+// preserved. Redelivered cross-site events become no-ops on Mongo.
 func (s *mongoInboxStore) BulkCreateSubscriptions(ctx context.Context, subs []*model.Subscription) error {
 	if len(subs) == 0 {
 		return nil
 	}
-	docs := make([]interface{}, len(subs))
+	models := make([]mongo.WriteModel, len(subs))
 	for i, sub := range subs {
-		docs[i] = sub
+		models[i] = mongo.NewUpdateOneModel().
+			SetFilter(bson.M{"roomId": sub.RoomID, "u.account": sub.User.Account}).
+			SetUpdate(bson.M{"$setOnInsert": sub}).
+			SetUpsert(true)
 	}
-	opts := options.InsertMany().SetOrdered(false)
-	_, err := s.subCol.InsertMany(ctx, docs, opts)
-	if err != nil && !mongo.IsDuplicateKeyError(err) {
-		return fmt.Errorf("bulk create subscriptions: %w", err)
+	opts := options.BulkWrite().SetOrdered(false)
+	if _, err := s.subCol.BulkWrite(ctx, models, opts); err != nil {
+		return fmt.Errorf("bulk upsert subscriptions: %w", err)
 	}
 	return nil
 }

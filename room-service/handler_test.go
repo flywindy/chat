@@ -476,6 +476,7 @@ func TestHandler_RemoveMember_SelfLeave_Success(t *testing.T) {
 		RoomID: "r1", SiteID: "site-a", Roles: []model.Role{model.RoleMember},
 		HistorySharedSince: &hss, JoinedAt: hss,
 	}
+	store.EXPECT().GetRoom(gomock.Any(), "r1").Return(&model.Room{ID: "r1", Type: model.RoomTypeChannel}, nil)
 	store.EXPECT().GetSubscriptionWithMembership(gomock.Any(), "r1", "alice").
 		Return(&SubscriptionWithMembership{Subscription: sub, HasIndividualMembership: true}, nil)
 	store.EXPECT().CountMembersAndOwners(gomock.Any(), "r1").
@@ -503,6 +504,7 @@ func TestHandler_RemoveMember_SelfLeave_Success(t *testing.T) {
 	var published model.RemoveMemberRequest
 	require.NoError(t, json.Unmarshal(publishedData, &published))
 	assert.Equal(t, "alice", published.Requester)
+	assert.Equal(t, model.RoomTypeChannel, published.RoomType, "RoomType must be carried to room-worker")
 }
 
 func TestHandler_RemoveMember_OrgOnly_Rejected(t *testing.T) {
@@ -524,6 +526,7 @@ func TestHandler_RemoveMember_OrgOnly_Rejected(t *testing.T) {
 				ID: "s1", User: model.SubscriptionUser{ID: "u1", Account: "alice"},
 				RoomID: "r1", Roles: []model.Role{model.RoleMember},
 			}
+			store.EXPECT().GetRoom(gomock.Any(), "r1").Return(&model.Room{ID: "r1", Type: model.RoomTypeChannel}, nil)
 			store.EXPECT().GetSubscriptionWithMembership(gomock.Any(), "r1", "alice").
 				Return(&SubscriptionWithMembership{Subscription: sub, HasOrgMembership: true}, nil)
 			handler := NewHandler(store, nil, nil, nil, "site-a", 1000, 500, 5*time.Second, nil)
@@ -543,6 +546,7 @@ func TestHandler_RemoveMember_SelfLeave_NoOrgs_Allowed(t *testing.T) {
 		ID: "s1", User: model.SubscriptionUser{ID: "u1", Account: "alice"},
 		RoomID: "r1", Roles: []model.Role{model.RoleMember},
 	}
+	store.EXPECT().GetRoom(gomock.Any(), "r1").Return(&model.Room{ID: "r1", Type: model.RoomTypeChannel}, nil)
 	store.EXPECT().GetSubscriptionWithMembership(gomock.Any(), "r1", "alice").
 		Return(&SubscriptionWithMembership{Subscription: sub}, nil)
 	store.EXPECT().CountMembersAndOwners(gomock.Any(), "r1").
@@ -576,6 +580,7 @@ func TestHandler_RemoveMember_LastOwner_Rejected(t *testing.T) {
 				ID: "s1", User: model.SubscriptionUser{ID: "u1", Account: "alice"},
 				RoomID: "r1", Roles: []model.Role{model.RoleOwner},
 			}
+			store.EXPECT().GetRoom(gomock.Any(), "r1").Return(&model.Room{ID: "r1", Type: model.RoomTypeChannel}, nil)
 			store.EXPECT().GetSubscriptionWithMembership(gomock.Any(), "r1", "alice").
 				Return(&SubscriptionWithMembership{Subscription: target, HasIndividualMembership: true}, nil)
 			if tc.requester != "alice" {
@@ -604,6 +609,7 @@ func TestHandler_RemoveMember_LastMember_Rejected(t *testing.T) {
 		ID: "s1", User: model.SubscriptionUser{ID: "u1", Account: "alice"},
 		RoomID: "r1", Roles: []model.Role{model.RoleMember},
 	}
+	store.EXPECT().GetRoom(gomock.Any(), "r1").Return(&model.Room{ID: "r1", Type: model.RoomTypeChannel}, nil)
 	store.EXPECT().GetSubscriptionWithMembership(gomock.Any(), "r1", "alice").
 		Return(&SubscriptionWithMembership{Subscription: sub, HasIndividualMembership: true}, nil)
 	store.EXPECT().CountMembersAndOwners(gomock.Any(), "r1").
@@ -627,6 +633,7 @@ func TestHandler_RemoveMember_OwnerRemovesOther_Success(t *testing.T) {
 		ID: "s1", User: model.SubscriptionUser{ID: "u1", Account: "alice"},
 		RoomID: "r1", Roles: []model.Role{model.RoleOwner},
 	}
+	store.EXPECT().GetRoom(gomock.Any(), "r1").Return(&model.Room{ID: "r1", Type: model.RoomTypeChannel}, nil)
 	store.EXPECT().GetSubscriptionWithMembership(gomock.Any(), "r1", "bob").
 		Return(&SubscriptionWithMembership{Subscription: targetSub, HasIndividualMembership: true}, nil)
 	store.EXPECT().GetSubscription(gomock.Any(), "alice", "r1").Return(ownerSub, nil)
@@ -656,6 +663,7 @@ func TestHandler_RemoveMember_NonOwnerRemovesOther_Rejected(t *testing.T) {
 		ID: "s1", User: model.SubscriptionUser{ID: "u1", Account: "alice"},
 		RoomID: "r1", Roles: []model.Role{model.RoleMember},
 	}
+	store.EXPECT().GetRoom(gomock.Any(), "r1").Return(&model.Room{ID: "r1", Type: model.RoomTypeChannel}, nil)
 	store.EXPECT().GetSubscriptionWithMembership(gomock.Any(), "r1", "bob").
 		Return(&SubscriptionWithMembership{Subscription: targetSub, HasIndividualMembership: true}, nil)
 	store.EXPECT().GetSubscription(gomock.Any(), "alice", "r1").Return(requesterSub, nil)
@@ -674,6 +682,7 @@ func TestHandler_RemoveMember_OwnerRemovesOrg_Success(t *testing.T) {
 		ID: "s1", User: model.SubscriptionUser{ID: "u1", Account: "alice"},
 		RoomID: "r1", Roles: []model.Role{model.RoleOwner},
 	}
+	store.EXPECT().GetRoom(gomock.Any(), "r1").Return(&model.Room{ID: "r1", Type: model.RoomTypeChannel}, nil)
 	store.EXPECT().GetSubscription(gomock.Any(), "alice", "r1").Return(ownerSub, nil)
 	var publishedData []byte
 	handler := NewHandler(store, nil, nil, nil, "site-a", 1000, 500, 5*time.Second, func(ctx context.Context, subj string, data []byte) error {
@@ -693,6 +702,7 @@ func TestHandler_RemoveMember_OwnerRemovesOrg_Success(t *testing.T) {
 func TestHandler_RemoveMember_BothAccountAndOrgID_Rejected(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	store := NewMockRoomStore(ctrl)
+	store.EXPECT().GetRoom(gomock.Any(), "r1").Return(&model.Room{ID: "r1", Type: model.RoomTypeChannel}, nil)
 	handler := NewHandler(store, nil, nil, nil, "site-a", 1000, 500, 5*time.Second, nil)
 	reqSubj := subject.MemberRemove("alice", "r1", "site-a")
 	reqBody, _ := json.Marshal(model.RemoveMemberRequest{RoomID: "r1", Account: "bob", OrgID: "eng-org"})
@@ -704,6 +714,7 @@ func TestHandler_RemoveMember_BothAccountAndOrgID_Rejected(t *testing.T) {
 func TestHandler_RemoveMember_NeitherAccountNorOrgID_Rejected(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	store := NewMockRoomStore(ctrl)
+	store.EXPECT().GetRoom(gomock.Any(), "r1").Return(&model.Room{ID: "r1", Type: model.RoomTypeChannel}, nil)
 	handler := NewHandler(store, nil, nil, nil, "site-a", 1000, 500, 5*time.Second, nil)
 	reqSubj := subject.MemberRemove("alice", "r1", "site-a")
 	reqBody, _ := json.Marshal(model.RemoveMemberRequest{RoomID: "r1"})
@@ -745,6 +756,7 @@ func TestHandler_RemoveMember_RoomIDMismatch(t *testing.T) {
 func TestHandler_RemoveMember_GetTargetError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	store := NewMockRoomStore(ctrl)
+	store.EXPECT().GetRoom(gomock.Any(), "r1").Return(&model.Room{ID: "r1", Type: model.RoomTypeChannel}, nil)
 	store.EXPECT().GetSubscriptionWithMembership(gomock.Any(), "r1", "alice").
 		Return(nil, fmt.Errorf("db down"))
 	handler := NewHandler(store, nil, nil, nil, "site-a", 1000, 500, 5*time.Second, nil)
@@ -761,6 +773,7 @@ func TestHandler_RemoveMember_OwnerRemoves_RequesterLookupError(t *testing.T) {
 	targetSub := &model.Subscription{
 		User: model.SubscriptionUser{ID: "u2", Account: "bob"}, RoomID: "r1", Roles: []model.Role{model.RoleMember},
 	}
+	store.EXPECT().GetRoom(gomock.Any(), "r1").Return(&model.Room{ID: "r1", Type: model.RoomTypeChannel}, nil)
 	store.EXPECT().GetSubscriptionWithMembership(gomock.Any(), "r1", "bob").
 		Return(&SubscriptionWithMembership{Subscription: targetSub, HasIndividualMembership: true}, nil)
 	store.EXPECT().GetSubscription(gomock.Any(), "alice", "r1").
@@ -779,6 +792,7 @@ func TestHandler_RemoveMember_CountsError(t *testing.T) {
 	sub := &model.Subscription{
 		User: model.SubscriptionUser{ID: "u1", Account: "alice"}, RoomID: "r1", Roles: []model.Role{model.RoleMember},
 	}
+	store.EXPECT().GetRoom(gomock.Any(), "r1").Return(&model.Room{ID: "r1", Type: model.RoomTypeChannel}, nil)
 	store.EXPECT().GetSubscriptionWithMembership(gomock.Any(), "r1", "alice").
 		Return(&SubscriptionWithMembership{Subscription: sub, HasIndividualMembership: true}, nil)
 	store.EXPECT().CountMembersAndOwners(gomock.Any(), "r1").
@@ -794,6 +808,7 @@ func TestHandler_RemoveMember_CountsError(t *testing.T) {
 func TestHandler_RemoveMember_OrgPath_RequesterLookupError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	store := NewMockRoomStore(ctrl)
+	store.EXPECT().GetRoom(gomock.Any(), "r1").Return(&model.Room{ID: "r1", Type: model.RoomTypeChannel}, nil)
 	store.EXPECT().GetSubscription(gomock.Any(), "alice", "r1").
 		Return(nil, fmt.Errorf("db down"))
 	handler := NewHandler(store, nil, nil, nil, "site-a", 1000, 500, 5*time.Second, nil)
@@ -810,6 +825,7 @@ func TestHandler_RemoveMember_PublishError(t *testing.T) {
 	sub := &model.Subscription{
 		User: model.SubscriptionUser{ID: "u1", Account: "alice"}, RoomID: "r1", Roles: []model.Role{model.RoleMember},
 	}
+	store.EXPECT().GetRoom(gomock.Any(), "r1").Return(&model.Room{ID: "r1", Type: model.RoomTypeChannel}, nil)
 	store.EXPECT().GetSubscriptionWithMembership(gomock.Any(), "r1", "alice").
 		Return(&SubscriptionWithMembership{Subscription: sub, HasIndividualMembership: true}, nil)
 	store.EXPECT().CountMembersAndOwners(gomock.Any(), "r1").
@@ -822,6 +838,27 @@ func TestHandler_RemoveMember_PublishError(t *testing.T) {
 	_, err := handler.handleRemoveMember(context.Background(), reqSubj, body)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "publish to stream")
+}
+
+func TestHandler_RemoveMember_RejectsNonChannelRoom(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	store := NewMockRoomStore(ctrl)
+	store.EXPECT().GetRoom(gomock.Any(), "r1").Return(&model.Room{
+		ID: "r1", Type: model.RoomTypeDM,
+	}, nil)
+	h := &Handler{store: store, siteID: "site-a", maxRoomSize: 1000,
+		publishToStream: func(_ context.Context, _ string, _ []byte) error {
+			t.Fatal("publishToStream must not be called")
+			return nil
+		},
+	}
+	req := model.RemoveMemberRequest{Account: "bob"}
+	data, _ := json.Marshal(req)
+	_, err := h.handleRemoveMember(context.Background(),
+		"chat.user.alice.request.room.r1.site-a.member.remove", data)
+	if err == nil || !strings.Contains(err.Error(), "channel") {
+		t.Fatalf("expected channel-type error, got %v", err)
+	}
 }
 
 // --- Add Members tests ---
@@ -2948,4 +2985,105 @@ func TestHandler_handleMessageReadReceipt(t *testing.T) {
 			require.Equal(t, *tt.wantReply, got)
 		})
 	}
+}
+
+func TestHandler_CreateRoom_WritesKeyBeforePublish(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	store := NewMockRoomStore(ctrl)
+	keyStore := NewMockRoomKeyStore(ctrl)
+
+	store.EXPECT().GetUser(gomock.Any(), "alice").Return(aliceUser(), nil)
+	store.EXPECT().CountNewMembers(gomock.Any(), gomock.Any(), gomock.Any(), "", "alice").
+		Return(1, nil)
+
+	var keyStored bool
+	var publishCalls int
+	keyStore.EXPECT().Set(gomock.Any(), gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, roomID string, pair roomkeystore.RoomKeyPair) (int, error) {
+			assert.NotEmpty(t, roomID)
+			assert.Len(t, pair.PublicKey, 65)
+			assert.Len(t, pair.PrivateKey, 32)
+			keyStored = true
+			return 0, nil
+		})
+
+	publish := func(_ context.Context, subj string, _ []byte) error {
+		// Write-before-publish invariant: room-worker reads the key on canonical
+		// arrival, so Set must complete before the create event is published.
+		assert.True(t, keyStored, "keyStore.Set must run before publishToStream")
+		publishCalls++
+		assert.Equal(t, "chat.room.canonical.site-a.create", subj)
+		return nil
+	}
+
+	h := &Handler{store: store, keyStore: keyStore, siteID: "site-a", maxRoomSize: 1000,
+		publishToStream: publish}
+
+	req := model.CreateRoomRequest{Name: "general", Users: []string{"bob"}}
+	data, _ := json.Marshal(req)
+	_, err := h.handleCreateRoom(ctxWithReqID(),
+		"chat.user.alice.request.room.site-a.create", data)
+	require.NoError(t, err)
+	assert.Equal(t, 1, publishCalls)
+}
+
+func TestHandler_CreateRoom_AbortsOnKeyStoreSetError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	store := NewMockRoomStore(ctrl)
+	keyStore := NewMockRoomKeyStore(ctrl)
+
+	store.EXPECT().GetUser(gomock.Any(), "alice").Return(aliceUser(), nil)
+	store.EXPECT().CountNewMembers(gomock.Any(), gomock.Any(), gomock.Any(), "", "alice").
+		Return(1, nil)
+	keyStore.EXPECT().Set(gomock.Any(), gomock.Any(), gomock.Any()).
+		Return(0, fmt.Errorf("valkey down"))
+
+	h := &Handler{store: store, keyStore: keyStore, siteID: "site-a", maxRoomSize: 1000,
+		publishToStream: func(_ context.Context, _ string, _ []byte) error {
+			t.Fatal("publishToStream must not be called when Set fails")
+			return nil
+		},
+	}
+
+	req := model.CreateRoomRequest{Name: "general", Users: []string{"bob"}}
+	data, _ := json.Marshal(req)
+	_, err := h.handleCreateRoom(ctxWithReqID(),
+		"chat.user.alice.request.room.site-a.create", data)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "store room key")
+}
+
+func TestHandler_RemoveMember_StampsBaseKeyVersion(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	store := NewMockRoomStore(ctrl)
+	keyStore := NewMockRoomKeyStore(ctrl)
+
+	store.EXPECT().GetRoom(gomock.Any(), "r1").Return(&model.Room{ID: "r1", Type: model.RoomTypeChannel}, nil)
+	store.EXPECT().GetSubscriptionWithMembership(gomock.Any(), "r1", "bob").Return(
+		&SubscriptionWithMembership{
+			Subscription:            &model.Subscription{User: model.SubscriptionUser{Account: "bob"}, RoomID: "r1", Roles: []model.Role{model.RoleMember}},
+			HasIndividualMembership: true,
+		}, nil)
+	store.EXPECT().GetSubscription(gomock.Any(), "alice", "r1").Return(
+		&model.Subscription{User: model.SubscriptionUser{Account: "alice"}, RoomID: "r1",
+			Roles: []model.Role{model.RoleOwner, model.RoleMember}}, nil)
+	store.EXPECT().CountMembersAndOwners(gomock.Any(), "r1").Return(
+		&RoomCounts{MemberCount: 5, OwnerCount: 2}, nil)
+	// Read current version; room-worker uses this as the skip-rotation baseline.
+	keyStore.EXPECT().Get(gomock.Any(), "r1").Return(&roomkeystore.VersionedKeyPair{Version: 4}, nil)
+
+	var captured model.RemoveMemberRequest
+	publish := func(_ context.Context, _ string, data []byte) error {
+		require.NoError(t, json.Unmarshal(data, &captured))
+		return nil
+	}
+
+	h := &Handler{store: store, keyStore: keyStore, siteID: "site-a", maxRoomSize: 1000, publishToStream: publish}
+
+	req := model.RemoveMemberRequest{Account: "bob"}
+	data, _ := json.Marshal(req)
+	_, err := h.handleRemoveMember(ctxWithReqID(),
+		"chat.user.alice.request.room.r1.site-a.member.remove", data)
+	require.NoError(t, err)
+	assert.Equal(t, 4, captured.BaseKeyVersion, "BaseKeyVersion must be stamped from the current Valkey version")
 }

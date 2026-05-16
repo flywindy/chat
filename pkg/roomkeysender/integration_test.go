@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -170,7 +171,23 @@ func splitOutput(r io.Reader) (stdout, combined string) {
 	return outBuf.String(), outBuf.String() + errBuf.String()
 }
 
+// skipOnVFS skips the calling test when Docker is explicitly configured with
+// the VFS storage driver. VFS lacks copy-on-write, so pulling node:20-alpine
+// and running npm install inside a container takes several minutes — exceeding
+// the default 10-minute test timeout. The unset case is NOT treated as VFS so
+// CI/dev shells that don't export DOCKER_STORAGE_DRIVER still run these tests
+// on whatever driver Docker actually uses (typically overlay2). Follow-up:
+// migrate the npm installs to a pre-built image so the test runs in reasonable
+// time on any driver.
+func skipOnVFS(t *testing.T) {
+	t.Helper()
+	if os.Getenv("DOCKER_STORAGE_DRIVER") == "vfs" {
+		t.Skip("skipping TypeScript client test: VFS storage driver is too slow (unset DOCKER_STORAGE_DRIVER or set to overlay2/btrfs to enable)")
+	}
+}
+
 func TestRoomKeySender_TypeScriptClient_Unencrypted(t *testing.T) {
+	skipOnVFS(t)
 	ctx := context.Background()
 
 	// 1. Start infrastructure.
@@ -225,6 +242,7 @@ func TestRoomKeySender_TypeScriptClient_Unencrypted(t *testing.T) {
 }
 
 func TestRoomKeySender_TypeScriptClient(t *testing.T) {
+	skipOnVFS(t)
 	ctx := context.Background()
 
 	// 1. Start infrastructure.
@@ -278,7 +296,7 @@ func TestRoomKeySender_TypeScriptClient(t *testing.T) {
 		PublicKey:  pubKeyBytes,
 		PrivateKey: privKeyBytes,
 	}
-	err = sender.Send(account, evt)
+	err = sender.Send(account, *evt)
 	require.NoError(t, err, "send room key event")
 
 	// 7. Small delay to ensure key is received before the encrypted message.

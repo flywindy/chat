@@ -9,8 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"go.mongodb.org/mongo-driver/v2/mongo"
-
 	"github.com/hmchangw/chat/pkg/idgen"
 	"github.com/hmchangw/chat/pkg/model"
 	"github.com/hmchangw/chat/pkg/natsutil"
@@ -33,7 +31,7 @@ type InboxStore interface {
 	UpsertThreadSubscription(ctx context.Context, sub *model.ThreadSubscription) error
 }
 
-// Handler processes incoming cross-site OutboxEvent messages.
+// Handler processes cross-site OutboxEvent messages; replicates only subscription/room metadata, never room keys.
 type Handler struct {
 	store InboxStore
 }
@@ -77,7 +75,6 @@ func (h *Handler) handleMemberAdded(ctx context.Context, evt *model.OutboxEvent)
 		return fmt.Errorf("unmarshal member_added payload: %w", err)
 	}
 
-	// 1. Look up users locally
 	users, err := h.store.FindUsersByAccounts(ctx, event.Accounts)
 	if err != nil {
 		return fmt.Errorf("find users by accounts: %w", err)
@@ -94,7 +91,6 @@ func (h *Handler) handleMemberAdded(ctx context.Context, evt *model.OutboxEvent)
 		historySharedSince = &t
 	}
 
-	// 2. Build subscriptions
 	subs := make([]*model.Subscription, 0, len(event.Accounts))
 	for _, account := range event.Accounts {
 		user, ok := userMap[account]
@@ -119,7 +115,6 @@ func (h *Handler) handleMemberAdded(ctx context.Context, evt *model.OutboxEvent)
 		subs = append(subs, sub)
 	}
 
-	// 3. Bulk create subscriptions
 	if err := h.store.BulkCreateSubscriptions(ctx, subs); err != nil {
 		return fmt.Errorf("bulk create subscriptions: %w", err)
 	}
@@ -304,9 +299,6 @@ func (h *Handler) handleRoomCreated(ctx context.Context, evt *model.OutboxEvent)
 		return nil
 	}
 	if err := h.store.BulkCreateSubscriptions(ctx, subs); err != nil {
-		if mongo.IsDuplicateKeyError(err) {
-			return nil
-		}
 		return fmt.Errorf("bulk create subs: %w", err)
 	}
 	return nil

@@ -42,6 +42,21 @@ func (m *MockStore) EXPECT() *MockStoreMockRecorder {
 	return m.recorder
 }
 
+// FetchAndUpdateRoom mocks base method.
+func (m *MockStore) FetchAndUpdateRoom(ctx context.Context, roomID, msgID string, msgAt time.Time, mentionAll bool) (*model.Room, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FetchAndUpdateRoom", ctx, roomID, msgID, msgAt, mentionAll)
+	ret0, _ := ret[0].(*model.Room)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FetchAndUpdateRoom indicates an expected call of FetchAndUpdateRoom.
+func (mr *MockStoreMockRecorder) FetchAndUpdateRoom(ctx, roomID, msgID, msgAt, mentionAll any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FetchAndUpdateRoom", reflect.TypeOf((*MockStore)(nil).FetchAndUpdateRoom), ctx, roomID, msgID, msgAt, mentionAll)
+}
+
 // GetRoom mocks base method.
 func (m *MockStore) GetRoom(ctx context.Context, roomID string) (*model.Room, error) {
 	m.ctrl.T.Helper()
@@ -84,19 +99,4 @@ func (m *MockStore) SetSubscriptionMentions(ctx context.Context, roomID string, 
 func (mr *MockStoreMockRecorder) SetSubscriptionMentions(ctx, roomID, accounts any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetSubscriptionMentions", reflect.TypeOf((*MockStore)(nil).SetSubscriptionMentions), ctx, roomID, accounts)
-}
-
-// FetchAndUpdateRoom mocks base method.
-func (m *MockStore) FetchAndUpdateRoom(ctx context.Context, roomID, msgID string, msgAt time.Time, mentionAll bool) (*model.Room, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "FetchAndUpdateRoom", ctx, roomID, msgID, msgAt, mentionAll)
-	ret0, _ := ret[0].(*model.Room)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// FetchAndUpdateRoom indicates an expected call of FetchAndUpdateRoom.
-func (mr *MockStoreMockRecorder) FetchAndUpdateRoom(ctx, roomID, msgID, msgAt, mentionAll any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FetchAndUpdateRoom", reflect.TypeOf((*MockStore)(nil).FetchAndUpdateRoom), ctx, roomID, msgID, msgAt, mentionAll)
 }

@@ -3,6 +3,7 @@ package roomkeystore
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,6 +17,10 @@ type redisAdapter struct {
 
 func (a *redisAdapter) hset(ctx context.Context, key string, pub, priv string) error {
 	return a.c.HSet(ctx, key, "pub", pub, "priv", priv, "ver", "0").Err()
+}
+
+func (a *redisAdapter) hsetWithVersion(ctx context.Context, key string, pub, priv string, version int) error {
+	return a.c.HSet(ctx, key, "pub", pub, "priv", priv, "ver", strconv.Itoa(version)).Err()
 }
 
 func (a *redisAdapter) hgetall(ctx context.Context, key string) (map[string]string, error) {

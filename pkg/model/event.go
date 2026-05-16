@@ -160,9 +160,10 @@ type RoomEvent struct {
 }
 
 type RoomKeyEvent struct {
-	RoomID     string `json:"roomId"`
-	Version    int    `json:"version"`
-	PublicKey  []byte `json:"publicKey"`
+	RoomID  string `json:"roomId"`
+	Version int    `json:"version"`
+	// PublicKey is server-side only; omitted from the client wire payload (clients only need PrivateKey).
+	PublicKey  []byte `json:"publicKey,omitempty"`
 	PrivateKey []byte `json:"privateKey"`
 	Timestamp  int64  `json:"timestamp" bson:"timestamp"`
 }

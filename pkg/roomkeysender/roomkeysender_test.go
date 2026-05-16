@@ -82,10 +82,22 @@ func TestSender_Send(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Deep-copy the caller's event for the post-call non-mutation check:
+			// the shallow struct copy alone would share PublicKey / PrivateKey
+			// backing arrays with tt.evt, so an in-place slice mutation by Send
+			// would be invisible to a plain assert.Equal(before, tt.evt).
+			before := tt.evt
+			before.PublicKey = append([]byte(nil), tt.evt.PublicKey...)
+			before.PrivateKey = append([]byte(nil), tt.evt.PrivateKey...)
+
 			pub := &mockPublisher{err: tt.publishErr}
 			sender := roomkeysender.NewSender(pub)
 
-			err := sender.Send(tt.account, &tt.evt)
+			err := sender.Send(tt.account, tt.evt)
+
+			// Non-mutation contract: Send takes the event by value and stamps Timestamp
+			// on its local copy — the caller's struct must be unchanged on success or error.
+			assert.Equal(t, before, tt.evt, "Send must not mutate the caller's RoomKeyEvent")
 
 			if tt.wantErr != "" {
 				require.Error(t, err)

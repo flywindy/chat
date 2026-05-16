@@ -11,6 +11,10 @@ services:
       - SITE_ID=site-local
       - MONGO_URI=mongodb://mongodb:27017
       - MONGO_DB=chat
+      # Valkey is required (room-worker refuses to start without VALKEY_ADDR).
+      # Provided by docker-local/compose.deps.yaml; production deploys must supply it externally.
+      - VALKEY_ADDR=valkey:6379
+      - VALKEY_KEY_GRACE_PERIOD=24h
       - BOOTSTRAP_STREAMS=true
     volumes:
       - ../../docker-local/backend.creds:/etc/nats/backend.creds:ro

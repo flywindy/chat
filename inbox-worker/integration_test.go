@@ -161,6 +161,69 @@ func TestInboxWorker_RoleUpdated_Integration(t *testing.T) {
 	// user notification via NATS supercluster routing.
 }
 
+// TestInboxWorker_BulkCreateSubscriptions_IdempotentUpsert exercises the
+// upsert contract: a redelivered BulkCreateSubscriptions for an already-existing
+// (roomId, account) must be a no-op on Mongo — neither create a duplicate nor
+// overwrite read-state that accumulated since the first delivery.
+func TestInboxWorker_BulkCreateSubscriptions_IdempotentUpsert(t *testing.T) {
+	ctx := context.Background()
+	db := setupMongo(t)
+	store := &mongoInboxStore{
+		subCol:  db.Collection("subscriptions"),
+		roomCol: db.Collection("rooms"),
+		userCol: db.Collection("users"),
+	}
+
+	originalSeenAt := time.Now().UTC().Add(-time.Hour).Truncate(time.Millisecond)
+	original := &model.Subscription{
+		ID:         "sub-existing",
+		User:       model.SubscriptionUser{ID: "u1", Account: "alice"},
+		RoomID:     "r1",
+		SiteID:     "site-origin",
+		Roles:      []model.Role{model.RoleMember},
+		LastSeenAt: &originalSeenAt,
+		Alert:      true,
+		JoinedAt:   originalSeenAt,
+	}
+	require.NoError(t, store.BulkCreateSubscriptions(ctx, []*model.Subscription{original}))
+
+	// Re-issue with a "fresher" copy that has no LastSeenAt — simulates a
+	// redelivered outbox event materializing the same sub.
+	redelivered := &model.Subscription{
+		ID:       "sub-redelivered",
+		User:     model.SubscriptionUser{ID: "u1", Account: "alice"},
+		RoomID:   "r1",
+		SiteID:   "site-origin",
+		Roles:    []model.Role{model.RoleMember},
+		JoinedAt: time.Now().UTC().Truncate(time.Millisecond),
+	}
+	newOne := &model.Subscription{
+		ID:       "sub-new",
+		User:     model.SubscriptionUser{ID: "u2", Account: "bob"},
+		RoomID:   "r1",
+		SiteID:   "site-origin",
+		Roles:    []model.Role{model.RoleMember},
+		JoinedAt: time.Now().UTC().Truncate(time.Millisecond),
+	}
+	require.NoError(t, store.BulkCreateSubscriptions(ctx, []*model.Subscription{redelivered, newOne}))
+
+	// Exactly two subs in the room: alice (preserved) + bob (newly inserted).
+	count, err := store.subCol.CountDocuments(ctx, bson.M{"roomId": "r1"})
+	require.NoError(t, err)
+	assert.EqualValues(t, 2, count, "redelivery must not duplicate")
+
+	var existing model.Subscription
+	require.NoError(t, store.subCol.FindOne(ctx, bson.M{"roomId": "r1", "u.account": "alice"}).Decode(&existing))
+	assert.Equal(t, "sub-existing", existing.ID, "existing _id must not change")
+	require.NotNil(t, existing.LastSeenAt, "LastSeenAt must be preserved on upsert no-op")
+	assert.WithinDuration(t, originalSeenAt, *existing.LastSeenAt, time.Second)
+	assert.True(t, existing.Alert, "Alert flag must be preserved")
+
+	var fresh model.Subscription
+	require.NoError(t, store.subCol.FindOne(ctx, bson.M{"roomId": "r1", "u.account": "bob"}).Decode(&fresh))
+	assert.Equal(t, "sub-new", fresh.ID, "new sub must be inserted with its caller-supplied _id")
+}
+
 func TestInboxWorker_MemberRemoved_Integration(t *testing.T) {
 	db := setupMongo(t)
 	store := &mongoInboxStore{
@@ -417,7 +480,7 @@ func mustInsertUser(t *testing.T, db *mongo.Database, u *model.User) {
 }
 
 // newIntegrationHandler creates a Handler wired to the given database for integration tests.
-func newIntegrationHandler(t *testing.T, db *mongo.Database, _ string) *Handler {
+func newIntegrationHandler(t *testing.T, db *mongo.Database) *Handler {
 	t.Helper()
 	store := &mongoInboxStore{
 		subCol:  db.Collection("subscriptions"),
@@ -435,7 +498,7 @@ func TestHandleRoomCreatedPersistsRemoteSubs(t *testing.T) {
 	mustInsertUser(t, db, &model.User{ID: "u_ian", Account: "ian",
 		SiteID: "site-B", EngName: "Ian", ChineseName: "伊恩"})
 
-	h := newIntegrationHandler(t, db, "site-B")
+	h := newIntegrationHandler(t, db)
 	const reqID = "0193abcd-0193-7abc-89ab-0193abcd0193"
 	ctx = natsutil.WithRequestID(ctx, reqID)
 
@@ -471,7 +534,7 @@ func TestHandleRoomCreatedDM_PersistsRemoteCounterpartSub(t *testing.T) {
 	mustInsertUser(t, db, &model.User{ID: "u_bob", Account: "bob",
 		SiteID: "site-B", EngName: "Bob", ChineseName: "鲍勃"})
 
-	h := newIntegrationHandler(t, db, "site-B")
+	h := newIntegrationHandler(t, db)
 	const reqID = "0193abcd-0193-7abc-89ab-0193abcd0193"
 	ctx = natsutil.WithRequestID(ctx, reqID)
 

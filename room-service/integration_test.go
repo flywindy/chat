@@ -1249,6 +1249,61 @@ func TestRoomsInfoBatchRPC(t *testing.T) {
 	assert.Nil(t, resp.Rooms[3].KeyVersion)
 }
 
+// TestIntegration_CreateRoom_PersistsKeyInValkey verifies that handleCreateRoom
+// generates and stores a room keypair in Valkey before publishing the canonical
+// event. This ensures room-worker's "key MUST exist" gate will always succeed
+// on the first delivery.
+func TestIntegration_CreateRoom_PersistsKeyInValkey(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	ctx := context.Background()
+	db := setupMongo(t)
+	store := NewMongoStore(db)
+	require.NoError(t, store.EnsureIndexes(ctx))
+
+	valCfg := setupValkey(t)
+	keyStore, err := roomkeystore.NewValkeyStore(*valCfg)
+	require.NoError(t, err)
+
+	mustInsertUser(t, db, &model.User{
+		ID: "u_alice", Account: "alice", SiteID: "site-A",
+		EngName: "Alice", ChineseName: "爱丽丝",
+	})
+	mustInsertUser(t, db, &model.User{
+		ID: "u_bob", Account: "bob", SiteID: "site-A",
+		EngName: "Bob", ChineseName: "鲍勃",
+	})
+
+	h, _ := newRoomServiceHandler(t, store, keyStore, "site-A")
+
+	reqID := idgen.GenerateRequestID()
+	ctx = natsutil.WithRequestID(ctx, reqID)
+
+	body, err := json.Marshal(model.CreateRoomRequest{
+		Name:  "crypto team",
+		Users: []string{"bob"},
+	})
+	require.NoError(t, err)
+
+	resp, err := h.handleCreateRoom(ctx, subject.RoomCreate("alice", "site-A"), body)
+	require.NoError(t, err)
+
+	var reply model.CreateRoomReply
+	require.NoError(t, json.Unmarshal(resp, &reply))
+	assert.Equal(t, model.CreateRoomReplyAccepted, reply.Status)
+	assert.NotEmpty(t, reply.RoomID)
+
+	// Assert the keypair was persisted to Valkey before the canonical event was published.
+	pair, err := keyStore.Get(ctx, reply.RoomID)
+	require.NoError(t, err)
+	require.NotNil(t, pair, "room key must be stored in Valkey immediately after create")
+	assert.NotEmpty(t, pair.KeyPair.PublicKey, "public key must be non-empty")
+	assert.NotEmpty(t, pair.KeyPair.PrivateKey, "private key must be non-empty")
+	assert.Equal(t, 0, pair.Version, "freshly created room key must have version 0")
+}
+
 // mustInsertUser inserts a user document directly into the users collection.
 func mustInsertUser(t *testing.T, db *mongo.Database, u *model.User) {
 	t.Helper()

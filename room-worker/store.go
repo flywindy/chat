@@ -5,12 +5,13 @@ import (
 	"errors"
 
 	"github.com/hmchangw/chat/pkg/model"
+	"github.com/hmchangw/chat/pkg/roomkeystore"
 )
 
 // ErrUserNotFound is returned by GetUser when the account does not exist.
 var ErrUserNotFound = errors.New("user not found")
 
-//go:generate mockgen -destination=mock_store_test.go -package=main . SubscriptionStore
+//go:generate mockgen -destination=mock_store_test.go -package=main . SubscriptionStore,RoomKeyStore
 
 // UserWithMembership is the result of the GetUserWithMembership aggregation pipeline.
 // It carries the target user along with a flag indicating whether an org-sourced
@@ -35,6 +36,7 @@ type SubscriptionStore interface {
 	// --- existing methods (invite flow) ---
 	CreateSubscription(ctx context.Context, sub *model.Subscription) error
 	BulkCreateSubscriptions(ctx context.Context, subs []*model.Subscription) error
+	// ListByRoom returns all subscriptions for roomID across every site.
 	ListByRoom(ctx context.Context, roomID string) ([]model.Subscription, error)
 	// ReconcileMemberCounts recomputes Room.UserCount (non-bot subs) and
 	// Room.AppCount (bot subs) by scanning the subscriptions collection,
@@ -83,4 +85,13 @@ type SubscriptionStore interface {
 	// account so they aren't materialized as a regular member in addition to
 	// being added separately as the owner.
 	ListNewMembersForNewRoom(ctx context.Context, orgIDs, accounts []string, excludeAccount string) ([]string, error)
+}
+
+// Key store used by room-worker: reads for fan-out, writes for rotation.
+type RoomKeyStore interface {
+	Get(ctx context.Context, roomID string) (*roomkeystore.VersionedKeyPair, error)
+	// Set writes a fresh keypair at version 0 — fallback when Rotate finds no current key.
+	Set(ctx context.Context, roomID string, pair roomkeystore.RoomKeyPair) (int, error)
+	// Rotate atomically increments version and writes newPair as current.
+	Rotate(ctx context.Context, roomID string, newPair roomkeystore.RoomKeyPair) (int, error)
 }

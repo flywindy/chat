@@ -81,6 +81,33 @@ func TestValkeyStore_Integration_RoundTrip(t *testing.T) {
 	assert.Nil(t, got)
 }
 
+func TestValkeyStore_Integration_SetWithVersion(t *testing.T) {
+	store := setupValkey(t, time.Hour)
+	ctx := context.Background()
+
+	pubKey := bytes.Repeat([]byte{0xAB}, 65)
+	privKey := bytes.Repeat([]byte{0xCD}, 32)
+	pair := RoomKeyPair{PublicKey: pubKey, PrivateKey: privKey}
+
+	require.NoError(t, store.SetWithVersion(ctx, "room-replicated", pair, 7))
+
+	got, err := store.Get(ctx, "room-replicated")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, 7, got.Version, "version must match the caller-supplied value")
+	assert.Equal(t, pubKey, got.KeyPair.PublicKey)
+	assert.Equal(t, privKey, got.KeyPair.PrivateKey)
+
+	// Overwriting at a higher version is allowed (idempotent for replication catch-up).
+	newPub := bytes.Repeat([]byte{0xEE}, 65)
+	require.NoError(t, store.SetWithVersion(ctx, "room-replicated", RoomKeyPair{PublicKey: newPub, PrivateKey: privKey}, 9))
+	got, err = store.Get(ctx, "room-replicated")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, 9, got.Version)
+	assert.Equal(t, newPub, got.KeyPair.PublicKey)
+}
+
 func TestValkeyStore_Integration_MissingKey(t *testing.T) {
 	store := setupValkey(t, time.Hour)
 	ctx := context.Background()

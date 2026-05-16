@@ -53,8 +53,7 @@ func (s *MongoStore) EnsureIndexes(ctx context.Context) error {
 	}); err != nil {
 		return fmt.Errorf("ensure room_members (rid,member.type,member.id) unique index: %w", err)
 	}
-	// Unique logical key for subscriptions. Same retry-idempotency rationale
-	// as room_members above.
+	// Unique logical key for subscriptions. Same retry-idempotency rationale as room_members above.
 	if _, err := s.subscriptions.Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys:    bson.D{{Key: "roomId", Value: 1}, {Key: "u.account", Value: 1}},
 		Options: options.Index().SetUnique(true),

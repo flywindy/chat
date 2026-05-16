@@ -28,6 +28,11 @@ type VersionedKeyPair struct {
 // RoomKeyStore defines storage operations for room encryption key pairs.
 type RoomKeyStore interface {
 	Set(ctx context.Context, roomID string, pair RoomKeyPair) (int, error)
+	// SetWithVersion overwrites the current key for roomID with pair stamped at the
+	// caller-supplied version. Intended for cross-site replication, where a remote
+	// site must adopt the origin's exact version so on-wire message envelopes match
+	// the version clients hold. Does not touch the previous-key slot.
+	SetWithVersion(ctx context.Context, roomID string, pair RoomKeyPair, version int) error
 	Get(ctx context.Context, roomID string) (*VersionedKeyPair, error)
 	GetMany(ctx context.Context, roomIDs []string) (map[string]*VersionedKeyPair, error)
 	GetByVersion(ctx context.Context, roomID string, version int) (*RoomKeyPair, error)
@@ -47,6 +52,7 @@ type Config struct {
 // Unexported and command-specific so unit tests can inject a fake without a live Valkey connection.
 type hashCommander interface {
 	hset(ctx context.Context, key string, pub, priv string) error
+	hsetWithVersion(ctx context.Context, key string, pub, priv string, version int) error
 	hgetall(ctx context.Context, key string) (map[string]string, error)
 	hgetallMany(ctx context.Context, keys []string) ([]map[string]string, error)
 	rotatePipeline(ctx context.Context, currentKey, prevKey string, pub, priv string, gracePeriod time.Duration) (int, error)
@@ -89,6 +95,20 @@ func (s *valkeyStore) Set(ctx context.Context, roomID string, pair RoomKeyPair) 
 		return 0, fmt.Errorf("set room key: %w", err)
 	}
 	return 0, nil
+}
+
+// SetWithVersion overwrites the current key slot with pair stamped at version.
+// Used by inbox-worker for cross-site replication so the remote site mirrors
+// origin's version exactly; clients then see matching versions in on-wire
+// message envelopes regardless of which site broadcast the message. Does not
+// touch the previous key slot.
+func (s *valkeyStore) SetWithVersion(ctx context.Context, roomID string, pair RoomKeyPair, version int) error {
+	pub := base64.StdEncoding.EncodeToString(pair.PublicKey)
+	priv := base64.StdEncoding.EncodeToString(pair.PrivateKey)
+	if err := s.client.hsetWithVersion(ctx, roomkey(roomID), pub, priv, version); err != nil {
+		return fmt.Errorf("set room key with version %d: %w", version, err)
+	}
+	return nil
 }
 
 // Get retrieves the current key pair for roomID. Returns (nil, nil) if the key does not exist.
