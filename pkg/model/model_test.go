@@ -1910,25 +1910,6 @@ func TestCreateRoomRequestRoundtrip(t *testing.T) {
 	assert.Equal(t, int64(1740000000000), dst.Timestamp)
 }
 
-func TestRoomCreatedOutboxRoundtrip(t *testing.T) {
-	out := model.RoomCreatedOutbox{
-		RoomID:           "r1",
-		RoomType:         model.RoomTypeChannel,
-		RoomName:         "deal team",
-		HomeSiteID:       "site-A",
-		Accounts:         []string{"bob", "ian"},
-		RequesterAccount: "alice",
-		Timestamp:        1740000000000,
-	}
-	data, err := json.Marshal(&out)
-	require.NoError(t, err)
-	var dst model.RoomCreatedOutbox
-	require.NoError(t, json.Unmarshal(data, &dst))
-	assert.Equal(t, model.RoomTypeChannel, dst.RoomType)
-	assert.Equal(t, []string{"bob", "ian"}, dst.Accounts)
-	assert.NotContains(t, string(data), "appName")
-}
-
 func TestErrorResponseRoomIDOmitempty(t *testing.T) {
 	er := model.ErrorResponse{Error: "internal"}
 	body, err := json.Marshal(er)

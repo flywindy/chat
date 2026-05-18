@@ -2322,18 +2322,19 @@ func TestProcessCreateRoom_Channel_OutboxPerRemoteSite(t *testing.T) {
 	})
 	require.NoError(t, h.processCreateRoom(ctx, body))
 
-	outboxMsgs := outboxFor(getPublished(), "site-B", model.MessageTypeRoomCreated)
+	outboxMsgs := outboxFor(getPublished(), "site-B", model.OutboxMemberAdded)
 	require.Len(t, outboxMsgs, 1)
 
 	var envelope model.OutboxEvent
 	require.NoError(t, json.Unmarshal(outboxMsgs[0].data, &envelope))
-	assert.Equal(t, model.MessageTypeRoomCreated, envelope.Type)
+	assert.Equal(t, model.OutboxMemberAdded, envelope.Type)
 	assert.Equal(t, "site-A", envelope.SiteID)
 	assert.Equal(t, "site-B", envelope.DestSiteID)
 
-	var payload model.RoomCreatedOutbox
+	var payload model.MemberAddEvent
 	require.NoError(t, json.Unmarshal(envelope.Payload, &payload))
 	assert.Equal(t, "room-ch-5", payload.RoomID)
+	assert.Equal(t, model.RoomTypeChannel, payload.RoomType)
 	assert.Equal(t, []string{"bob"}, payload.Accounts)
 	assert.Equal(t, "alice", payload.RequesterAccount)
 }
@@ -2826,24 +2827,24 @@ func TestHandleSyncCreateDM_CrossSite_EmitsOutbox(t *testing.T) {
 
 	var outbox *dmCapturedPublish
 	for i := range capture.captured {
-		if capture.captured[i].subject == subject.Outbox("site-a", "site-b", model.OutboxTypeRoomCreated) {
+		if capture.captured[i].subject == subject.Outbox("site-a", "site-b", model.OutboxMemberAdded) {
 			outbox = &capture.captured[i]
 			break
 		}
 	}
-	require.NotNil(t, outbox, "expected an outbox publish to site-b")
+	require.NotNil(t, outbox, "expected a member_added outbox publish to site-b")
 
 	var env model.OutboxEvent
 	require.NoError(t, json.Unmarshal(outbox.data, &env))
-	assert.Equal(t, model.OutboxEventType(model.OutboxTypeRoomCreated), env.Type)
+	assert.Equal(t, model.OutboxMemberAdded, env.Type)
 	assert.Equal(t, "site-a", env.SiteID)
 	assert.Equal(t, "site-b", env.DestSiteID)
 
-	var payload model.RoomCreatedOutbox
+	var payload model.MemberAddEvent
 	require.NoError(t, json.Unmarshal(env.Payload, &payload))
 	assert.Equal(t, model.RoomTypeDM, payload.RoomType)
 	assert.Equal(t, "", payload.RoomName)
-	assert.Equal(t, "site-a", payload.HomeSiteID)
+	assert.Equal(t, "site-a", payload.SiteID)
 	assert.Equal(t, []string{"bob"}, payload.Accounts)
 	assert.Equal(t, "alice", payload.RequesterAccount)
 	assert.Equal(t, "01970a4f-8c2d-7c9a-abcd-e0123456789f:site-b", outbox.msgID)
@@ -3139,13 +3140,11 @@ func TestProcessCreateRoom_Channel_PublishesCrossSiteMemberAdded(t *testing.T) {
 	require.NoError(t, json.Unmarshal(envelope.Payload, &inner))
 	assert.Equal(t, "room-ch-xsite", inner.RoomID)
 	assert.Equal(t, "Cross", inner.RoomName)
+	assert.Equal(t, model.RoomTypeChannel, inner.RoomType, "create-time member_added carries RoomType for inbox-worker dispatch")
 	assert.Equal(t, []string{"bob"}, inner.Accounts, "carries only the remote-site accounts, mirroring processAddMembers")
 	assert.Equal(t, "site-A", inner.SiteID, "inner SiteID is the origin (room's home)")
+	assert.Equal(t, "alice", inner.RequesterAccount, "create-time member_added carries RequesterAccount for DM/botDM counterpart resolution")
 	assert.Nil(t, inner.HistorySharedSince, "create-time event must be unrestricted")
-
-	// Sanity: the existing room_created outbox is still emitted on the same loop.
-	roomCreatedOutbox := outboxFor(getPublished(), "site-B", model.OutboxTypeRoomCreated)
-	require.Len(t, roomCreatedOutbox, 1, "room_created outbox path unchanged")
 }
 
 // ---- Task 10: key-gate and fan-out tests ----

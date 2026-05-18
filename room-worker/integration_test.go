@@ -653,31 +653,8 @@ func TestProcessCreateRoomChannel_OutboxPerRemoteSite(t *testing.T) {
 	assert.Empty(t, cap.outboxOnPrefix(subject.Outbox("site-A", "site-A", "")),
 		"no outbox to home site-A")
 
-	// room_created outboxes — one per remote site.
-	createdB := cap.outboxOnPrefix(subject.Outbox("site-A", "site-B", model.OutboxTypeRoomCreated))
-	createdC := cap.outboxOnPrefix(subject.Outbox("site-A", "site-C", model.OutboxTypeRoomCreated))
-	require.Len(t, createdB, 1, "exactly one room_created outbox to site-B")
-	require.Len(t, createdC, 1, "exactly one room_created outbox to site-C")
-
-	var envB model.OutboxEvent
-	require.NoError(t, json.Unmarshal(createdB[0].data, &envB))
-	var payloadB model.RoomCreatedOutbox
-	require.NoError(t, json.Unmarshal(envB.Payload, &payloadB))
-	assert.ElementsMatch(t, []string{"bob", "carol"}, payloadB.Accounts)
-	assert.Equal(t, model.RoomTypeChannel, payloadB.RoomType)
-	assert.Equal(t, "deal team", payloadB.RoomName)
-	assert.Equal(t, "site-A", payloadB.HomeSiteID)
-	assert.Equal(t, "alice", payloadB.RequesterAccount)
-	assert.Equal(t, reqID+":site-B", createdB[0].msgID)
-
-	var envC model.OutboxEvent
-	require.NoError(t, json.Unmarshal(createdC[0].data, &envC))
-	var payloadC model.RoomCreatedOutbox
-	require.NoError(t, json.Unmarshal(envC.Payload, &payloadC))
-	assert.ElementsMatch(t, []string{"ian"}, payloadC.Accounts)
-	assert.Equal(t, reqID+":site-C", createdC[0].msgID)
-
-	// member_added outboxes — one per remote site (search-sync-worker federation).
+	// One member_added outbox per remote site — carries all the info
+	// inbox-worker needs for sub creation AND search-sync-worker for MV update.
 	memberB := cap.outboxOnPrefix(subject.Outbox("site-A", "site-B", model.OutboxMemberAdded))
 	memberC := cap.outboxOnPrefix(subject.Outbox("site-A", "site-C", model.OutboxMemberAdded))
 	require.Len(t, memberB, 1, "exactly one member_added outbox to site-B")
@@ -688,8 +665,10 @@ func TestProcessCreateRoomChannel_OutboxPerRemoteSite(t *testing.T) {
 	var memberPayloadB model.MemberAddEvent
 	require.NoError(t, json.Unmarshal(memberEnvB.Payload, &memberPayloadB))
 	assert.ElementsMatch(t, []string{"bob", "carol"}, memberPayloadB.Accounts)
+	assert.Equal(t, model.RoomTypeChannel, memberPayloadB.RoomType)
 	assert.Equal(t, "deal team", memberPayloadB.RoomName)
 	assert.Equal(t, "site-A", memberPayloadB.SiteID)
+	assert.Equal(t, "alice", memberPayloadB.RequesterAccount)
 	assert.Nil(t, memberPayloadB.HistorySharedSince)
 	assert.Equal(t, reqID+":site-B", memberB[0].msgID)
 
@@ -698,6 +677,11 @@ func TestProcessCreateRoomChannel_OutboxPerRemoteSite(t *testing.T) {
 	var memberPayloadC model.MemberAddEvent
 	require.NoError(t, json.Unmarshal(memberEnvC.Payload, &memberPayloadC))
 	assert.ElementsMatch(t, []string{"ian"}, memberPayloadC.Accounts)
+	assert.Equal(t, model.RoomTypeChannel, memberPayloadC.RoomType)
+	assert.Equal(t, "deal team", memberPayloadC.RoomName)
+	assert.Equal(t, "site-A", memberPayloadC.SiteID)
+	assert.Equal(t, "alice", memberPayloadC.RequesterAccount)
+	assert.Nil(t, memberPayloadC.HistorySharedSince)
 	assert.Equal(t, reqID+":site-C", memberC[0].msgID)
 }
 
@@ -741,28 +725,18 @@ func TestProcessCreateRoomDM_OutboxToCounterpartSite(t *testing.T) {
 	assert.Empty(t, cap.outboxOnPrefix(subject.Outbox("site-A", "site-A", "")))
 	assert.Empty(t, cap.outboxOnPrefix(subject.Outbox("site-A", "site-C", "")))
 
-	// room_created outbox to the recipient's site.
-	createdB := cap.outboxOnPrefix(subject.Outbox("site-A", "site-B", model.OutboxTypeRoomCreated))
-	require.Len(t, createdB, 1)
-	var env model.OutboxEvent
-	require.NoError(t, json.Unmarshal(createdB[0].data, &env))
-	var payload model.RoomCreatedOutbox
-	require.NoError(t, json.Unmarshal(env.Payload, &payload))
-	assert.Equal(t, model.RoomTypeDM, payload.RoomType)
-	assert.Equal(t, "", payload.RoomName, "DM RoomName empty per v2 cleanup")
-	assert.ElementsMatch(t, []string{"bob"}, payload.Accounts)
-	assert.Equal(t, "alice", payload.RequesterAccount)
-	assert.Equal(t, "site-A", payload.HomeSiteID)
-	assert.Equal(t, reqID+":site-B", createdB[0].msgID)
-
-	// member_added outbox (search-sync-worker federation).
+	// One member_added outbox to the recipient's site — carries everything
+	// inbox-worker needs to build the DM recipient's sub with the right shape.
 	memberB := cap.outboxOnPrefix(subject.Outbox("site-A", "site-B", model.OutboxMemberAdded))
 	require.Len(t, memberB, 1)
 	var memberEnv model.OutboxEvent
 	require.NoError(t, json.Unmarshal(memberB[0].data, &memberEnv))
 	var memberPayload model.MemberAddEvent
 	require.NoError(t, json.Unmarshal(memberEnv.Payload, &memberPayload))
+	assert.Equal(t, model.RoomTypeDM, memberPayload.RoomType)
+	assert.Equal(t, "", memberPayload.RoomName, "DM RoomName empty per v2 cleanup")
 	assert.ElementsMatch(t, []string{"bob"}, memberPayload.Accounts)
+	assert.Equal(t, "alice", memberPayload.RequesterAccount, "DM counterpart resolution depends on this")
 	assert.Equal(t, "site-A", memberPayload.SiteID)
 	assert.Equal(t, reqID+":site-B", memberB[0].msgID)
 }
@@ -1076,7 +1050,7 @@ func TestSyncCreateDM_BotDM_CrossSiteOutbox(t *testing.T) {
 	_, err := handler.handleSyncCreateDM(newIntegSyncDMCtx(), data)
 	require.NoError(t, err)
 
-	pubs := cap.outboxOnPrefix(subject.Outbox(siteID, "site-B", model.OutboxTypeRoomCreated))
+	pubs := cap.outboxOnPrefix(subject.Outbox(siteID, "site-B", model.OutboxMemberAdded))
 	assert.Len(t, pubs, 1, "exactly one outbox to site-B")
 }
 
@@ -1142,14 +1116,15 @@ func TestSyncCreateDM_CrossSite_OutboxPayloadConverges(t *testing.T) {
 	assert.Equal(t, wantRoomID, persisted.ID)
 
 	// 2. OUTBOX payload carries the same RoomID + the dedup key includes destSiteID.
-	pubs := cap1.outboxOnPrefix(subject.Outbox(siteID, "site-B", model.OutboxTypeRoomCreated))
+	pubs := cap1.outboxOnPrefix(subject.Outbox(siteID, "site-B", model.OutboxMemberAdded))
 	require.Len(t, pubs, 1)
 	var env model.OutboxEvent
 	require.NoError(t, json.Unmarshal(pubs[0].data, &env))
-	var payload model.RoomCreatedOutbox
+	var payload model.MemberAddEvent
 	require.NoError(t, json.Unmarshal(env.Payload, &payload))
 	assert.Equal(t, wantRoomID, payload.RoomID,
 		"outbox RoomID must match local room.ID so remote site converges")
+	assert.Equal(t, model.RoomTypeDM, payload.RoomType)
 	assert.Equal(t, "alice", payload.RequesterAccount)
 	assert.Equal(t, []string{"bob"}, payload.Accounts)
 	assert.Contains(t, pubs[0].msgID, "site-B",
@@ -1161,7 +1136,7 @@ func TestSyncCreateDM_CrossSite_OutboxPayloadConverges(t *testing.T) {
 	handler2 := NewHandler(store, siteID, cap2.fn(), testKeyStore, testKeySender)
 	_, err = handler2.handleSyncCreateDM(ctx, data)
 	require.NoError(t, err)
-	pubs2 := cap2.outboxOnPrefix(subject.Outbox(siteID, "site-B", model.OutboxTypeRoomCreated))
+	pubs2 := cap2.outboxOnPrefix(subject.Outbox(siteID, "site-B", model.OutboxMemberAdded))
 	require.Len(t, pubs2, 1)
 	assert.Equal(t, pubs[0].msgID, pubs2[0].msgID,
 		"replay must produce identical Nats-Msg-Id so broker dedup blocks duplicate cross-site events")

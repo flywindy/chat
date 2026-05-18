@@ -842,8 +842,11 @@ func (h *Handler) processAddMembers(ctx context.Context, data []byte) (err error
 	memberAddEvt := model.MemberAddEvent{
 		Type:               "member_added",
 		RoomID:             req.RoomID,
+		RoomName:           room.Name,
+		RoomType:           room.Type,
 		Accounts:           actualAccounts,
 		SiteID:             room.SiteID,
+		RequesterAccount:   req.RequesterAccount,
 		JoinedAt:           req.Timestamp,
 		HistorySharedSince: historySharedSince,
 		Timestamp:          now.UnixMilli(),
@@ -911,8 +914,10 @@ func (h *Handler) processAddMembers(ctx context.Context, data []byte) (err error
 			Type:               "member_added",
 			RoomID:             req.RoomID,
 			RoomName:           room.Name,
+			RoomType:           room.Type,
 			Accounts:           accounts,
 			SiteID:             room.SiteID,
+			RequesterAccount:   req.RequesterAccount,
 			JoinedAt:           req.Timestamp,
 			HistorySharedSince: historySharedSince,
 			Timestamp:          now.UnixMilli(),
@@ -1233,8 +1238,10 @@ func (h *Handler) finishCreateRoom(ctx context.Context, req *model.CreateRoomReq
 		Type:               model.OutboxMemberAdded,
 		RoomID:             room.ID,
 		RoomName:           room.Name,
+		RoomType:           room.Type,
 		Accounts:           accounts,
 		SiteID:             room.SiteID,
+		RequesterAccount:   requester.Account,
 		JoinedAt:           req.Timestamp,
 		HistorySharedSince: nil,
 		Timestamp:          now.UnixMilli(),
@@ -1263,45 +1270,14 @@ func (h *Handler) finishCreateRoom(ctx context.Context, req *model.CreateRoomReq
 		remoteSiteAccounts[u.SiteID] = append(remoteSiteAccounts[u.SiteID], u.Account)
 	}
 	for destSiteID, accounts := range remoteSiteAccounts {
-		payload := model.RoomCreatedOutbox{
-			RoomID:           room.ID,
-			RoomType:         room.Type,
-			RoomName:         room.Name,
-			HomeSiteID:       room.SiteID,
-			Accounts:         accounts,
-			RequesterAccount: requester.Account,
-			Timestamp:        req.Timestamp,
-		}
-		pData, err := json.Marshal(payload)
-		if err != nil {
-			return fmt.Errorf("marshal room_created outbox payload: %w", err)
-		}
-		envelope := model.OutboxEvent{
-			Type:       model.OutboxTypeRoomCreated,
-			SiteID:     room.SiteID,
-			DestSiteID: destSiteID,
-			Payload:    pData,
-			Timestamp:  now.UnixMilli(),
-		}
-		eData, err := json.Marshal(envelope)
-		if err != nil {
-			return fmt.Errorf("marshal outbox envelope: %w", err)
-		}
-		if err := h.publish(ctx, subject.Outbox(room.SiteID, destSiteID, model.OutboxTypeRoomCreated), eData, requestID+":"+destSiteID); err != nil {
-			return fmt.Errorf("publish room_created outbox to %s: %w", destSiteID, err)
-		}
-
-		// Cross-site member_added so the remote site's search-sync-worker
-		// updates its user-room/spotlight MV — mirrors processAddMembers'
-		// federation. inbox-worker still consumes the room_created above to
-		// build correctly-typed Subscription rows; this event only feeds the
-		// search index.
 		memberEvt := model.MemberAddEvent{
 			Type:               model.OutboxMemberAdded,
 			RoomID:             room.ID,
 			RoomName:           room.Name,
+			RoomType:           room.Type,
 			Accounts:           accounts,
 			SiteID:             room.SiteID,
+			RequesterAccount:   requester.Account,
 			JoinedAt:           req.Timestamp,
 			HistorySharedSince: nil,
 			Timestamp:          now.UnixMilli(),
@@ -1581,25 +1557,28 @@ func (h *Handler) publishSyncDMOutbox(ctx context.Context, room *model.Room, req
 		return nil
 	}
 
-	payload := model.RoomCreatedOutbox{
+	now := time.Now().UTC().UnixMilli()
+	memberEvt := model.MemberAddEvent{
+		Type:             model.OutboxMemberAdded,
 		RoomID:           room.ID,
-		RoomType:         room.Type,
 		RoomName:         "",
-		HomeSiteID:       room.SiteID,
+		RoomType:         room.Type,
 		Accounts:         []string{other.Account},
+		SiteID:           room.SiteID,
 		RequesterAccount: requester.Account,
-		Timestamp:        acceptedAt.UnixMilli(),
+		JoinedAt:         acceptedAt.UnixMilli(),
+		Timestamp:        now,
 	}
-	pData, err := json.Marshal(payload)
+	pData, err := json.Marshal(memberEvt)
 	if err != nil {
-		return fmt.Errorf("marshal room_created outbox payload: %w", err)
+		return fmt.Errorf("marshal member_added outbox payload: %w", err)
 	}
 	envelope := model.OutboxEvent{
-		Type:       model.OutboxTypeRoomCreated,
+		Type:       model.OutboxMemberAdded,
 		SiteID:     room.SiteID,
 		DestSiteID: other.SiteID,
 		Payload:    pData,
-		Timestamp:  time.Now().UTC().UnixMilli(),
+		Timestamp:  now,
 	}
 	eData, err := json.Marshal(envelope)
 	if err != nil {
@@ -1607,7 +1586,7 @@ func (h *Handler) publishSyncDMOutbox(ctx context.Context, room *model.Room, req
 	}
 	payloadSeed := fmt.Sprintf("%s:%s:%d", room.ID, requester.Account, acceptedAt.UnixMilli())
 	return h.publish(ctx,
-		subject.Outbox(room.SiteID, other.SiteID, model.OutboxTypeRoomCreated),
+		subject.Outbox(room.SiteID, other.SiteID, model.OutboxMemberAdded),
 		eData,
 		natsutil.OutboxDedupID(ctx, other.SiteID, payloadSeed),
 	)

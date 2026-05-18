@@ -110,8 +110,10 @@ type MemberAddEvent struct {
 	Type               string   `json:"type"               bson:"type"`
 	RoomID             string   `json:"roomId"             bson:"roomId"`
 	RoomName           string   `json:"roomName"           bson:"roomName"`
+	RoomType           RoomType `json:"roomType,omitempty" bson:"roomType,omitempty"`
 	Accounts           []string `json:"accounts"           bson:"accounts"`
 	SiteID             string   `json:"siteId"             bson:"siteId"`
+	RequesterAccount   string   `json:"requesterAccount,omitempty" bson:"requesterAccount,omitempty"`
 	JoinedAt           int64    `json:"joinedAt"           bson:"joinedAt"`
 	HistorySharedSince *int64   `json:"historySharedSince,omitempty" bson:"historySharedSince,omitempty"`
 	Timestamp          int64    `json:"timestamp"          bson:"timestamp"`
@@ -203,13 +205,6 @@ const (
 )
 
 const (
-	// OutboxTypeRoomCreated is the cross-site outbox event type emitted when a room is created.
-	// Distinct from MessageTypeRoomCreated (system-message type) so destination sites can
-	// route on event semantics without collision.
-	OutboxTypeRoomCreated = "room_created"
-)
-
-const (
 	// AsyncJobStatusOK indicates a successful async job result.
 	AsyncJobStatusOK = "ok"
 	// AsyncJobStatusError indicates a failed async job result.
@@ -225,14 +220,3 @@ type CreateRoomReply struct {
 
 // CreateRoomReplyAccepted means validated + queued; persistence happens later in room-worker.
 const CreateRoomReplyAccepted = "accepted"
-
-// RoomCreatedOutbox is the cross-site payload (wrapped in OutboxEvent) when a remote member exists.
-type RoomCreatedOutbox struct {
-	RoomID           string   `json:"roomId"`
-	RoomType         RoomType `json:"roomType"`
-	RoomName         string   `json:"roomName"`
-	HomeSiteID       string   `json:"homeSiteId"`
-	Accounts         []string `json:"accounts"`
-	RequesterAccount string   `json:"requesterAccount"`
-	Timestamp        int64    `json:"timestamp"`
-}

@@ -10,10 +10,10 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.mongodb.org/mongo-driver/v2/mongo"
 
 	"github.com/hmchangw/chat/pkg/idgen"
 	"github.com/hmchangw/chat/pkg/model"
-	"github.com/hmchangw/chat/pkg/natsutil"
 )
 
 // --- In-memory InboxStore stub ---
@@ -35,6 +35,7 @@ type stubInboxStore struct {
 	mu                sync.Mutex
 	subscriptions     []model.Subscription
 	bulkSubscriptions []*model.Subscription
+	bulkCreateErr     error
 	rooms             []model.Room
 	roleUpdates       []roleUpdate
 	users             []model.User
@@ -132,6 +133,9 @@ func (s *stubInboxStore) FindUsersByAccounts(_ context.Context, accounts []strin
 func (s *stubInboxStore) BulkCreateSubscriptions(_ context.Context, subs []*model.Subscription) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.bulkCreateErr != nil {
+		return s.bulkCreateErr
+	}
 	s.bulkSubscriptions = append(s.bulkSubscriptions, subs...)
 	for _, sub := range subs {
 		s.subscriptions = append(s.subscriptions, *sub)
@@ -997,91 +1001,93 @@ func TestRolesForType(t *testing.T) {
 }
 
 func TestSubscriptionName(t *testing.T) {
-	d := model.RoomCreatedOutbox{
-		RoomType:         model.RoomTypeChannel,
-		RoomName:         "deal team",
-		RequesterAccount: "alice",
-	}
-	assert.Equal(t, "deal team", subscriptionName(&d, &model.User{Account: "bob"}))
-
-	d.RoomType = model.RoomTypeDM
-	assert.Equal(t, "alice", subscriptionName(&d, &model.User{Account: "bob"}))
-
-	d.RoomType = model.RoomTypeBotDM
-	assert.Equal(t, "alice", subscriptionName(&d, &model.User{Account: "weather.bot"}))
+	assert.Equal(t, "deal team", subscriptionName(model.RoomTypeChannel, "deal team", "alice"))
+	assert.Equal(t, "alice", subscriptionName(model.RoomTypeDM, "", "alice"))
+	assert.Equal(t, "alice", subscriptionName(model.RoomTypeBotDM, "", "alice"))
+	assert.Equal(t, "", subscriptionName(model.RoomType(""), "ignored", "alice"))
 }
 
 func TestSubscriptionIsSubscribed(t *testing.T) {
-	d := model.RoomCreatedOutbox{RoomType: model.RoomTypeChannel}
-	assert.False(t, subscriptionIsSubscribed(&d, &model.User{Account: "bob"}))
-
-	d.RoomType = model.RoomTypeDM
-	assert.False(t, subscriptionIsSubscribed(&d, &model.User{Account: "bob"}))
-
-	d.RoomType = model.RoomTypeBotDM
-	assert.False(t, subscriptionIsSubscribed(&d, &model.User{Account: "weather.bot"}))
-	assert.True(t, subscriptionIsSubscribed(&d, &model.User{Account: "alice"}))
-	// p_ webhook bots: same as .bot — bot side gets IsSubscribed=false.
-	assert.False(t, subscriptionIsSubscribed(&d, &model.User{Account: "p_webhook"}))
+	assert.False(t, subscriptionIsSubscribed(model.RoomTypeChannel, &model.User{Account: "bob"}))
+	assert.False(t, subscriptionIsSubscribed(model.RoomTypeDM, &model.User{Account: "bob"}))
+	assert.False(t, subscriptionIsSubscribed(model.RoomTypeBotDM, &model.User{Account: "weather.bot"}))
+	assert.True(t, subscriptionIsSubscribed(model.RoomTypeBotDM, &model.User{Account: "alice"}))
+	assert.False(t, subscriptionIsSubscribed(model.RoomTypeBotDM, &model.User{Account: "p_webhook"}))
 }
 
-func TestHandleRoomCreatedRequiresRequestID(t *testing.T) {
-	store := &stubInboxStore{}
-	h := NewHandler(store)
-	payload, _ := json.Marshal(model.RoomCreatedOutbox{
-		RoomID: "r1", RoomType: model.RoomTypeChannel,
-		Accounts: []string{"bob"},
-	})
-	err := h.handleRoomCreated(context.Background(), &model.OutboxEvent{Payload: payload})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "missing X-Request-ID")
-}
-
-func TestHandleRoomCreatedEmptyAccountsAcksWithWarn(t *testing.T) {
-	store := &stubInboxStore{}
-	h := NewHandler(store)
-	const reqID = "0193abcd-0193-7abc-89ab-0193abcd0193"
-	ctx := natsutil.WithRequestID(context.Background(), reqID)
-
-	payload, _ := json.Marshal(model.RoomCreatedOutbox{
-		RoomID: "r1", RoomType: model.RoomTypeChannel, Accounts: []string{},
-	})
-	require.NoError(t, h.handleRoomCreated(ctx, &model.OutboxEvent{Payload: payload}))
-}
-
-func TestHandleRoomCreatedDMBuildsRemoteSub(t *testing.T) {
+func TestHandleMemberAdded_DM_BuildsRecipientSubWithCounterpartName(t *testing.T) {
 	store := &stubInboxStore{
 		users: []model.User{
 			{ID: "u_bob", Account: "bob", SiteID: "site-B"},
 		},
 	}
 	h := NewHandler(store)
-	const reqID = "0193abcd-0193-7abc-89ab-0193abcd0193"
-	ctx := natsutil.WithRequestID(context.Background(), reqID)
 
-	payload, _ := json.Marshal(model.RoomCreatedOutbox{
+	change := model.MemberAddEvent{
+		Type:             "member_added",
 		RoomID:           "u_aliceu_bob",
-		RoomType:         model.RoomTypeDM,
 		RoomName:         "",
-		HomeSiteID:       "site-A",
+		RoomType:         model.RoomTypeDM,
 		Accounts:         []string{"bob"},
+		SiteID:           "site-A",
 		RequesterAccount: "alice",
+		JoinedAt:         1740000000000,
 		Timestamp:        1740000000000,
-	})
-	require.NoError(t, h.handleRoomCreated(ctx, &model.OutboxEvent{Payload: payload}))
+	}
+	changeData, _ := json.Marshal(change)
+	evt := model.OutboxEvent{Type: "member_added", SiteID: "site-A", DestSiteID: "site-B", Payload: changeData}
+	evtData, _ := json.Marshal(evt)
+
+	require.NoError(t, h.HandleEvent(context.Background(), evtData))
 
 	subs := store.bulkSubscriptions
 	require.Len(t, subs, 1)
 	assert.True(t, idgen.IsValidUUIDv7(subs[0].ID))
 	assert.Equal(t, "u_aliceu_bob", subs[0].RoomID)
 	assert.Equal(t, "site-A", subs[0].SiteID)
-	assert.Equal(t, "alice", subs[0].Name)
-	assert.Nil(t, subs[0].Roles)
+	assert.Equal(t, "alice", subs[0].Name, "DM recipient sub.Name is the requester (counterpart) account")
+	assert.Nil(t, subs[0].Roles, "DM has no roles")
 	assert.False(t, subs[0].IsSubscribed)
 	assert.Equal(t, model.RoomTypeDM, subs[0].RoomType)
 }
 
-func TestHandleRoomCreatedChannelBulkInsert(t *testing.T) {
+func TestHandleMemberAdded_BotDM_BuildsBotSub(t *testing.T) {
+	// Cross-site botDM: human (alice) is the requester on site-A; bot
+	// (weather.bot) lives on site-B. Bot's sub on site-B should have
+	// Name = human's account, IsSubscribed = false (bot side).
+	store := &stubInboxStore{
+		users: []model.User{
+			{ID: "u_weather", Account: "weather.bot", SiteID: "site-B"},
+		},
+	}
+	h := NewHandler(store)
+
+	change := model.MemberAddEvent{
+		Type:             "member_added",
+		RoomID:           "u_aliceu_weather",
+		RoomName:         "",
+		RoomType:         model.RoomTypeBotDM,
+		Accounts:         []string{"weather.bot"},
+		SiteID:           "site-A",
+		RequesterAccount: "alice",
+		JoinedAt:         1740000000000,
+		Timestamp:        1740000000000,
+	}
+	changeData, _ := json.Marshal(change)
+	evt := model.OutboxEvent{Type: "member_added", SiteID: "site-A", DestSiteID: "site-B", Payload: changeData}
+	evtData, _ := json.Marshal(evt)
+
+	require.NoError(t, h.HandleEvent(context.Background(), evtData))
+
+	subs := store.bulkSubscriptions
+	require.Len(t, subs, 1)
+	assert.Equal(t, "alice", subs[0].Name)
+	assert.Nil(t, subs[0].Roles)
+	assert.False(t, subs[0].IsSubscribed, "bot account on the bot side never has IsSubscribed=true")
+	assert.Equal(t, model.RoomTypeBotDM, subs[0].RoomType)
+}
+
+func TestHandleMemberAdded_Channel_BuildsChannelSub(t *testing.T) {
 	store := &stubInboxStore{
 		users: []model.User{
 			{ID: "u_bob", Account: "bob", SiteID: "site-B"},
@@ -1089,19 +1095,23 @@ func TestHandleRoomCreatedChannelBulkInsert(t *testing.T) {
 		},
 	}
 	h := NewHandler(store)
-	const reqID = "0193abcd-0193-7abc-89ab-0193abcd0193"
-	ctx := natsutil.WithRequestID(context.Background(), reqID)
 
-	payload, _ := json.Marshal(model.RoomCreatedOutbox{
+	change := model.MemberAddEvent{
+		Type:             "member_added",
 		RoomID:           "r1",
-		RoomType:         model.RoomTypeChannel,
 		RoomName:         "deal team",
-		HomeSiteID:       "site-A",
+		RoomType:         model.RoomTypeChannel,
 		Accounts:         []string{"bob", "ian"},
+		SiteID:           "site-A",
 		RequesterAccount: "alice",
+		JoinedAt:         1,
 		Timestamp:        1,
-	})
-	require.NoError(t, h.handleRoomCreated(ctx, &model.OutboxEvent{Payload: payload}))
+	}
+	changeData, _ := json.Marshal(change)
+	evt := model.OutboxEvent{Type: "member_added", SiteID: "site-A", DestSiteID: "site-B", Payload: changeData}
+	evtData, _ := json.Marshal(evt)
+
+	require.NoError(t, h.HandleEvent(context.Background(), evtData))
 
 	subs := store.bulkSubscriptions
 	require.Len(t, subs, 2)
@@ -1113,11 +1123,11 @@ func TestHandleRoomCreatedChannelBulkInsert(t *testing.T) {
 	}
 }
 
-func TestHandleMemberAddedSetsNameAndRoomType(t *testing.T) {
+func TestHandleMemberAdded_EmptyRoomType_DefaultsToChannel(t *testing.T) {
+	// Backward-compat: events from older publishers don't carry RoomType.
+	// handleMemberAdded must treat empty as channel.
 	store := &stubInboxStore{
-		users: []model.User{
-			{ID: "u_bob", Account: "bob", SiteID: "site-B"},
-		},
+		users: []model.User{{ID: "u_bob", Account: "bob", SiteID: "site-B"}},
 	}
 	h := NewHandler(store)
 
@@ -1127,66 +1137,56 @@ func TestHandleMemberAddedSetsNameAndRoomType(t *testing.T) {
 		RoomName:  "deal team",
 		Accounts:  []string{"bob"},
 		SiteID:    "site-A",
-		JoinedAt:  1740000000000,
-		Timestamp: 1740000000000,
+		JoinedAt:  1,
+		Timestamp: 1,
+		// RoomType intentionally left empty
 	}
-	changeData, err := json.Marshal(change)
-	require.NoError(t, err)
-
-	evt := model.OutboxEvent{
-		Type:       "member_added",
-		SiteID:     "site-A",
-		DestSiteID: "site-B",
-		Payload:    changeData,
-	}
-	evtData, err := json.Marshal(evt)
-	require.NoError(t, err)
+	changeData, _ := json.Marshal(change)
+	evt := model.OutboxEvent{Type: "member_added", Payload: changeData}
+	evtData, _ := json.Marshal(evt)
 
 	require.NoError(t, h.HandleEvent(context.Background(), evtData))
 
-	subs := store.getSubscriptions()
+	subs := store.bulkSubscriptions
 	require.Len(t, subs, 1)
-	assert.Equal(t, "deal team", subs[0].Name)
-	assert.Equal(t, model.RoomTypeChannel, subs[0].RoomType)
+	assert.Equal(t, model.RoomTypeChannel, subs[0].RoomType, "empty RoomType must default to channel")
+	assert.Equal(t, []model.Role{model.RoleMember}, subs[0].Roles)
 }
 
-func TestHandleRoomCreatedBotDMBuildsRemoteBotSub(t *testing.T) {
-	// Cross-site botDM: human (alice) is the requester on site-A; bot
-	// (weather.bot) lives on site-B. The outbox event lands at site-B's
-	// inbox-worker, which must materialize the bot's sub with:
-	//   Name        = human's account ("alice")
-	//   IsSubscribed = false
-	//   Roles       = nil (no member role for botDM)
-	//   SiteID      = home site (site-A)
+func TestHandleMemberAdded_DuplicateKey_IsIdempotent(t *testing.T) {
 	store := &stubInboxStore{
-		users: []model.User{
-			{ID: "u_weather", Account: "weather.bot", SiteID: "site-B"},
-		},
+		users:         []model.User{{ID: "u_bob", Account: "bob", SiteID: "site-B"}},
+		bulkCreateErr: mongo.WriteException{WriteErrors: []mongo.WriteError{{Code: 11000, Message: "duplicate key"}}},
 	}
 	h := NewHandler(store)
-	const reqID = "0193abcd-0193-7abc-89ab-0193abcd0193"
-	ctx := natsutil.WithRequestID(context.Background(), reqID)
 
-	payload, _ := json.Marshal(model.RoomCreatedOutbox{
-		RoomID:           "u_aliceu_weather",
-		RoomType:         model.RoomTypeBotDM,
-		RoomName:         "",
-		HomeSiteID:       "site-A",
-		Accounts:         []string{"weather.bot"},
-		RequesterAccount: "alice",
-		Timestamp:        1740000000000,
-	})
-	require.NoError(t, h.handleRoomCreated(ctx, &model.OutboxEvent{Payload: payload}))
+	change := model.MemberAddEvent{
+		Type: "member_added", RoomID: "r1", RoomType: model.RoomTypeChannel,
+		Accounts: []string{"bob"}, SiteID: "site-A", JoinedAt: 1, Timestamp: 1,
+	}
+	changeData, _ := json.Marshal(change)
+	evt := model.OutboxEvent{Type: "member_added", Payload: changeData}
+	evtData, _ := json.Marshal(evt)
 
-	subs := store.bulkSubscriptions
-	require.Len(t, subs, 1, "exactly one remote sub for the bot")
-	assert.True(t, idgen.IsValidUUIDv7(subs[0].ID))
-	assert.Equal(t, "u_aliceu_weather", subs[0].RoomID)
-	assert.Equal(t, "site-A", subs[0].SiteID, "bot's sub.siteID is the room's home site")
-	assert.Equal(t, "alice", subs[0].Name, "bot's sub.Name is the human account")
-	assert.Nil(t, subs[0].Roles)
-	assert.False(t, subs[0].IsSubscribed)
-	assert.Equal(t, model.RoomTypeBotDM, subs[0].RoomType)
-	assert.Equal(t, "u_weather", subs[0].User.ID)
-	assert.Equal(t, "weather.bot", subs[0].User.Account)
+	require.NoError(t, h.HandleEvent(context.Background(), evtData),
+		"duplicate-key on bulk-create must be swallowed (replay after prior delivery is idempotent)")
+}
+
+func TestHandleMemberAdded_BulkCreate_NonDuplicateError_ReturnsError(t *testing.T) {
+	store := &stubInboxStore{
+		users:         []model.User{{ID: "u_bob", Account: "bob", SiteID: "site-B"}},
+		bulkCreateErr: fmt.Errorf("connection refused"),
+	}
+	h := NewHandler(store)
+
+	change := model.MemberAddEvent{
+		Type: "member_added", RoomID: "r1", RoomType: model.RoomTypeChannel,
+		Accounts: []string{"bob"}, SiteID: "site-A", JoinedAt: 1, Timestamp: 1,
+	}
+	changeData, _ := json.Marshal(change)
+	evtData, _ := json.Marshal(model.OutboxEvent{Type: "member_added", Payload: changeData})
+
+	err := h.HandleEvent(context.Background(), evtData)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "bulk create subscriptions")
 }

@@ -18,7 +18,6 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 
 	"github.com/hmchangw/chat/pkg/model"
-	"github.com/hmchangw/chat/pkg/natsutil"
 	"github.com/hmchangw/chat/pkg/stream"
 	"github.com/hmchangw/chat/pkg/subject"
 	"github.com/hmchangw/chat/pkg/testutil"
@@ -490,7 +489,7 @@ func newIntegrationHandler(t *testing.T, db *mongo.Database) *Handler {
 	return NewHandler(store)
 }
 
-func TestHandleRoomCreatedPersistsRemoteSubs(t *testing.T) {
+func TestHandleMemberAdded_Channel_PersistsRemoteSubs(t *testing.T) {
 	ctx := context.Background()
 	db := setupMongo(t)
 	mustInsertUser(t, db, &model.User{ID: "u_bob", Account: "bob",
@@ -499,26 +498,31 @@ func TestHandleRoomCreatedPersistsRemoteSubs(t *testing.T) {
 		SiteID: "site-B", EngName: "Ian", ChineseName: "伊恩"})
 
 	h := newIntegrationHandler(t, db)
-	const reqID = "0193abcd-0193-7abc-89ab-0193abcd0193"
-	ctx = natsutil.WithRequestID(ctx, reqID)
 
-	payload, err := json.Marshal(model.RoomCreatedOutbox{
-		RoomID: "r_xyz", RoomType: model.RoomTypeChannel,
-		RoomName: "deal team", HomeSiteID: "site-A",
+	payload, err := json.Marshal(model.MemberAddEvent{
+		Type:             "member_added",
+		RoomID:           "r_xyz",
+		RoomName:         "deal team",
+		RoomType:         model.RoomTypeChannel,
 		Accounts:         []string{"bob", "ian"},
+		SiteID:           "site-A",
 		RequesterAccount: "alice",
+		JoinedAt:         time.Now().UTC().UnixMilli(),
 		Timestamp:        time.Now().UTC().UnixMilli(),
 	})
 	require.NoError(t, err)
-	require.NoError(t, h.handleRoomCreated(ctx, &model.OutboxEvent{Payload: payload}))
+	evt, err := json.Marshal(model.OutboxEvent{
+		Type:       "member_added",
+		SiteID:     "site-A",
+		DestSiteID: "site-B",
+		Payload:    payload,
+	})
+	require.NoError(t, err)
+	require.NoError(t, h.HandleEvent(ctx, evt))
 
 	subCount, err := db.Collection("subscriptions").CountDocuments(ctx, bson.M{"roomId": "r_xyz"})
 	require.NoError(t, err)
 	assert.Equal(t, int64(2), subCount)
-
-	roomCount, err := db.Collection("rooms").CountDocuments(ctx, bson.M{"_id": "r_xyz"})
-	require.NoError(t, err)
-	assert.Equal(t, int64(0), roomCount, "inbox-worker must not create room mirror")
 
 	var bobSub model.Subscription
 	require.NoError(t, db.Collection("subscriptions").FindOne(ctx,
@@ -528,42 +532,45 @@ func TestHandleRoomCreatedPersistsRemoteSubs(t *testing.T) {
 	assert.Equal(t, model.RoomTypeChannel, bobSub.RoomType)
 }
 
-func TestHandleRoomCreatedDM_PersistsRemoteCounterpartSub(t *testing.T) {
+func TestHandleMemberAdded_DM_PersistsRemoteCounterpartSub(t *testing.T) {
 	ctx := context.Background()
 	db := setupMongo(t)
 	mustInsertUser(t, db, &model.User{ID: "u_bob", Account: "bob",
 		SiteID: "site-B", EngName: "Bob", ChineseName: "鲍勃"})
 
 	h := newIntegrationHandler(t, db)
-	const reqID = "0193abcd-0193-7abc-89ab-0193abcd0193"
-	ctx = natsutil.WithRequestID(ctx, reqID)
 
 	const roomID = "u_aliceu_bob"
-	payload, err := json.Marshal(model.RoomCreatedOutbox{
+	payload, err := json.Marshal(model.MemberAddEvent{
+		Type:             "member_added",
 		RoomID:           roomID,
-		RoomType:         model.RoomTypeDM,
 		RoomName:         "",
-		HomeSiteID:       "site-A",
+		RoomType:         model.RoomTypeDM,
 		Accounts:         []string{"bob"},
+		SiteID:           "site-A",
 		RequesterAccount: "alice",
+		JoinedAt:         time.Now().UTC().UnixMilli(),
 		Timestamp:        time.Now().UTC().UnixMilli(),
 	})
 	require.NoError(t, err)
-	require.NoError(t, h.handleRoomCreated(ctx, &model.OutboxEvent{Payload: payload}))
+	evt, err := json.Marshal(model.OutboxEvent{
+		Type:       "member_added",
+		SiteID:     "site-A",
+		DestSiteID: "site-B",
+		Payload:    payload,
+	})
+	require.NoError(t, err)
+	require.NoError(t, h.HandleEvent(ctx, evt))
 
 	subCount, err := db.Collection("subscriptions").CountDocuments(ctx, bson.M{"roomId": roomID})
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), subCount)
 
-	roomCount, err := db.Collection("rooms").CountDocuments(ctx, bson.M{"_id": roomID})
-	require.NoError(t, err)
-	assert.Equal(t, int64(0), roomCount, "inbox-worker must not create room mirror")
-
 	var bobSub model.Subscription
 	require.NoError(t, db.Collection("subscriptions").FindOne(ctx,
 		bson.M{"roomId": roomID, "u.account": "bob"}).Decode(&bobSub))
 	assert.Equal(t, "bob", bobSub.User.Account)
-	assert.Equal(t, "alice", bobSub.Name, "DM Subscription.Name = counterpart account")
+	assert.Equal(t, "alice", bobSub.Name, "DM Subscription.Name = counterpart account (the requester)")
 	assert.Equal(t, "site-A", bobSub.SiteID, "sub SiteID is room's home, not this site")
 	assert.Equal(t, model.RoomTypeDM, bobSub.RoomType)
 	assert.Nil(t, bobSub.Roles, "DMs have no roles")
