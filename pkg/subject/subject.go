@@ -517,6 +517,13 @@ func UserSubscriptionGetApps(account, siteID string) string {
 	return fmt.Sprintf("chat.user.%s.request.user.%s.subscription.getApps", account, siteID)
 }
 
+func UserSubscriptionCount(account, siteID string) string {
+	if !isValidAccountToken(account) {
+		panic("invalid account token: contains NATS wildcard characters")
+	}
+	return fmt.Sprintf("chat.user.%s.request.user.%s.subscription.count", account, siteID)
+}
+
 func UserSubscriptionSubscribeApp(account, siteID string) string {
 	if !isValidAccountToken(account) {
 		panic("invalid account token: contains NATS wildcard characters")
@@ -577,6 +584,10 @@ func UserSubscriptionGetDMPattern(siteID string) string {
 
 func UserSubscriptionGetAppsPattern(siteID string) string {
 	return fmt.Sprintf("chat.user.{account}.request.user.%s.subscription.getApps", siteID)
+}
+
+func UserSubscriptionCountPattern(siteID string) string {
+	return fmt.Sprintf("chat.user.{account}.request.user.%s.subscription.count", siteID)
 }
 
 func UserSubscriptionSubscribeAppPattern(siteID string) string {

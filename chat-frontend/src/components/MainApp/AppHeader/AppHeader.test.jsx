@@ -25,6 +25,18 @@ describe('AppHeader', () => {
     expect(screen.getByRole('button', { name: /logout/i })).toBeInTheDocument()
   })
 
+  it('renders the "Chat" brand title with the unread badge as a superscript', () => {
+    const { container } = render(
+      <AppHeader onSelectRoom={() => {}} onEnterSearch={() => {}} />,
+    )
+    const title = container.querySelector('.chat-header-title')
+    expect(title).not.toBeNull()
+    expect(title.textContent).toContain('Chat')
+    const sup = title.querySelector('sup')
+    expect(sup).not.toBeNull()
+    expect(sup).toHaveTextContent('fake-unread')
+  })
+
   it('clicking Logout invokes disconnect', async () => {
     const disconnect = vi.fn()
     vi.resetModules()

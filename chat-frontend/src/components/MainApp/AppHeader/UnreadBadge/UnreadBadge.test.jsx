@@ -2,48 +2,44 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import UnreadBadge from './UnreadBadge'
 
-const useUnreadTotal = vi.fn()
+const useUnreadCount = vi.fn()
 vi.mock('@/context/RoomEventsContext', () => ({
-  useUnreadTotal: () => useUnreadTotal(),
+  useUnreadCount: () => useUnreadCount(),
 }))
 
 describe('UnreadBadge', () => {
   beforeEach(() => vi.clearAllMocks())
 
-  it('renders nothing when total is zero', () => {
-    useUnreadTotal.mockReturnValue({ total: 0, hasMention: false })
+  it('renders nothing when the count is zero', () => {
+    useUnreadCount.mockReturnValue(0)
     const { container } = render(<UnreadBadge />)
     expect(container).toBeEmptyDOMElement()
   })
 
   it('renders the count when there are unread messages', () => {
-    useUnreadTotal.mockReturnValue({ total: 5, hasMention: false })
+    useUnreadCount.mockReturnValue(5)
     render(<UnreadBadge />)
     const badge = screen.getByLabelText('5 unread messages')
     expect(badge).toHaveTextContent('5')
   })
 
   it('caps display at 99+ past 99', () => {
-    useUnreadTotal.mockReturnValue({ total: 150, hasMention: false })
+    useUnreadCount.mockReturnValue(150)
     render(<UnreadBadge />)
     expect(screen.getByText('99+')).toBeInTheDocument()
   })
 
   it('singularizes the aria-label for a single unread', () => {
-    useUnreadTotal.mockReturnValue({ total: 1, hasMention: false })
+    useUnreadCount.mockReturnValue(1)
     render(<UnreadBadge />)
     expect(screen.getByLabelText('1 unread message')).toBeInTheDocument()
   })
 
-  it('applies the mention modifier class when hasMention is true', () => {
-    useUnreadTotal.mockReturnValue({ total: 2, hasMention: true })
+  it('never applies a mention modifier class', () => {
+    useUnreadCount.mockReturnValue(2)
     render(<UnreadBadge />)
-    expect(screen.getByLabelText('2 unread messages')).toHaveClass('unread-badge--mention')
-  })
-
-  it('omits the mention modifier class when hasMention is false', () => {
-    useUnreadTotal.mockReturnValue({ total: 2, hasMention: false })
-    render(<UnreadBadge />)
-    expect(screen.getByLabelText('2 unread messages')).not.toHaveClass('unread-badge--mention')
+    expect(screen.getByLabelText('2 unread messages')).not.toHaveClass(
+      'unread-badge--mention',
+    )
   })
 })

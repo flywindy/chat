@@ -14,6 +14,24 @@
   font-weight: var(--font-semibold);
   font-size: var(--text-md);
   letter-spacing: -0.01em;
+  display: inline-flex;
+  align-items: flex-start;
+}
+
+/* Unread pill raised as a superscript on the "Chat" wordmark. The pill
+ * keeps its own font-size, so override <sup>'s default text-shrink and
+ * just lift it above the word's cap height. */
+.chat-header-badge {
+  font-size: inherit;
+  margin-left: var(--space-xs);
+  vertical-align: super;
+}
+
+/* UnreadBadge renders null at zero unread; the <sup> stays in the DOM,
+ * so collapse it when empty to keep the "Chat" wordmark gap-free. */
+.chat-header-badge:empty {
+  display: none;
+  margin-left: 0;
 }
 
 .app-header-user {

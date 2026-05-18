@@ -125,3 +125,10 @@ export function userSubscriptionGetApps(account: string, siteId: string): string
 export function userSubscriptionGetRooms(account: string, siteId: string): string {
   return `chat.user.${account}.request.user.${siteId}.subscription.getRooms`
 }
+
+// userSubscriptionCount fetches a count of the caller's subscriptions.
+// The unread badge passes `{ unread: true }` to get the unread-message
+// total. Mirrors pkg/subject/subject.go::UserSubscriptionCount.
+export function userSubscriptionCount(account: string, siteId: string): string {
+  return `chat.user.${account}.request.user.${siteId}.subscription.count`
+}

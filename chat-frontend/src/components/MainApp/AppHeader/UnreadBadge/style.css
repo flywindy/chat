@@ -11,7 +11,3 @@
   font-size: var(--text-xs);
   line-height: 1;
 }
-
-.unread-badge--mention {
-  background: var(--mention);
-}

@@ -9,8 +9,9 @@ import {
   type ReactNode,
 } from 'react'
 import { useNats } from '@/context/NatsContext'
-import { BUFFER_MODE, initialState, roomEventsReducer, selectUnreadTotal } from './reducer'
+import { BUFFER_MODE, initialState, roomEventsReducer } from './reducer'
 import { useRoomSubscriptions } from './useRoomSubscriptions'
+import { useUnreadCount as useUnreadCountQuery } from './useUnreadCount'
 import { fetchMessageHistory, fetchSurroundingMessages, markRoomRead } from '@/api'
 import type { DMSubscription, Message, Nats, Room, SubscriptionHRInfo } from '@/api/types'
 
@@ -227,16 +228,17 @@ export function useRoomSummaries() {
 }
 
 /**
- * Aggregate unread badge state for the whole app.
+ * App-wide unread total for the header badge.
  *
- * Returns `{ total, hasMention }` derived from `state.summaries`. Updates
- * live: every `MESSAGE_RECEIVED` (count up for non-active rooms) and
- * `SET_ACTIVE_ROOM` (count down — room visited) already mutates
- * `summaries`, which re-renders this consumer. No fetch, no polling.
+ * Sourced from the `subscription.count` RPC (via `useUnreadCountQuery`),
+ * not derived from `state.summaries`. Re-fetches whenever the active
+ * room changes — opening/reading a room is when the server-side total
+ * moves.
  */
-export function useUnreadTotal(): { total: number; hasMention: boolean } {
+export function useUnreadCount(): number {
+  const nats = useNats() as unknown as Nats
   const { state } = useRoomEventsInternal()
-  return useMemo(() => selectUnreadTotal(state.summaries), [state.summaries])
+  return useUnreadCountQuery(nats, state.activeRoomId)
 }
 
 export function useRoomDispatch(): RoomEventsContextValue['dispatch'] {

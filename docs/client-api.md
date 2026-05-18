@@ -1758,11 +1758,13 @@ the reply is `{"error":"unknown site","code":"not_found"}`.
 | 10 | `subscription.unsubscribeApp` | `subject.UserSubscriptionUnsubscribeApp(account, siteID)` | `{"appId": "<string>"}` | `{"success": true}` |
 | 11 | `room.{roomID}.subscription.get` | `subject.UserRoomSubscriptionGet(account, siteID, roomID)` | _no body_ | `{"subscription": <Subscription with RoomID == roomID>}` |
 | 12 | `apps.list` | `subject.UserAppsList(account, siteID)` | _no body_ | `{"apps": [<App>, <App>], "total": 2}` |
+| 13 | `subscription.count` | `subject.UserSubscriptionCount(account, siteID)` | `{"unread": <bool>}` | `{"count": 42}` |
 
 `<Subscription>` and `<App>` are the standard `pkg/model.Subscription`
 and `pkg/model.App` JSON shapes. Filter fields on request bodies (`favorite`,
-`membersContain`, `accountNames`) are accepted and ignored by the mock —
-every list endpoint returns the same two mock entries regardless of input.
+`membersContain`, `accountNames`, `unread`) are accepted and ignored by the
+mock — every list endpoint returns the same two mock entries regardless of
+input, and `subscription.count` always returns `42`.
 
 **Error envelope:** all routes return the standard `{"error": "...", "code": "..."}`
 shape on failure. The only error returned by the mock is `unknown site`

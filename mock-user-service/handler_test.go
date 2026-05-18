@@ -142,6 +142,30 @@ func TestHandler_SubscriptionListHandlers_SiteMismatch(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestHandler_SubscriptionCount(t *testing.T) {
+	h := NewHandler("site-local")
+
+	t.Run("returns the mock unread count", func(t *testing.T) {
+		c := newCtx(map[string]string{"account": "alice", "siteID": "site-local"})
+		resp, err := h.subscriptionCount(c, subscriptionCountReq{Unread: true})
+		require.NoError(t, err)
+		assert.Equal(t, mockUnreadCount, resp.Count)
+	})
+
+	t.Run("unread flag is accepted and ignored", func(t *testing.T) {
+		c := newCtx(map[string]string{"account": "alice", "siteID": "site-local"})
+		resp, err := h.subscriptionCount(c, subscriptionCountReq{Unread: false})
+		require.NoError(t, err)
+		assert.Equal(t, mockUnreadCount, resp.Count)
+	})
+
+	t.Run("siteID mismatch", func(t *testing.T) {
+		c := newCtx(map[string]string{"account": "alice", "siteID": "site-x"})
+		_, err := h.subscriptionCount(c, subscriptionCountReq{Unread: true})
+		require.Error(t, err)
+	})
+}
+
 func TestHandler_SubscriptionGetDM(t *testing.T) {
 	h := NewHandler("site-local")
 

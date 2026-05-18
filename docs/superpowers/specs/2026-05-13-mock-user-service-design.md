@@ -337,8 +337,11 @@ service-specific test selection beyond `make test SERVICE=mock-user-service`.
 
 - Persistence (in-memory or otherwise). The user chose stateless for
   `status.set`; same rationale applies to subscribe/unsubscribeApp.
-- A `subscription.count` route — considered, then removed to keep the surface
-  at 12 routes.
+- ~~A `subscription.count` route — considered, then removed to keep the
+  surface at 12 routes.~~ **Superseded:** `subscription.count` was added
+  later as route #13 to back the frontend unread badge (returns a fixed
+  `{"count": 42}`). See
+  `2026-05-18-unread-badge-rpc-source-design.md`.
 - New `pkg/model` types. Request/response types stay private to the service.
 - Integration tests with testcontainers.
 

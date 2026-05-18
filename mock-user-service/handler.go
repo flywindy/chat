@@ -15,6 +15,7 @@ const (
 	mockStatusIsShow = true
 	mockDisplayName  = "Mock User"
 	mockEmail        = "mock@example.test"
+	mockUnreadCount  = 42
 )
 
 var mockJoinedAt = time.Unix(0, 0).UTC()
@@ -62,6 +63,14 @@ type getDMSubReq struct {
 
 type appSubscriptionReq struct {
 	AppID string `json:"appId"`
+}
+
+type subscriptionCountReq struct {
+	Unread bool `json:"unread"`
+}
+
+type subscriptionCountResp struct {
+	Count int `json:"count"`
 }
 
 type subscriptionListResp struct {
@@ -195,6 +204,14 @@ func (h *Handler) subscriptionGetApps(c *natsrouter.Context, req getAppSubsReq) 
 	return &subscriptionListResp{Subscriptions: subs, Total: len(subs)}, nil
 }
 
+func (h *Handler) subscriptionCount(c *natsrouter.Context, req subscriptionCountReq) (*subscriptionCountResp, error) {
+	if err := h.checkSite(c); err != nil {
+		return nil, err
+	}
+	_ = req
+	return &subscriptionCountResp{Count: mockUnreadCount}, nil
+}
+
 func (h *Handler) subscriptionGetDM(c *natsrouter.Context, req getDMSubReq) (*dmSubscriptionResp, error) {
 	if err := h.checkSite(c); err != nil {
 		return nil, err
@@ -248,6 +265,7 @@ func (h *Handler) Register(r *natsrouter.Router) {
 	natsrouter.Register(r, subject.UserSubscriptionGetChannelsPattern(h.siteID), h.subscriptionGetChannels)
 	natsrouter.Register(r, subject.UserSubscriptionGetDMPattern(h.siteID), h.subscriptionGetDM)
 	natsrouter.Register(r, subject.UserSubscriptionGetAppsPattern(h.siteID), h.subscriptionGetApps)
+	natsrouter.Register(r, subject.UserSubscriptionCountPattern(h.siteID), h.subscriptionCount)
 	natsrouter.Register(r, subject.UserSubscriptionSubscribeAppPattern(h.siteID), h.subscriptionSubscribeApp)
 	natsrouter.Register(r, subject.UserSubscriptionUnsubscribeAppPattern(h.siteID), h.subscriptionUnsubscribeApp)
 	natsrouter.RegisterNoBody(r, subject.UserRoomSubscriptionGetPattern(h.siteID), h.roomSubscriptionGet)

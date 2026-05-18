@@ -20,6 +20,7 @@ import {
   userSubscriptionGetCurrent,
   userSubscriptionGetApps,
   userSubscriptionGetRooms,
+  userSubscriptionCount,
 } from './subjects'
 
 describe('subjects', () => {
@@ -126,6 +127,12 @@ describe('subjects', () => {
   it('userSubscriptionGetRooms builds the user-service getRooms subject', () => {
     expect(userSubscriptionGetRooms('alice', 'site-A')).toBe(
       'chat.user.alice.request.user.site-A.subscription.getRooms'
+    )
+  })
+
+  it('userSubscriptionCount builds the user-service subscription-count subject', () => {
+    expect(userSubscriptionCount('alice', 'site-A')).toBe(
+      'chat.user.alice.request.user.site-A.subscription.count'
     )
   })
 
