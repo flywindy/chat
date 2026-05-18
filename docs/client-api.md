@@ -1511,8 +1511,10 @@ See [Error envelope](#6-error-envelope-reference).
       "roomId": "r1",
       "siteId": "site-a",
       "userAccount": "alice",
-      "content": "hello world",
+      "content": "hello world (edited)",
       "createdAt": "2026-04-01T12:00:00Z",
+      "editedAt": "2026-04-01T12:05:00Z",
+      "updatedAt": "2026-04-01T12:06:00Z",
       "threadParentMessageId": "p0",
       "threadParentMessageCreatedAt": "2026-04-01T11:58:00Z"
     }
@@ -1536,6 +1538,8 @@ See [Error envelope](#6-error-envelope-reference).
 | `userAccount` | string | — |
 | `content` | string | — |
 | `createdAt` | RFC3339 timestamp | — |
+| `editedAt` | RFC3339 timestamp (nullable) | omitted when the message has never been edited |
+| `updatedAt` | RFC3339 timestamp (nullable) | omitted when the message has never been mutated server-side (edit, soft-delete, etc.) |
 | `threadParentMessageId` | string | omitted when not a thread reply |
 | `threadParentMessageCreatedAt` | RFC3339 timestamp (nullable) | omitted when not a thread reply |
 

@@ -162,6 +162,7 @@ func (g *Generator) publishOne(ctx context.Context) {
 	case InjectCanonical:
 		now := time.Now().UTC()
 		evt := model.MessageEvent{
+			Event: model.EventCreated,
 			Message: model.Message{
 				ID: msgID, RoomID: sub.RoomID,
 				UserID: sub.User.ID, UserAccount: sub.User.Account,

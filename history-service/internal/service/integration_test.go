@@ -17,8 +17,10 @@ import (
 	"github.com/hmchangw/chat/history-service/internal/cassrepo"
 	"github.com/hmchangw/chat/history-service/internal/models"
 	"github.com/hmchangw/chat/history-service/internal/service"
+	"github.com/hmchangw/chat/pkg/model"
 	"github.com/hmchangw/chat/pkg/msgbucket"
 	"github.com/hmchangw/chat/pkg/natsrouter"
+	"github.com/hmchangw/chat/pkg/subject"
 	"github.com/hmchangw/chat/pkg/testutil"
 )
 
@@ -137,7 +139,7 @@ func TestEditMessage_Integration(t *testing.T) {
 	session := setupCassandra(t)
 	repo := cassrepo.NewRepository(session, msgbucket.New(24*time.Hour), 365)
 	pub := &recordingPublisher{}
-	svc := service.New(repo, alwaysSubscribedRepo{}, stubRoomRepo{}, pub, nil, nil, 730*24*time.Hour, false)
+	svc := service.New(repo, alwaysSubscribedRepo{}, stubRoomRepo{}, pub, nil, 730*24*time.Hour)
 
 	sender := models.Participant{ID: "u1", Account: "alice"}
 	roomID := "r-integ"
@@ -156,7 +158,7 @@ func TestEditMessage_Integration(t *testing.T) {
 
 	// Call the handler directly with a prepared natsrouter.Context.
 	c := natsrouter.NewContext(map[string]string{"account": "alice", "roomID": roomID})
-	resp, err := svc.EditMessage(c, models.EditMessageRequest{
+	resp, err := svc.EditMessage(c, "site-test", models.EditMessageRequest{
 		MessageID: msgID,
 		NewMsg:    "edited via integration test",
 	})
@@ -178,28 +180,29 @@ func TestEditMessage_Integration(t *testing.T) {
 	).Scan(&gotMsg))
 	assert.Equal(t, "edited via integration test", gotMsg)
 
-	// Publisher: exactly one event captured, on the right subject, with the right payload.
+	// Publisher: exactly one canonical event on the right subject with the right payload.
 	pub.mu.Lock()
 	defer pub.mu.Unlock()
 	require.Len(t, pub.sent, 1)
-	assert.Equal(t, "chat.room."+roomID+".event", pub.sent[0].Subject)
+	assert.Equal(t, subject.MsgCanonicalUpdated("site-test"), pub.sent[0].Subject)
 
-	var evt models.MessageEditedEvent
+	var evt model.MessageEvent
 	require.NoError(t, json.Unmarshal(pub.sent[0].Data, &evt))
-	assert.Equal(t, "message_edited", evt.Type)
-	assert.Equal(t, roomID, evt.RoomID)
-	assert.Equal(t, msgID, evt.MessageID)
-	assert.Equal(t, "edited via integration test", evt.NewMsg)
-	assert.Equal(t, "alice", evt.EditedBy)
+	assert.Equal(t, model.EventUpdated, evt.Event)
+	assert.Equal(t, "site-test", evt.SiteID)
 	assert.NotZero(t, evt.Timestamp)
-	assert.NotZero(t, evt.EditedAt)
+	assert.Equal(t, msgID, evt.Message.ID)
+	assert.Equal(t, roomID, evt.Message.RoomID)
+	assert.Equal(t, "edited via integration test", evt.Message.Content)
+	require.NotNil(t, evt.Message.EditedAt)
+	require.NotNil(t, evt.Message.UpdatedAt)
 }
 
 func TestDeleteMessage_Integration(t *testing.T) {
 	session := setupCassandra(t)
 	repo := cassrepo.NewRepository(session, msgbucket.New(24*time.Hour), 365)
 	pub := &recordingPublisher{}
-	svc := service.New(repo, alwaysSubscribedRepo{}, stubRoomRepo{}, pub, nil, nil, 730*24*time.Hour, false)
+	svc := service.New(repo, alwaysSubscribedRepo{}, stubRoomRepo{}, pub, nil, 730*24*time.Hour)
 
 	sender := models.Participant{ID: "u1", Account: "alice"}
 	roomID := "r-del-integ"
@@ -217,7 +220,7 @@ func TestDeleteMessage_Integration(t *testing.T) {
 	).Exec())
 
 	c := natsrouter.NewContext(map[string]string{"account": "alice", "roomID": roomID})
-	resp, err := svc.DeleteMessage(c, models.DeleteMessageRequest{MessageID: msgID})
+	resp, err := svc.DeleteMessage(c, "site-test", models.DeleteMessageRequest{MessageID: msgID})
 	require.NoError(t, err)
 	assert.Equal(t, msgID, resp.MessageID)
 	assert.NotZero(t, resp.DeletedAt)
@@ -239,27 +242,27 @@ func TestDeleteMessage_Integration(t *testing.T) {
 	assert.True(t, gotDeleted)
 	assert.Equal(t, "content", gotMsg)
 
-	// Publisher: exactly one message_deleted event on the room subject.
+	// Publisher: exactly one canonical .deleted event on the canonical subject.
 	pub.mu.Lock()
 	defer pub.mu.Unlock()
 	require.Len(t, pub.sent, 1)
-	assert.Equal(t, "chat.room."+roomID+".event", pub.sent[0].Subject)
+	assert.Equal(t, subject.MsgCanonicalDeleted("site-test"), pub.sent[0].Subject)
 
-	var evt models.MessageDeletedEvent
+	var evt model.MessageEvent
 	require.NoError(t, json.Unmarshal(pub.sent[0].Data, &evt))
-	assert.Equal(t, "message_deleted", evt.Type)
-	assert.Equal(t, roomID, evt.RoomID)
-	assert.Equal(t, msgID, evt.MessageID)
-	assert.Equal(t, "alice", evt.DeletedBy)
+	assert.Equal(t, model.EventDeleted, evt.Event)
+	assert.Equal(t, "site-test", evt.SiteID)
 	assert.NotZero(t, evt.Timestamp)
-	assert.NotZero(t, evt.DeletedAt)
+	assert.Equal(t, msgID, evt.Message.ID)
+	assert.Equal(t, roomID, evt.Message.RoomID)
+	require.NotNil(t, evt.Message.UpdatedAt)
 }
 
 func TestDeleteMessage_ParentWithReplies_NoCascade(t *testing.T) {
 	session := setupCassandra(t)
 	repo := cassrepo.NewRepository(session, msgbucket.New(24*time.Hour), 365)
 	pub := &recordingPublisher{}
-	svc := service.New(repo, alwaysSubscribedRepo{}, stubRoomRepo{}, pub, nil, nil, 730*24*time.Hour, false)
+	svc := service.New(repo, alwaysSubscribedRepo{}, stubRoomRepo{}, pub, nil, 730*24*time.Hour)
 
 	sender := models.Participant{ID: "u1", Account: "alice"}
 	roomID := "r-parent-cascade"
@@ -293,7 +296,7 @@ func TestDeleteMessage_ParentWithReplies_NoCascade(t *testing.T) {
 
 	// Alice (the parent's sender) deletes the parent.
 	c := natsrouter.NewContext(map[string]string{"account": "alice", "roomID": roomID})
-	_, err := svc.DeleteMessage(c, models.DeleteMessageRequest{MessageID: parentID})
+	_, err := svc.DeleteMessage(c, "site-test", models.DeleteMessageRequest{MessageID: parentID})
 	require.NoError(t, err)
 
 	// Parent is soft-deleted.

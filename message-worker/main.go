@@ -20,6 +20,7 @@ import (
 	"github.com/hmchangw/chat/pkg/otelutil"
 	"github.com/hmchangw/chat/pkg/shutdown"
 	"github.com/hmchangw/chat/pkg/stream"
+	"github.com/hmchangw/chat/pkg/subject"
 	"github.com/hmchangw/chat/pkg/userstore"
 )
 
@@ -122,7 +123,7 @@ func main() {
 
 	canonicalCfg := stream.MessagesCanonical(cfg.SiteID)
 
-	cons, err := js.CreateOrUpdateConsumer(ctx, canonicalCfg.Name, buildConsumerConfig(cfg.Consumer))
+	cons, err := js.CreateOrUpdateConsumer(ctx, canonicalCfg.Name, buildConsumerConfig(cfg.Consumer, cfg.SiteID))
 	if err != nil {
 		slog.Error("create consumer failed", "error", err)
 		os.Exit(1)
@@ -180,10 +181,13 @@ func main() {
 	)
 }
 
-// buildConsumerConfig returns the durable consumer config for
-// message-worker. Centralized so it is unit-testable without NATS.
-func buildConsumerConfig(s stream.ConsumerSettings) jetstream.ConsumerConfig {
+// buildConsumerConfig restricts the consumer to canonical .created subjects:
+// history-service publishes .updated and .deleted to the same stream and
+// already wrote Cassandra synchronously for those, so re-processing them here
+// would duplicate writes.
+func buildConsumerConfig(s stream.ConsumerSettings, siteID string) jetstream.ConsumerConfig {
 	cc := stream.DurableConsumerDefaults(s)
 	cc.Durable = "message-worker"
+	cc.FilterSubject = subject.MsgCanonicalCreated(siteID)
 	return cc
 }

@@ -215,7 +215,7 @@ func (h *Handler) processMessage(ctx context.Context, account, roomID, siteID st
 	}
 
 	// Publish MessageEvent to MESSAGES_CANONICAL
-	evt := model.MessageEvent{Message: msg, SiteID: siteID, Timestamp: now.UnixMilli()}
+	evt := model.MessageEvent{Event: model.EventCreated, Message: msg, SiteID: siteID, Timestamp: now.UnixMilli()}
 	evtData, err := json.Marshal(evt)
 	if err != nil {
 		return nil, &infraError{cause: fmt.Errorf("marshal message event: %w", err)}

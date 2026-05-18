@@ -10,11 +10,10 @@ import (
 	pkgmodel "github.com/hmchangw/chat/pkg/model"
 	"github.com/hmchangw/chat/pkg/mongoutil"
 	"github.com/hmchangw/chat/pkg/natsrouter"
-	"github.com/hmchangw/chat/pkg/roomkeystore"
 	"github.com/hmchangw/chat/pkg/subject"
 )
 
-//go:generate mockgen -destination=mocks/mock_repository.go -package=mocks . MessageReader,MessageWriter,MessageRepository,SubscriptionRepository,RoomRepository,EventPublisher,ThreadRoomRepository,RoomKeyProvider
+//go:generate mockgen -destination=mocks/mock_repository.go -package=mocks . MessageReader,MessageWriter,MessageRepository,SubscriptionRepository,RoomRepository,EventPublisher,ThreadRoomRepository
 
 type MessageReader interface {
 	GetMessagesBefore(ctx context.Context, roomID string, before time.Time, floor time.Time, pageReq cassrepo.PageRequest) (cassrepo.Page[models.Message], error)
@@ -65,13 +64,6 @@ type ThreadRoomRepository interface {
 	GetUnreadThreadRooms(ctx context.Context, roomID, account string, accessSince *time.Time, req mongoutil.OffsetPageRequest) (mongoutil.OffsetPage[pkgmodel.ThreadRoom], error)
 }
 
-// RoomKeyProvider fetches the current encryption key for a room.
-// Defined here (not imported from pkg/roomkeystore directly) to keep the
-// dependency contract narrow — only Get is used by history-service.
-type RoomKeyProvider interface {
-	Get(ctx context.Context, roomID string) (*roomkeystore.VersionedKeyPair, error)
-}
-
 // HistoryService handles message history queries and mutations. Transport-agnostic.
 type HistoryService struct {
 	msgReader     MessageReader
@@ -80,28 +72,17 @@ type HistoryService struct {
 	rooms         RoomRepository
 	publisher     EventPublisher
 	threadRooms   ThreadRoomRepository
-	keyProvider   RoomKeyProvider
 	historyFloor  time.Duration // from MESSAGE_HISTORY_FLOOR_DAYS
-	encrypt       bool
 }
 
-// New creates a HistoryService with the given repositories and event publisher.
-// When encrypt is true, keyProvider must be non-nil — encryptEditMsg would
-// otherwise nil-panic at first edit. We enforce this at construction so the
-// invariant fails fast at startup rather than mid-request.
 func New(
 	msgs MessageRepository,
 	subs SubscriptionRepository,
 	rooms RoomRepository,
 	pub EventPublisher,
 	threadRooms ThreadRoomRepository,
-	keyProvider RoomKeyProvider,
 	historyFloor time.Duration,
-	encrypt bool,
 ) *HistoryService {
-	if encrypt && keyProvider == nil {
-		panic("service.New: encrypt=true but keyProvider is nil")
-	}
 	return &HistoryService{
 		msgReader:     msgs,
 		msgWriter:     msgs,
@@ -109,9 +90,7 @@ func New(
 		rooms:         rooms,
 		publisher:     pub,
 		threadRooms:   threadRooms,
-		keyProvider:   keyProvider,
 		historyFloor:  historyFloor,
-		encrypt:       encrypt,
 	}
 }
 
@@ -121,8 +100,12 @@ func (s *HistoryService) RegisterHandlers(r *natsrouter.Router, siteID string) {
 	natsrouter.Register(r, subject.MsgNextPattern(siteID), s.LoadNextMessages)
 	natsrouter.Register(r, subject.MsgSurroundingPattern(siteID), s.LoadSurroundingMessages)
 	natsrouter.Register(r, subject.MsgGetPattern(siteID), s.GetMessageByID)
-	natsrouter.Register(r, subject.MsgEditPattern(siteID), s.EditMessage)
-	natsrouter.Register(r, subject.MsgDeletePattern(siteID), s.DeleteMessage)
+	natsrouter.Register(r, subject.MsgEditPattern(siteID), func(c *natsrouter.Context, req models.EditMessageRequest) (*models.EditMessageResponse, error) {
+		return s.EditMessage(c, siteID, req)
+	})
+	natsrouter.Register(r, subject.MsgDeletePattern(siteID), func(c *natsrouter.Context, req models.DeleteMessageRequest) (*models.DeleteMessageResponse, error) {
+		return s.DeleteMessage(c, siteID, req)
+	})
 	natsrouter.Register(r, subject.MsgThreadPattern(siteID), s.GetThreadMessages)
 	natsrouter.Register(r, subject.MsgThreadParentPattern(siteID), s.GetThreadParentMessages)
 }

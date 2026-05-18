@@ -442,6 +442,7 @@ func (h *Handler) processRemoveIndividual(ctx context.Context, req *model.Remove
 		CreatedAt:  now,
 	}
 	msgEvt := model.MessageEvent{
+		Event:     model.EventCreated,
 		Message:   sysMsg,
 		SiteID:    h.siteID,
 		Timestamp: now.UnixMilli(),
@@ -590,6 +591,7 @@ func (h *Handler) processRemoveOrg(ctx context.Context, req *model.RemoveMemberR
 		CreatedAt:  now,
 	}
 	msgEvt := model.MessageEvent{
+		Event:     model.EventCreated,
 		Message:   sysMsg,
 		SiteID:    h.siteID,
 		Timestamp: now.UnixMilli(),

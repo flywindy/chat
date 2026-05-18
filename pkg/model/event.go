@@ -137,8 +137,32 @@ type ClientMessage struct {
 type RoomEventType string
 
 const (
-	RoomEventNewMessage RoomEventType = "new_message"
+	RoomEventNewMessage     RoomEventType = "new_message"
+	RoomEventMessageEdited  RoomEventType = "message_edited"
+	RoomEventMessageDeleted RoomEventType = "message_deleted"
 )
+
+// MessageEditedPayload carries the per-edit fields on a RoomEvent of type
+// RoomEventMessageEdited. For encrypted channel rooms NewContent is empty and
+// EncryptedNewContent carries the ciphertext; otherwise NewContent is the
+// plaintext edit content.
+type MessageEditedPayload struct {
+	MessageID           string          `json:"messageId"`
+	NewContent          string          `json:"newContent,omitempty"`
+	EncryptedNewContent json.RawMessage `json:"encryptedNewContent,omitempty"`
+	EditedBy            string          `json:"editedBy"`
+	EditedAt            time.Time       `json:"editedAt"`
+	UpdatedAt           time.Time       `json:"updatedAt"`
+}
+
+// MessageDeletedPayload carries the per-delete fields on a RoomEvent of type
+// RoomEventMessageDeleted.
+type MessageDeletedPayload struct {
+	MessageID string    `json:"messageId"`
+	DeletedBy string    `json:"deletedBy"`
+	DeletedAt time.Time `json:"deletedAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
 
 type RoomEvent struct {
 	Type      RoomEventType `json:"type"`
@@ -159,6 +183,9 @@ type RoomEvent struct {
 
 	Message          *ClientMessage  `json:"message,omitempty"`
 	EncryptedMessage json.RawMessage `json:"encryptedMessage,omitempty"`
+
+	MessageEdited  *MessageEditedPayload  `json:"messageEdited,omitempty"`
+	MessageDeleted *MessageDeletedPayload `json:"messageDeleted,omitempty"`
 }
 
 type RoomKeyEvent struct {

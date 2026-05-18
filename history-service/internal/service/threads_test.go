@@ -42,7 +42,7 @@ func makeThreadPage(total int64) mongoutil.OffsetPage[pkgmodel.ThreadRoom] {
 // ============================================================
 
 func TestHistoryService_GetThreadMessages_Success(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t, true)
+	svc, msgs, subs, _, _ := newService(t)
 	c := testContext()
 
 	parentCreatedAt := joinTime.Add(5 * time.Minute)
@@ -65,7 +65,7 @@ func TestHistoryService_GetThreadMessages_Success(t *testing.T) {
 }
 
 func TestHistoryService_GetThreadMessages_HasNextAndCursor(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t, true)
+	svc, msgs, subs, _, _ := newService(t)
 	c := testContext()
 
 	parent := &models.Message{MessageID: "m-parent", RoomID: "r1", CreatedAt: joinTime.Add(5 * time.Minute), ThreadRoomID: "tr-1"}
@@ -85,7 +85,7 @@ func TestHistoryService_GetThreadMessages_HasNextAndCursor(t *testing.T) {
 }
 
 func TestHistoryService_GetThreadMessages_EmptyThreadMessageID(t *testing.T) {
-	svc, _, _, _, _, _ := newService(t, true)
+	svc, _, _, _, _ := newService(t)
 	c := testContext()
 
 	_, err := svc.GetThreadMessages(c, models.GetThreadMessagesRequest{})
@@ -94,7 +94,7 @@ func TestHistoryService_GetThreadMessages_EmptyThreadMessageID(t *testing.T) {
 }
 
 func TestHistoryService_GetThreadMessages_ParentNotFound(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t, true)
+	svc, msgs, subs, _, _ := newService(t)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(&joinTime, true, nil)
@@ -106,7 +106,7 @@ func TestHistoryService_GetThreadMessages_ParentNotFound(t *testing.T) {
 }
 
 func TestHistoryService_GetThreadMessages_ParentLookupError(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t, true)
+	svc, msgs, subs, _, _ := newService(t)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(&joinTime, true, nil)
@@ -118,7 +118,7 @@ func TestHistoryService_GetThreadMessages_ParentLookupError(t *testing.T) {
 }
 
 func TestHistoryService_GetThreadMessages_NotSubscribed(t *testing.T) {
-	svc, _, subs, _, _, _ := newService(t, true)
+	svc, _, subs, _, _ := newService(t)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, false, nil)
@@ -129,7 +129,7 @@ func TestHistoryService_GetThreadMessages_NotSubscribed(t *testing.T) {
 }
 
 func TestHistoryService_GetThreadMessages_SubscriptionStoreError(t *testing.T) {
-	svc, _, subs, _, _, _ := newService(t, true)
+	svc, _, subs, _, _ := newService(t)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, false, fmt.Errorf("db error"))
@@ -140,7 +140,7 @@ func TestHistoryService_GetThreadMessages_SubscriptionStoreError(t *testing.T) {
 }
 
 func TestHistoryService_GetThreadMessages_ParentBeforeAccessSince(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t, true)
+	svc, msgs, subs, _, _ := newService(t)
 	c := testContext()
 
 	parent := &models.Message{MessageID: "m-parent", RoomID: "r1", CreatedAt: joinTime.Add(-1 * time.Hour)}
@@ -153,7 +153,7 @@ func TestHistoryService_GetThreadMessages_ParentBeforeAccessSince(t *testing.T) 
 }
 
 func TestHistoryService_GetThreadMessages_NoHSS(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t, true)
+	svc, msgs, subs, _, _ := newService(t)
 	c := testContext()
 
 	parent := &models.Message{MessageID: "m-parent", RoomID: "r1", CreatedAt: joinTime.Add(-1 * time.Hour), ThreadRoomID: "tr-1"}
@@ -168,7 +168,7 @@ func TestHistoryService_GetThreadMessages_NoHSS(t *testing.T) {
 
 // ThreadRoomID is empty when message-worker couldn't stamp it (ThreadParentMessageCreatedAt absent).
 func TestHistoryService_GetThreadMessages_ThreadRoomIDEmpty(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t, true)
+	svc, msgs, subs, _, _ := newService(t)
 	c := testContext()
 
 	parent := &models.Message{MessageID: "m-parent", RoomID: "r1", CreatedAt: joinTime.Add(5 * time.Minute), ThreadRoomID: ""}
@@ -182,7 +182,7 @@ func TestHistoryService_GetThreadMessages_ThreadRoomIDEmpty(t *testing.T) {
 }
 
 func TestHistoryService_GetThreadMessages_InvalidCursor(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t, true)
+	svc, msgs, subs, _, _ := newService(t)
 	c := testContext()
 
 	parent := &models.Message{MessageID: "m-parent", RoomID: "r1", CreatedAt: joinTime.Add(5 * time.Minute), ThreadRoomID: "tr-1"}
@@ -198,7 +198,7 @@ func TestHistoryService_GetThreadMessages_InvalidCursor(t *testing.T) {
 }
 
 func TestHistoryService_GetThreadMessages_RepoError(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t, true)
+	svc, msgs, subs, _, _ := newService(t)
 	c := testContext()
 
 	parent := &models.Message{MessageID: "m-parent", RoomID: "r1", CreatedAt: joinTime.Add(5 * time.Minute), ThreadRoomID: "tr-1"}
@@ -224,7 +224,7 @@ func TestHistoryService_GetThreadMessages_Limits(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			svc, msgs, subs, _, _, _ := newService(t, true)
+			svc, msgs, subs, _, _ := newService(t)
 			c := testContext()
 
 			parent := &models.Message{MessageID: "m-parent", RoomID: "r1", CreatedAt: joinTime.Add(5 * time.Minute), ThreadRoomID: "tr-1"}
@@ -242,7 +242,7 @@ func TestHistoryService_GetThreadMessages_Limits(t *testing.T) {
 }
 
 func TestHistoryService_GetThreadMessages_ReplyIDReturnsBadRequest(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t, true)
+	svc, msgs, subs, _, _ := newService(t)
 	c := testContext()
 
 	reply := &models.Message{MessageID: "reply-1", RoomID: "r1", CreatedAt: joinTime.Add(10 * time.Minute), ThreadParentID: "m-parent"}
@@ -256,7 +256,7 @@ func TestHistoryService_GetThreadMessages_ReplyIDReturnsBadRequest(t *testing.T)
 }
 
 func TestHistoryService_GetThreadMessages_ParentBeforeAccessSinceReturnsForbidden(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t, true)
+	svc, msgs, subs, _, _ := newService(t)
 	c := testContext()
 
 	parent := &models.Message{MessageID: "m-parent", RoomID: "r1", CreatedAt: joinTime.Add(-1 * time.Hour), ThreadRoomID: "tr-1"}
@@ -274,7 +274,7 @@ func TestHistoryService_GetThreadMessages_ParentBeforeAccessSinceReturnsForbidde
 // ============================================================
 
 func TestHistoryService_GetThreadParentMessages_All(t *testing.T) {
-	svc, msgs, subs, _, threadRooms, _ := newService(t, true)
+	svc, msgs, subs, _, threadRooms := newService(t)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, true, nil)
@@ -290,7 +290,7 @@ func TestHistoryService_GetThreadParentMessages_All(t *testing.T) {
 }
 
 func TestHistoryService_GetThreadParentMessages_Total(t *testing.T) {
-	svc, msgs, subs, _, threadRooms, _ := newService(t, true)
+	svc, msgs, subs, _, threadRooms := newService(t)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, true, nil)
@@ -304,7 +304,7 @@ func TestHistoryService_GetThreadParentMessages_Total(t *testing.T) {
 }
 
 func TestHistoryService_GetThreadParentMessages_Following(t *testing.T) {
-	svc, msgs, subs, _, threadRooms, _ := newService(t, true)
+	svc, msgs, subs, _, threadRooms := newService(t)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, true, nil)
@@ -317,7 +317,7 @@ func TestHistoryService_GetThreadParentMessages_Following(t *testing.T) {
 }
 
 func TestHistoryService_GetThreadParentMessages_Unread(t *testing.T) {
-	svc, msgs, subs, _, threadRooms, _ := newService(t, true)
+	svc, msgs, subs, _, threadRooms := newService(t)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, true, nil)
@@ -331,7 +331,7 @@ func TestHistoryService_GetThreadParentMessages_Unread(t *testing.T) {
 }
 
 func TestHistoryService_GetThreadParentMessages_NotSubscribed(t *testing.T) {
-	svc, _, subs, _, _, _ := newService(t, true)
+	svc, _, subs, _, _ := newService(t)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, false, nil)
@@ -342,7 +342,7 @@ func TestHistoryService_GetThreadParentMessages_NotSubscribed(t *testing.T) {
 }
 
 func TestHistoryService_GetThreadParentMessages_Empty(t *testing.T) {
-	svc, _, subs, _, threadRooms, _ := newService(t, true)
+	svc, _, subs, _, threadRooms := newService(t)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, true, nil)
@@ -357,7 +357,7 @@ func TestHistoryService_GetThreadParentMessages_Empty(t *testing.T) {
 }
 
 func TestHistoryService_GetThreadParentMessages_SubscriptionError(t *testing.T) {
-	svc, _, subs, _, _, _ := newService(t, true)
+	svc, _, subs, _, _ := newService(t)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, false, fmt.Errorf("db error"))
@@ -368,7 +368,7 @@ func TestHistoryService_GetThreadParentMessages_SubscriptionError(t *testing.T) 
 }
 
 func TestHistoryService_GetThreadParentMessages_ThreadRoomError(t *testing.T) {
-	svc, _, subs, _, threadRooms, _ := newService(t, true)
+	svc, _, subs, _, threadRooms := newService(t)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, true, nil)
@@ -382,7 +382,7 @@ func TestHistoryService_GetThreadParentMessages_ThreadRoomError(t *testing.T) {
 }
 
 func TestHistoryService_GetThreadParentMessages_CassandraError(t *testing.T) {
-	svc, msgs, subs, _, threadRooms, _ := newService(t, true)
+	svc, msgs, subs, _, threadRooms := newService(t)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, true, nil)
@@ -395,7 +395,7 @@ func TestHistoryService_GetThreadParentMessages_CassandraError(t *testing.T) {
 }
 
 func TestHistoryService_GetThreadParentMessages_MissingParentIgnored(t *testing.T) {
-	svc, msgs, subs, _, threadRooms, _ := newService(t, true)
+	svc, msgs, subs, _, threadRooms := newService(t)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, true, nil)
@@ -413,7 +413,7 @@ func TestHistoryService_GetThreadParentMessages_MissingParentIgnored(t *testing.
 }
 
 func TestHistoryService_GetThreadParentMessages_DeduplicatesParentIDs(t *testing.T) {
-	svc, msgs, subs, _, threadRooms, _ := newService(t, true)
+	svc, msgs, subs, _, threadRooms := newService(t)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, true, nil)
@@ -440,7 +440,7 @@ func TestHistoryService_GetThreadParentMessages_DeduplicatesParentIDs(t *testing
 }
 
 func TestHistoryService_GetThreadParentMessages_InvalidFilter(t *testing.T) {
-	svc, _, subs, _, _, _ := newService(t, true)
+	svc, _, subs, _, _ := newService(t)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, true, nil)
@@ -457,7 +457,7 @@ func TestHistoryService_GetThreadParentMessages_InvalidFilter(t *testing.T) {
 // ============================================================
 
 func TestHistoryService_GetThreadMessages_RedactsQuoteBeforeAccessSince(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t, true)
+	svc, msgs, subs, _, _ := newService(t)
 	c := testContext()
 
 	parentCreatedAt := joinTime.Add(5 * time.Minute)
@@ -486,7 +486,7 @@ func TestHistoryService_GetThreadMessages_RedactsQuoteBeforeAccessSince(t *testi
 }
 
 func TestHistoryService_GetThreadMessages_KeepsQuoteAfterAccessSince(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t, true)
+	svc, msgs, subs, _, _ := newService(t)
 	c := testContext()
 
 	parentCreatedAt := joinTime.Add(5 * time.Minute)
@@ -515,7 +515,7 @@ func TestHistoryService_GetThreadMessages_KeepsQuoteAfterAccessSince(t *testing.
 }
 
 func TestHistoryService_GetThreadMessages_RedactsLegacyTShowMissingParentTimestamp(t *testing.T) {
-	svc, msgs, subs, _, _, _ := newService(t, true)
+	svc, msgs, subs, _, _ := newService(t)
 	c := testContext()
 
 	parentCreatedAt := joinTime.Add(5 * time.Minute)
@@ -550,7 +550,7 @@ func TestHistoryService_GetThreadMessages_RedactsLegacyTShowMissingParentTimesta
 }
 
 func TestHistoryService_GetThreadParentMessages_RedactsQuoteBeforeAccessSince(t *testing.T) {
-	svc, msgs, subs, _, threadRooms, _ := newService(t, true)
+	svc, msgs, subs, _, threadRooms := newService(t)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(&joinTime, true, nil)
@@ -577,7 +577,7 @@ func TestHistoryService_GetThreadParentMessages_RedactsQuoteBeforeAccessSince(t 
 }
 
 func TestHistoryService_GetThreadParentMessages_KeepsQuoteAfterAccessSince(t *testing.T) {
-	svc, msgs, subs, _, threadRooms, _ := newService(t, true)
+	svc, msgs, subs, _, threadRooms := newService(t)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(&joinTime, true, nil)
@@ -604,7 +604,7 @@ func TestHistoryService_GetThreadParentMessages_KeepsQuoteAfterAccessSince(t *te
 }
 
 func TestHistoryService_GetThreadParentMessages_PostHydrationAccessCheck(t *testing.T) {
-	svc, msgs, subs, _, threadRooms, _ := newService(t, true)
+	svc, msgs, subs, _, threadRooms := newService(t)
 	c := testContext()
 
 	// MongoDB filter uses threadParentCreatedAt which can be zero (field absent from original event).

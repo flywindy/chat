@@ -151,6 +151,32 @@ func TestMessageJSON(t *testing.T) {
 		assert.False(t, present, "threadParentMessageCreatedAt should be omitted when nil")
 	})
 
+	t.Run("editedAt + updatedAt round-trip", func(t *testing.T) {
+		edited := time.Date(2026, 1, 1, 12, 5, 0, 0, time.UTC)
+		updated := time.Date(2026, 1, 1, 12, 6, 0, 0, time.UTC)
+		m := model.Message{
+			ID: "m1", RoomID: "r1", UserID: "u1", UserAccount: "alice",
+			Content:   "hello (edited)",
+			CreatedAt: time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
+			EditedAt:  &edited,
+			UpdatedAt: &updated,
+		}
+		roundTrip(t, &m, &model.Message{})
+	})
+
+	t.Run("editedAt + updatedAt omitted when nil", func(t *testing.T) {
+		m := model.Message{
+			ID: "m1", RoomID: "r1", UserID: "u1", UserAccount: "alice",
+			Content:   "hello",
+			CreatedAt: time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
+		}
+		data, err := json.Marshal(&m)
+		require.NoError(t, err)
+		got := string(data)
+		assert.NotContains(t, got, `"editedAt"`, "nil EditedAt must be omitted")
+		assert.NotContains(t, got, `"updatedAt"`, "nil UpdatedAt must be omitted")
+	})
+
 	t.Run("with threadParentMessageCreatedAt", func(t *testing.T) {
 		raw := `{"id":"m1","roomId":"r1","userId":"u1","userAccount":"alice","content":"reply","createdAt":"2026-01-01T12:00:00Z","threadParentMessageId":"parent-msg-uuid","threadParentMessageCreatedAt":"2026-01-01T11:00:00Z"}`
 		var m model.Message
@@ -1624,24 +1650,31 @@ func TestSearchMessagesResponseJSON(t *testing.T) {
 
 func TestSearchMessageJSON(t *testing.T) {
 	t.Run("full", func(t *testing.T) {
+		edited := time.Date(2026, 4, 1, 12, 5, 0, 0, time.UTC)
+		updated := time.Date(2026, 4, 1, 12, 6, 0, 0, time.UTC)
 		msg := model.SearchMessage{
 			MessageID:             "m1",
 			RoomID:                "r1",
 			SiteID:                "site-a",
-			Content:               "hello world",
+			Content:               "hello world (edited)",
 			UserAccount:           "alice",
 			CreatedAt:             time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC),
+			EditedAt:              &edited,
+			UpdatedAt:             &updated,
 			ThreadParentMessageID: "p1",
 		}
 		roundTrip(t, &msg, &model.SearchMessage{})
 	})
 
-	t.Run("optional thread parent omitted when zero", func(t *testing.T) {
+	t.Run("optional fields omitted when zero", func(t *testing.T) {
 		msg := model.SearchMessage{MessageID: "m1", RoomID: "r1", Content: "hi"}
 		data, err := json.Marshal(&msg)
 		require.NoError(t, err)
-		assert.NotContains(t, string(data), `"threadParentMessageId":""`,
+		got := string(data)
+		assert.NotContains(t, got, `"threadParentMessageId":""`,
 			"empty thread parent must be omitted")
+		assert.NotContains(t, got, `"editedAt"`, "nil EditedAt must be omitted")
+		assert.NotContains(t, got, `"updatedAt"`, "nil UpdatedAt must be omitted")
 	})
 }
 
@@ -2251,4 +2284,36 @@ func TestSearchUserJSON_OmitEmpty(t *testing.T) {
 	got := string(data)
 	assert.NotContains(t, got, "engName", "empty EngName must be omitted")
 	assert.NotContains(t, got, "chineseName", "empty ChineseName must be omitted")
+}
+
+func TestRoomEventMessageEditedJSON(t *testing.T) {
+	editedAt := time.Date(2026, 5, 14, 12, 5, 0, 0, time.UTC)
+	updatedAt := time.Date(2026, 5, 14, 12, 5, 0, 0, time.UTC)
+	evt := model.RoomEvent{
+		Type:   model.RoomEventMessageEdited,
+		RoomID: "r1",
+		MessageEdited: &model.MessageEditedPayload{
+			MessageID:  "msg-uuid",
+			NewContent: "hello (edited)",
+			EditedBy:   "alice",
+			EditedAt:   editedAt,
+			UpdatedAt:  updatedAt,
+		},
+	}
+	roundTrip(t, &evt, &model.RoomEvent{})
+}
+
+func TestRoomEventMessageDeletedJSON(t *testing.T) {
+	deletedAt := time.Date(2026, 5, 14, 12, 10, 0, 0, time.UTC)
+	evt := model.RoomEvent{
+		Type:   model.RoomEventMessageDeleted,
+		RoomID: "r1",
+		MessageDeleted: &model.MessageDeletedPayload{
+			MessageID: "msg-uuid",
+			DeletedBy: "alice",
+			DeletedAt: deletedAt,
+			UpdatedAt: deletedAt,
+		},
+	}
+	roundTrip(t, &evt, &model.RoomEvent{})
 }

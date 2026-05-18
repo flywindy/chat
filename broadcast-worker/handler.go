@@ -51,6 +51,20 @@ func (h *Handler) HandleMessage(ctx context.Context, data []byte) error {
 		return fmt.Errorf("unmarshal message event: %w", err)
 	}
 
+	switch evt.Event {
+	case model.EventCreated:
+		return h.handleCreated(ctx, &evt)
+	case model.EventUpdated:
+		return h.handleUpdated(ctx, &evt)
+	case model.EventDeleted:
+		return h.handleDeleted(ctx, &evt)
+	default:
+		slog.Warn("unknown message event type, skipping", "event", evt.Event, "messageID", evt.Message.ID)
+		return nil
+	}
+}
+
+func (h *Handler) handleCreated(ctx context.Context, evt *model.MessageEvent) error {
 	msg := evt.Message
 
 	resolved, err := mention.Resolve(ctx, msg.Content, h.userStore.FindUsersByAccounts)
@@ -92,6 +106,131 @@ func (h *Handler) HandleMessage(ctx context.Context, data []byte) error {
 	}
 }
 
+func (h *Handler) handleUpdated(ctx context.Context, evt *model.MessageEvent) error {
+	msg := evt.Message
+	if msg.EditedAt == nil || msg.UpdatedAt == nil {
+		return fmt.Errorf("updated event missing EditedAt or UpdatedAt: %s", msg.ID)
+	}
+	return h.fanOutMutationEvent(ctx, evt, model.RoomEventMessageEdited, &model.MessageEditedPayload{
+		MessageID:  msg.ID,
+		NewContent: msg.Content,
+		EditedBy:   msg.UserAccount,
+		EditedAt:   *msg.EditedAt,
+		UpdatedAt:  *msg.UpdatedAt,
+	}, nil)
+}
+
+func (h *Handler) handleDeleted(ctx context.Context, evt *model.MessageEvent) error {
+	msg := evt.Message
+	if msg.UpdatedAt == nil {
+		return fmt.Errorf("deleted event missing UpdatedAt: %s", msg.ID)
+	}
+	return h.fanOutMutationEvent(ctx, evt, model.RoomEventMessageDeleted, nil, &model.MessageDeletedPayload{
+		MessageID: msg.ID,
+		DeletedBy: msg.UserAccount,
+		DeletedAt: *msg.UpdatedAt,
+		UpdatedAt: *msg.UpdatedAt,
+	})
+}
+
+// fanOutMutationEvent routes the live event by room type, same as the create
+// path. Exactly one of edited/deleted is non-nil.
+func (h *Handler) fanOutMutationEvent(
+	ctx context.Context,
+	evt *model.MessageEvent,
+	roomEvtType model.RoomEventType,
+	edited *model.MessageEditedPayload,
+	deleted *model.MessageDeletedPayload,
+) error {
+	msg := evt.Message
+
+	room, err := h.store.GetRoom(ctx, msg.RoomID)
+	if err != nil {
+		return fmt.Errorf("fetch room %s: %w", msg.RoomID, err)
+	}
+
+	roomEvt := model.RoomEvent{
+		Type:           roomEvtType,
+		RoomID:         room.ID,
+		Timestamp:      evt.Timestamp,
+		SiteID:         room.SiteID,
+		MessageEdited:  edited,
+		MessageDeleted: deleted,
+	}
+
+	switch room.Type {
+	case model.RoomTypeChannel:
+		if h.encrypt && edited != nil {
+			if err := h.encryptEditedContent(ctx, room.ID, edited); err != nil {
+				return err
+			}
+		}
+		payload, err := json.Marshal(&roomEvt)
+		if err != nil {
+			return fmt.Errorf("marshal %s channel event: %w", roomEvtType, err)
+		}
+		return h.pub.Publish(ctx, subject.RoomEvent(room.ID), payload)
+
+	case model.RoomTypeDM:
+		subs, err := h.store.ListSubscriptions(ctx, room.ID)
+		if err != nil {
+			return fmt.Errorf("list subscriptions for DM room %s: %w", room.ID, err)
+		}
+		payload, err := json.Marshal(&roomEvt)
+		if err != nil {
+			return fmt.Errorf("marshal %s DM event: %w", roomEvtType, err)
+		}
+		for i := range subs {
+			account := subs[i].User.Account
+			if err := h.pub.Publish(ctx, subject.UserRoomEvent(account), payload); err != nil {
+				slog.Error("publish DM mutation event failed",
+					"error", err,
+					"type", roomEvtType,
+					"account", account,
+					"messageID", msg.ID,
+					"roomID", room.ID,
+				)
+			}
+		}
+		return nil
+
+	default:
+		slog.Warn("unknown room type, skipping mutation fan-out", "type", room.Type, "roomID", room.ID)
+		return nil
+	}
+}
+
+func (h *Handler) encryptEditedContent(ctx context.Context, roomID string, edited *model.MessageEditedPayload) error {
+	key, err := h.currentRoomKey(ctx, roomID)
+	if err != nil {
+		return err
+	}
+	encrypted, err := roomcrypto.Encode(edited.NewContent, key.KeyPair.PublicKey, key.Version)
+	if err != nil {
+		return fmt.Errorf("encrypt edit content for room %s: %w", roomID, err)
+	}
+	encJSON, err := json.Marshal(encrypted)
+	if err != nil {
+		return fmt.Errorf("marshal encrypted edit content: %w", err)
+	}
+	edited.EncryptedNewContent = json.RawMessage(encJSON)
+	edited.NewContent = ""
+	return nil
+}
+
+// currentRoomKey fetches the room's encryption key, treating a missing key as
+// an error (the room is configured for encryption but no key is provisioned).
+func (h *Handler) currentRoomKey(ctx context.Context, roomID string) (*roomkeystore.VersionedKeyPair, error) {
+	key, err := h.keyStore.Get(ctx, roomID)
+	if err != nil {
+		return nil, fmt.Errorf("get room key for room %s: %w", roomID, err)
+	}
+	if key == nil {
+		return nil, fmt.Errorf("get room key for room %s: %w", roomID, errNoCurrentKey)
+	}
+	return key, nil
+}
+
 func (h *Handler) publishChannelEvent(ctx context.Context, room *model.Room, clientMsg *model.ClientMessage, mentionAll bool, mentions []model.Participant) error {
 	evt := buildRoomEvent(room, clientMsg)
 	evt.MentionAll = mentionAll
@@ -105,12 +244,9 @@ func (h *Handler) publishChannelEvent(ctx context.Context, room *model.Room, cli
 			return fmt.Errorf("marshal client message: %w", err)
 		}
 
-		key, err := h.keyStore.Get(ctx, room.ID)
+		key, err := h.currentRoomKey(ctx, room.ID)
 		if err != nil {
-			return fmt.Errorf("get room key for room %s: %w", room.ID, err)
-		}
-		if key == nil {
-			return fmt.Errorf("get room key for room %s: %w", room.ID, errNoCurrentKey)
+			return err
 		}
 
 		encrypted, err := roomcrypto.Encode(string(msgJSON), key.KeyPair.PublicKey, key.Version)

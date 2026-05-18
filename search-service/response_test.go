@@ -21,8 +21,10 @@ func TestParseMessagesResponse_HappyPath(t *testing.T) {
 				}},
 				{"_source": {
 					"messageId": "m2", "roomId": "r2", "siteId": "site-b",
-					"userId": "u2", "userAccount": "bob", "content": "world",
+					"userId": "u2", "userAccount": "bob", "content": "world (edited)",
 					"createdAt": "2026-04-02T12:00:00Z",
+					"editedAt": "2026-04-02T12:05:00Z",
+					"updatedAt": "2026-04-02T12:06:00Z",
 					"threadParentMessageId": "p1",
 					"threadParentMessageCreatedAt": "2026-04-02T11:00:00Z"
 				}}
@@ -38,11 +40,20 @@ func TestParseMessagesResponse_HappyPath(t *testing.T) {
 	assert.Equal(t, "m1", hits[0].MessageID)
 	assert.Equal(t, "alice", hits[0].UserAccount)
 	assert.Empty(t, hits[0].ThreadParentID)
+	assert.Nil(t, hits[0].EditedAt, "never-edited hit decodes EditedAt as nil")
+	assert.Nil(t, hits[0].UpdatedAt)
 
 	assert.Equal(t, "p1", hits[1].ThreadParentID)
 	require.NotNil(t, hits[1].ThreadParentCreatedAt)
 	want := time.Date(2026, 4, 2, 11, 0, 0, 0, time.UTC)
 	assert.True(t, hits[1].ThreadParentCreatedAt.Equal(want))
+
+	require.NotNil(t, hits[1].EditedAt)
+	require.NotNil(t, hits[1].UpdatedAt)
+	wantEdited := time.Date(2026, 4, 2, 12, 5, 0, 0, time.UTC)
+	wantUpdated := time.Date(2026, 4, 2, 12, 6, 0, 0, time.UTC)
+	assert.True(t, hits[1].EditedAt.Equal(wantEdited))
+	assert.True(t, hits[1].UpdatedAt.Equal(wantUpdated))
 }
 
 func TestParseMessagesResponse_Empty(t *testing.T) {
@@ -77,6 +88,27 @@ func TestToSearchMessage_ProjectsESFields(t *testing.T) {
 	assert.Equal(t, "hello", got.Content)
 	assert.Equal(t, "site-a", got.SiteID)
 	// UserID is intentionally NOT exposed in the wire type.
+	// EditedAt/UpdatedAt are nil on a never-edited hit.
+	assert.Nil(t, got.EditedAt)
+	assert.Nil(t, got.UpdatedAt)
+}
+
+func TestToSearchMessage_EditedAndUpdatedCopied(t *testing.T) {
+	edited := time.Date(2026, 4, 1, 12, 5, 0, 0, time.UTC)
+	updated := time.Date(2026, 4, 1, 12, 6, 0, 0, time.UTC)
+	hit := messageSearchHit{
+		MessageID:   "m1",
+		RoomID:      "r1",
+		UserAccount: "alice",
+		Content:     "hello (edited)",
+		EditedAt:    &edited,
+		UpdatedAt:   &updated,
+	}
+	got := toSearchMessage(&hit)
+	require.NotNil(t, got.EditedAt)
+	require.NotNil(t, got.UpdatedAt)
+	assert.True(t, got.EditedAt.Equal(edited))
+	assert.True(t, got.UpdatedAt.Equal(updated))
 }
 
 func TestToSearchMessage_ThreadParentBothFieldsCopied(t *testing.T) {

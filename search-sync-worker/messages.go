@@ -75,13 +75,15 @@ func (c *messageCollection) BuildAction(data []byte) ([]searchengine.BulkAction,
 // When adding fields to Message (pkg/model), add them here with an `es` tag
 // and populate them in newMessageSearchIndex(). The template auto-updates.
 type MessageSearchIndex struct {
-	MessageID             string     `json:"messageId"                       es:"keyword"`
-	RoomID                string     `json:"roomId"                          es:"keyword"`
-	SiteID                string     `json:"siteId"                          es:"keyword"`
-	UserID                string     `json:"userId"                          es:"keyword"`
-	UserAccount           string     `json:"userAccount"                     es:"keyword"`
-	Content               string     `json:"content,omitempty"              es:"text,custom_analyzer"`
-	CreatedAt             time.Time  `json:"createdAt"                       es:"date"`
+	MessageID             string     `json:"messageId"                              es:"keyword"`
+	RoomID                string     `json:"roomId"                                 es:"keyword"`
+	SiteID                string     `json:"siteId"                                 es:"keyword"`
+	UserID                string     `json:"userId"                                 es:"keyword"`
+	UserAccount           string     `json:"userAccount"                            es:"keyword"`
+	Content               string     `json:"content,omitempty"                      es:"text,custom_analyzer"`
+	CreatedAt             time.Time  `json:"createdAt"                              es:"date"`
+	EditedAt              *time.Time `json:"editedAt,omitempty"                     es:"date"`
+	UpdatedAt             *time.Time `json:"updatedAt,omitempty"                    es:"date"`
 	ThreadParentID        string     `json:"threadParentMessageId,omitempty"        es:"keyword"`
 	ThreadParentCreatedAt *time.Time `json:"threadParentMessageCreatedAt,omitempty" es:"date"`
 	TShow                 bool       `json:"tshow,omitempty"                        es:"boolean"`
@@ -97,6 +99,8 @@ func newMessageSearchIndex(evt *model.MessageEvent) MessageSearchIndex {
 		UserAccount:           evt.Message.UserAccount,
 		Content:               evt.Message.Content,
 		CreatedAt:             evt.Message.CreatedAt,
+		EditedAt:              evt.Message.EditedAt,
+		UpdatedAt:             evt.Message.UpdatedAt,
 		ThreadParentID:        evt.Message.ThreadParentMessageID,
 		ThreadParentCreatedAt: evt.Message.ThreadParentMessageCreatedAt,
 		TShow:                 evt.Message.TShow,
@@ -109,12 +113,10 @@ func indexName(prefix string, createdAt time.Time) string {
 
 func buildMessageAction(evt *model.MessageEvent, indexPrefix string) searchengine.BulkAction {
 	index := indexName(indexPrefix, evt.Message.CreatedAt)
-	eventType := evt.Event
-	if eventType == "" {
-		eventType = model.EventCreated
-	}
 
-	if eventType == model.EventDeleted {
+	// Only an explicit EventDeleted removes the doc; created/updated (and any
+	// unstamped legacy/replayed event) take the index upsert path.
+	if evt.Event == model.EventDeleted {
 		return searchengine.BulkAction{
 			Action:  searchengine.ActionDelete,
 			Index:   index,

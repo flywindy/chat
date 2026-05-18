@@ -2,7 +2,6 @@ package service
 
 import (
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"strings"
 	"time"
@@ -11,8 +10,8 @@ import (
 
 	"github.com/hmchangw/chat/history-service/internal/cassrepo"
 	"github.com/hmchangw/chat/history-service/internal/models"
+	"github.com/hmchangw/chat/pkg/model"
 	"github.com/hmchangw/chat/pkg/natsrouter"
-	"github.com/hmchangw/chat/pkg/roomcrypto"
 	"github.com/hmchangw/chat/pkg/subject"
 )
 
@@ -289,41 +288,14 @@ func (s *HistoryService) GetMessageByID(c *natsrouter.Context, req models.GetMes
 	return msg, nil
 }
 
-// encryptEditMsg returns the payload pieces for the live MessageEditedEvent.
-//
-// Returns:
-//
-//	(plaintext, nil, nil)   — encryption is disabled, caller publishes plaintext.
-//	("",        encJSON, nil) — encryption succeeded, caller publishes encrypted.
-//	("",        nil,     err) — encryption was required but failed; caller MUST
-//	                             skip publishing to avoid plaintext exposure.
-func (s *HistoryService) encryptEditMsg(c *natsrouter.Context, roomID, plaintext string) (string, json.RawMessage, error) {
-	if !s.encrypt {
-		return plaintext, nil, nil
-	}
-	key, err := s.keyProvider.Get(c, roomID)
-	if err != nil {
-		return "", nil, fmt.Errorf("get room key for room %s: %w", roomID, err)
-	}
-	if key == nil {
-		return "", nil, fmt.Errorf("no current key for room %s", roomID)
-	}
-	encrypted, err := roomcrypto.Encode(plaintext, key.KeyPair.PublicKey, key.Version)
-	if err != nil {
-		return "", nil, fmt.Errorf("encrypt edit message for room %s: %w", roomID, err)
-	}
-	encJSON, err := json.Marshal(encrypted)
-	if err != nil {
-		return "", nil, fmt.Errorf("marshal encrypted edit message: %w", err)
-	}
-	return "", json.RawMessage(encJSON), nil
-}
-
 // EditMessage handles chat.user.{account}.request.room.{roomID}.{siteID}.msg.edit.
 // Sender-only auth. Writes to all applicable Cassandra tables via
-// UpdateMessageContent, then publishes a best-effort MessageEditedEvent to
-// chat.room.{roomID}.event for live fan-out.
-func (s *HistoryService) EditMessage(c *natsrouter.Context, req models.EditMessageRequest) (*models.EditMessageResponse, error) {
+// UpdateMessageContent, then publishes a best-effort canonical MessageEvent
+// (Event=updated) to subject.MsgCanonicalUpdated(siteID). broadcast-worker
+// fans the canonical event out to per-user RoomEvents; search-sync-worker
+// updates the ES index from the same canonical event. Publish failure logs
+// and continues — Cassandra is the source of truth.
+func (s *HistoryService) EditMessage(c *natsrouter.Context, siteID string, req models.EditMessageRequest) (*models.EditMessageResponse, error) {
 	account := c.Param("account")
 	roomID := c.Param("roomID")
 
@@ -363,34 +335,28 @@ func (s *HistoryService) EditMessage(c *natsrouter.Context, req models.EditMessa
 		return nil, natsrouter.ErrInternal("failed to edit message")
 	}
 
-	// Publish live event (best-effort — publish failure is logged, not returned).
-	// When encryption is required but fails, skip the publish entirely to avoid
-	// leaking plaintext on the live event subject. The Cassandra write already
-	// succeeded; clients will see the edit on next history fetch.
 	editedAtMs := editedAt.UnixMilli()
-	plainMsg, encMsg, encErr := s.encryptEditMsg(c, roomID, req.NewMsg)
-	if encErr != nil {
-		slog.Error("edit: encryption failed, skipping live event to avoid plaintext exposure",
-			"error", encErr, "messageID", req.MessageID, "roomID", roomID)
-	} else {
-		evt := models.MessageEditedEvent{
-			Type:            "message_edited",
-			Timestamp:       editedAtMs,
-			RoomID:          roomID,
-			MessageID:       req.MessageID,
-			NewMsg:          plainMsg,
-			EncryptedNewMsg: encMsg,
-			EditedBy:        account,
-			EditedAt:        editedAtMs,
-		}
-		if payload, err := json.Marshal(evt); err == nil {
-			if pubErr := s.publisher.Publish(c, subject.RoomEvent(roomID), payload); pubErr != nil {
-				slog.Warn("edit: publish event failed", "error", pubErr, "messageID", req.MessageID)
-			}
-		} else {
-			slog.Warn("edit: marshal event failed", "error", err, "messageID", req.MessageID)
-		}
+
+	// Carry only the fields downstream actually reads: search-sync-worker
+	// reindexes by Content/EditedAt/UpdatedAt; broadcast-worker emits a slim
+	// MessageEditedPayload of {ID, Content, EditedBy, EditedAt, UpdatedAt}.
+	// Mentions intentionally omitted — broadcast-worker re-resolves from Content.
+	canonicalEvt := model.MessageEvent{
+		Event: model.EventUpdated,
+		Message: model.Message{
+			ID:          msg.MessageID,
+			RoomID:      msg.RoomID,
+			UserID:      msg.Sender.ID,
+			UserAccount: msg.Sender.Account,
+			Content:     req.NewMsg,
+			CreatedAt:   msg.CreatedAt,
+			EditedAt:    &editedAt,
+			UpdatedAt:   &editedAt,
+		},
+		SiteID:    siteID,
+		Timestamp: editedAtMs,
 	}
+	s.publishCanonicalBestEffort(c, subject.MsgCanonicalUpdated(siteID), &canonicalEvt, req.MessageID, roomID)
 
 	return &models.EditMessageResponse{
 		MessageID: req.MessageID,
@@ -404,7 +370,7 @@ func (s *HistoryService) EditMessage(c *natsrouter.Context, req models.EditMessa
 // decrement on the parent for thread replies. On already-deleted messages the
 // handler short-circuits and returns success without repeating the UPDATEs or
 // publishing a duplicate event — this prevents tcount drift on caller retry.
-func (s *HistoryService) DeleteMessage(c *natsrouter.Context, req models.DeleteMessageRequest) (*models.DeleteMessageResponse, error) {
+func (s *HistoryService) DeleteMessage(c *natsrouter.Context, siteID string, req models.DeleteMessageRequest) (*models.DeleteMessageResponse, error) {
 	account := c.Param("account")
 	roomID := c.Param("roomID")
 
@@ -442,7 +408,7 @@ func (s *HistoryService) DeleteMessage(c *natsrouter.Context, req models.DeleteM
 	}
 	if !applied {
 		// A concurrent delete won the CAS. Skip the publish — the winning
-		// goroutine has emitted (or will emit) the message_deleted event —
+		// goroutine has emitted (or will emit) the canonical .deleted event —
 		// and return the timestamp actually persisted.
 		return &models.DeleteMessageResponse{
 			MessageID: req.MessageID,
@@ -450,26 +416,41 @@ func (s *HistoryService) DeleteMessage(c *natsrouter.Context, req models.DeleteM
 		}, nil
 	}
 
-	// Publish live event (best-effort).
 	deletedAtMs := actualDeletedAt.UnixMilli()
-	evt := models.MessageDeletedEvent{
-		Type:      "message_deleted",
+
+	canonicalEvt := model.MessageEvent{
+		Event: model.EventDeleted,
+		Message: model.Message{
+			ID:          msg.MessageID,
+			RoomID:      msg.RoomID,
+			UserID:      msg.Sender.ID,
+			UserAccount: msg.Sender.Account,
+			CreatedAt:   msg.CreatedAt,
+			UpdatedAt:   &actualDeletedAt,
+		},
+		SiteID:    siteID,
 		Timestamp: deletedAtMs,
-		RoomID:    roomID,
-		MessageID: req.MessageID,
-		DeletedBy: account,
-		DeletedAt: deletedAtMs,
 	}
-	if payload, err := json.Marshal(evt); err == nil {
-		if pubErr := s.publisher.Publish(c, subject.RoomEvent(roomID), payload); pubErr != nil {
-			slog.Warn("delete: publish event failed", "error", pubErr, "messageID", req.MessageID)
-		}
-	} else {
-		slog.Warn("delete: marshal event failed", "error", err, "messageID", req.MessageID)
-	}
+	s.publishCanonicalBestEffort(c, subject.MsgCanonicalDeleted(siteID), &canonicalEvt, req.MessageID, roomID)
 
 	return &models.DeleteMessageResponse{
 		MessageID: req.MessageID,
 		DeletedAt: deletedAtMs,
 	}, nil
+}
+
+// publishCanonicalBestEffort marshals and publishes a canonical MessageEvent.
+// Cassandra is already the source of truth, so a marshal/publish failure is
+// logged and swallowed rather than failing the RPC (spec D2).
+func (s *HistoryService) publishCanonicalBestEffort(c *natsrouter.Context, subj string, evt *model.MessageEvent, messageID, roomID string) {
+	payload, err := json.Marshal(evt)
+	if err != nil {
+		slog.Warn("canonical marshal failed",
+			"error", err, "subject", subj, "messageID", messageID, "roomID", roomID)
+		return
+	}
+	if err := s.publisher.Publish(c, subj, payload); err != nil {
+		slog.Warn("canonical publish failed",
+			"error", err, "subject", subj, "messageID", messageID, "roomID", roomID)
+	}
 }

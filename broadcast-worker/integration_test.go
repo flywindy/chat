@@ -86,6 +86,7 @@ func TestBroadcastWorker_ChannelRoom_Integration(t *testing.T) {
 
 	msgTime := time.Now().UTC().Truncate(time.Millisecond)
 	evt := model.MessageEvent{
+		Event:  model.EventCreated,
 		SiteID: "site-a",
 		Message: model.Message{
 			ID: "m1", RoomID: "r1", UserID: "u1", UserAccount: "alice", Content: "hello", CreatedAt: msgTime,
@@ -131,6 +132,7 @@ func TestBroadcastWorker_ChannelRoom_MentionAll_Integration(t *testing.T) {
 
 	msgTime := time.Now().UTC().Truncate(time.Millisecond)
 	evt := model.MessageEvent{
+		Event:  model.EventCreated,
 		SiteID: "site-a",
 		Message: model.Message{
 			ID: "m2", RoomID: "r2", UserID: "u1", UserAccount: "alice", Content: "hello @All", CreatedAt: msgTime,
@@ -170,6 +172,7 @@ func TestBroadcastWorker_ChannelRoom_IndividualMention_Integration(t *testing.T)
 
 	msgTime := time.Now().UTC().Truncate(time.Millisecond)
 	evt := model.MessageEvent{
+		Event:  model.EventCreated,
 		SiteID: "site-a",
 		Message: model.Message{
 			ID: "m3", RoomID: "r3", UserID: "u1", UserAccount: "alice", Content: "hey @bob", CreatedAt: msgTime,
@@ -219,6 +222,7 @@ func TestBroadcastWorker_DMRoom_Integration(t *testing.T) {
 
 	msgTime := time.Now().UTC().Truncate(time.Millisecond)
 	evt := model.MessageEvent{
+		Event:  model.EventCreated,
 		SiteID: "site-a",
 		Message: model.Message{
 			ID: "m4", RoomID: "dm-1", UserID: "u1", UserAccount: "alice", Content: "hey", CreatedAt: msgTime,
@@ -280,6 +284,7 @@ func TestBroadcastWorker_ChannelRoom_EncryptionDisabled_Integration(t *testing.T
 
 	msgTime := time.Now().UTC().Truncate(time.Millisecond)
 	evt := model.MessageEvent{
+		Event:  model.EventCreated,
 		SiteID: "site-a",
 		Message: model.Message{
 			ID: "mNoEnc", RoomID: "rNoEnc", UserID: "u1", UserAccount: "alice", Content: "plaintext please", CreatedAt: msgTime,

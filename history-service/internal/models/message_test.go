@@ -36,33 +36,6 @@ func TestEditMessageResponse_JSON(t *testing.T) {
 	assert.Equal(t, resp, decoded)
 }
 
-func TestMessageEditedEvent_JSON(t *testing.T) {
-	evt := MessageEditedEvent{
-		Type:      "message_edited",
-		Timestamp: 1_714_000_000_000,
-		RoomID:    "r1",
-		MessageID: "m-abc",
-		NewMsg:    "corrected text",
-		EditedBy:  "alice",
-		EditedAt:  1_714_000_000_000,
-	}
-	data, err := json.Marshal(evt)
-	require.NoError(t, err)
-	assert.JSONEq(t, `{
-		"type":"message_edited",
-		"timestamp":1714000000000,
-		"roomId":"r1",
-		"messageId":"m-abc",
-		"newMsg":"corrected text",
-		"editedBy":"alice",
-		"editedAt":1714000000000
-	}`, string(data))
-
-	var decoded MessageEditedEvent
-	require.NoError(t, json.Unmarshal(data, &decoded))
-	assert.Equal(t, evt, decoded)
-}
-
 func TestDeleteMessageRequest_JSON(t *testing.T) {
 	req := DeleteMessageRequest{MessageID: "m-abc"}
 	data, err := json.Marshal(req)
@@ -191,29 +164,4 @@ func TestGetThreadMessagesRequest_WithMeta_Roundtrip(t *testing.T) {
 			assert.Equal(t, tc.in, got)
 		})
 	}
-}
-
-func TestMessageDeletedEvent_JSON(t *testing.T) {
-	evt := MessageDeletedEvent{
-		Type:      "message_deleted",
-		Timestamp: 1_714_000_000_000,
-		RoomID:    "r1",
-		MessageID: "m-abc",
-		DeletedBy: "alice",
-		DeletedAt: 1_714_000_000_000,
-	}
-	data, err := json.Marshal(evt)
-	require.NoError(t, err)
-	assert.JSONEq(t, `{
-		"type":"message_deleted",
-		"timestamp":1714000000000,
-		"roomId":"r1",
-		"messageId":"m-abc",
-		"deletedBy":"alice",
-		"deletedAt":1714000000000
-	}`, string(data))
-
-	var decoded MessageDeletedEvent
-	require.NoError(t, json.Unmarshal(data, &decoded))
-	assert.Equal(t, evt, decoded)
 }

@@ -28,16 +28,6 @@ type SearchMessagesResponse struct {
 // Mongo enrichment occurs server-side. Display fields (user name, room
 // name) are the client's responsibility; resolve via the user-service
 // lookups or a local subscription cache.
-//
-// TODO(searchMessages-editedAt-updatedAt): add `EditedAt *time.Time`
-// and `UpdatedAt *time.Time` once they propagate through:
-//  1. pkg/model.Message (add the fields + populate in edit/update flow)
-//  2. search-sync-worker/messages.go MessageSearchIndex (index them)
-//  3. search-service/response.go messageSearchHit (decode them)
-//  4. search-service/response.go toSearchMessage (copy them)
-//
-// See spec follow-up #5 in
-// docs/superpowers/specs/2026-05-13-search-service-nats-migrations-design.md.
 type SearchMessage struct {
 	MessageID                    string     `json:"messageId"`
 	RoomID                       string     `json:"roomId"`
@@ -45,6 +35,8 @@ type SearchMessage struct {
 	UserAccount                  string     `json:"userAccount"`
 	Content                      string     `json:"content"`
 	CreatedAt                    time.Time  `json:"createdAt"`
+	EditedAt                     *time.Time `json:"editedAt,omitempty"`
+	UpdatedAt                    *time.Time `json:"updatedAt,omitempty"`
 	ThreadParentMessageID        string     `json:"threadParentMessageId,omitempty"`
 	ThreadParentMessageCreatedAt *time.Time `json:"threadParentMessageCreatedAt,omitempty"`
 }

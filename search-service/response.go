@@ -26,11 +26,6 @@ type rawResponse[T any] struct {
 // messageSearchHit is the internal staging type produced by parseMessagesResponse.
 // Fields mirror the ES messages-* index; the public reply type
 // (model.SearchMessage) is a projection of this struct with `UserID` dropped.
-//
-// TODO(searchMessages-editedAt-updatedAt): add `EditedAt *time.Time` and
-// `UpdatedAt *time.Time` once the upstream wiring lands (model.Message +
-// MessageSearchIndex in search-sync-worker). See pkg/model/search.go's
-// SearchMessage doc comment and spec follow-up #5.
 type messageSearchHit struct {
 	MessageID             string     `json:"messageId"`
 	RoomID                string     `json:"roomId"`
@@ -39,6 +34,8 @@ type messageSearchHit struct {
 	UserAccount           string     `json:"userAccount"`
 	Content               string     `json:"content"`
 	CreatedAt             time.Time  `json:"createdAt"`
+	EditedAt              *time.Time `json:"editedAt,omitempty"`
+	UpdatedAt             *time.Time `json:"updatedAt,omitempty"`
 	ThreadParentID        string     `json:"threadParentMessageId,omitempty"`
 	ThreadParentCreatedAt *time.Time `json:"threadParentMessageCreatedAt,omitempty"`
 }
@@ -75,6 +72,8 @@ func toSearchMessage(hit *messageSearchHit) model.SearchMessage {
 		UserAccount:                  hit.UserAccount,
 		Content:                      hit.Content,
 		CreatedAt:                    hit.CreatedAt,
+		EditedAt:                     hit.EditedAt,
+		UpdatedAt:                    hit.UpdatedAt,
 		ThreadParentMessageID:        hit.ThreadParentID,
 		ThreadParentMessageCreatedAt: hit.ThreadParentCreatedAt,
 	}

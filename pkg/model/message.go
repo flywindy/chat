@@ -14,6 +14,8 @@ type Message struct {
 	Content                      string                         `json:"content"                                bson:"content"`
 	Mentions                     []Participant                  `json:"mentions,omitempty"                     bson:"mentions,omitempty"`
 	CreatedAt                    time.Time                      `json:"createdAt"                              bson:"createdAt"`
+	EditedAt                     *time.Time                     `json:"editedAt,omitempty"                     bson:"editedAt,omitempty"`
+	UpdatedAt                    *time.Time                     `json:"updatedAt,omitempty"                    bson:"updatedAt,omitempty"`
 	ThreadParentMessageID        string                         `json:"threadParentMessageId,omitempty"        bson:"threadParentMessageId,omitempty"`
 	ThreadParentMessageCreatedAt *time.Time                     `json:"threadParentMessageCreatedAt,omitempty" bson:"threadParentMessageCreatedAt,omitempty"`
 	TShow                        bool                           `json:"tshow,omitempty"                        bson:"tshow,omitempty"`

@@ -193,10 +193,14 @@ func TestMessageTemplateProperties_MatchesStruct(t *testing.T) {
 func TestNewMessageSearchIndex(t *testing.T) {
 	ts := time.Date(2026, 1, 15, 10, 30, 0, 0, time.UTC)
 	parentTS := time.Date(2026, 1, 15, 10, 0, 0, 0, time.UTC)
+	editedTS := time.Date(2026, 1, 15, 10, 35, 0, 0, time.UTC)
+	updatedTS := time.Date(2026, 1, 15, 10, 36, 0, 0, time.UTC)
 	evt := &model.MessageEvent{
 		Message: model.Message{
 			ID: "msg-1", RoomID: "r1", UserID: "u1", UserAccount: "alice",
 			Content: "hello", CreatedAt: ts,
+			EditedAt:                     &editedTS,
+			UpdatedAt:                    &updatedTS,
 			ThreadParentMessageID:        "parent-1",
 			ThreadParentMessageCreatedAt: &parentTS,
 			TShow:                        true,
@@ -211,10 +215,38 @@ func TestNewMessageSearchIndex(t *testing.T) {
 	assert.Equal(t, "alice", doc.UserAccount)
 	assert.Equal(t, "hello", doc.Content)
 	assert.Equal(t, ts, doc.CreatedAt)
+	require.NotNil(t, doc.EditedAt)
+	assert.Equal(t, editedTS, *doc.EditedAt)
+	require.NotNil(t, doc.UpdatedAt)
+	assert.Equal(t, updatedTS, *doc.UpdatedAt)
 	assert.Equal(t, "parent-1", doc.ThreadParentID)
 	require.NotNil(t, doc.ThreadParentCreatedAt)
 	assert.Equal(t, parentTS, *doc.ThreadParentCreatedAt)
 	assert.True(t, doc.TShow)
+}
+
+// Never-edited messages must omit editedAt/updatedAt so index entries stay
+// compact for the common case.
+func TestNewMessageSearchIndex_EditedUpdatedOmittedWhenNil(t *testing.T) {
+	evt := &model.MessageEvent{
+		Message: model.Message{
+			ID: "msg-1", RoomID: "r1", UserID: "u1", UserAccount: "alice",
+			Content: "hello", CreatedAt: time.Date(2026, 1, 15, 10, 30, 0, 0, time.UTC),
+		},
+		SiteID: "site-a",
+	}
+	doc := newMessageSearchIndex(evt)
+	assert.Nil(t, doc.EditedAt)
+	assert.Nil(t, doc.UpdatedAt)
+
+	data, err := json.Marshal(doc)
+	require.NoError(t, err)
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(data, &raw))
+	_, hasEdited := raw["editedAt"]
+	_, hasUpdated := raw["updatedAt"]
+	assert.False(t, hasEdited, "editedAt should be omitted when nil")
+	assert.False(t, hasUpdated, "updatedAt should be omitted when nil")
 }
 
 // TestNewMessageSearchIndex_TShowOmittedWhenFalse verifies that a message with
