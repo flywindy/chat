@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNats } from '@/context/NatsContext'
-import { fetchReadReceipt, listRoomMembers } from '@/api'
+import { fetchReadReceipt, getRoom } from '@/api'
 import './style.css'
 
 function formatReaderName(r) {
@@ -15,10 +15,12 @@ export default function MessageActionMenu({ message, room }) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [readers, setReaders] = useState(null)
-  // Recipient count sourced from listRoomMembers when the kebab opens.
-  // Falls back to room.userCount when the RPC fails or hasn't resolved —
-  // room.userCount can be stale (0) after a cold-start because the
-  // subscription bucket reply doesn't carry it.
+  // Recipient count sourced from getRoom.userCount when the kebab opens.
+  // Falls back to the room prop's userCount when the RPC fails or hasn't
+  // resolved — the prop can be stale (0) after a cold-start re-login.
+  // getRoom is preferred over listRoomMembers because the latter counts
+  // membership rows (one per org, regardless of expansion) and would
+  // under-report Y in rooms containing an org as a member.
   const [recipientCount, setRecipientCount] = useState(null)
   const [tooltipOpen, setTooltipOpen] = useState(false)
   const rootRef = useRef(null)
@@ -65,15 +67,15 @@ export default function MessageActionMenu({ message, room }) {
     // remaps these to `id`, but the fallback keeps the menu working if any
     // pre-normalization path is ever introduced (e.g. quoted-parent snapshots).
     const messageId = message.id ?? message.messageId
-    // member.list is authoritative for the recipient count. room.userCount
-    // can be 0 after a cold-start re-login because the subscription bucket
-    // reply doesn't carry it. Mirror RoomMembersBadge's pattern: fetch the
-    // members on demand. Failure is non-blocking — the read-receipt side
-    // still renders and Y degrades to room.userCount - 1.
+    // getRoom returns the canonical userCount (room-worker maintains it
+    // by aggregating over the per-user `subscriptions` collection, with
+    // orgs expanded). This is correct for org-containing rooms where
+    // listRoomMembers would under-count. Failure is non-blocking — the
+    // read-receipt side still renders and Y degrades to room.userCount - 1.
     const memberCountP = Promise.resolve(
-      listRoomMembers(nats, { roomId: room.id, siteId }),
+      getRoom(nats, { roomId: room.id }),
     )
-      .then((resp) => (Array.isArray(resp?.members) ? resp.members.length : null))
+      .then((resp) => (typeof resp?.userCount === 'number' ? resp.userCount : null))
       .catch(() => null)
     Promise.all([
       fetchReadReceipt(nats, { roomId: room.id, siteId, messageId }),
