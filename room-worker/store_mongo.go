@@ -11,6 +11,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"github.com/hmchangw/chat/pkg/model"
+	"github.com/hmchangw/chat/pkg/mongoutil"
 	"github.com/hmchangw/chat/pkg/pipelines"
 )
 
@@ -317,19 +318,24 @@ func (s *MongoStore) DeleteRoomMember(ctx context.Context, roomID string, member
 	return nil
 }
 
+// BulkCreateSubscriptions upserts each sub idempotently, keyed on
+// (roomId, u.account). On collision with an existing document (e.g. a
+// JetStream redelivery of the same create/add-member event), $setOnInsert
+// is a no-op so the persisted sub is preserved unchanged — preserving the
+// insert-only contract for channel/DM/add-member paths while avoiding
+// the duplicate-key error path entirely.
 func (s *MongoStore) BulkCreateSubscriptions(ctx context.Context, subs []*model.Subscription) error {
 	if len(subs) == 0 {
 		return nil
 	}
-	docs := make([]interface{}, len(subs))
-	for i, sub := range subs {
-		docs[i] = sub
+	models := make([]mongo.WriteModel, 0, len(subs))
+	for _, sub := range subs {
+		filter := bson.M{"roomId": sub.RoomID, "u.account": sub.User.Account}
+		models = append(models, mongoutil.UpsertModel(filter, bson.M{"$setOnInsert": sub}))
 	}
-	opts := options.InsertMany().SetOrdered(false)
-	if _, err := s.subscriptions.InsertMany(ctx, docs, opts); err != nil {
-		if !mongo.IsDuplicateKeyError(err) {
-			return fmt.Errorf("bulk create %d subscriptions: %w", len(subs), err)
-		}
+	opts := options.BulkWrite().SetOrdered(false)
+	if _, err := s.subscriptions.BulkWrite(ctx, models, opts); err != nil {
+		return fmt.Errorf("bulk create %d subscriptions: %w", len(subs), err)
 	}
 	return nil
 }
@@ -430,19 +436,35 @@ func (s *MongoStore) GetSubscriptionAccounts(ctx context.Context, roomID string)
 	return accounts, nil
 }
 
-// FindDMSubscription returns the requester's dm/botDM sub by Name; ErrSubscriptionNotFound on miss.
-func (s *MongoStore) FindDMSubscription(ctx context.Context, account, targetName string) (*model.Subscription, error) {
-	var sub model.Subscription
-	err := s.subscriptions.FindOne(ctx, bson.M{
-		"u.account": account,
-		"name":      targetName,
-		"roomType":  bson.M{"$in": []model.RoomType{model.RoomTypeDM, model.RoomTypeBotDM}},
-	}).Decode(&sub)
-	if errors.Is(err, mongo.ErrNoDocuments) {
-		return nil, model.ErrSubscriptionNotFound
-	}
+// FindDMSubscriptionPair returns both subs of a DM/botDM room in a single
+// query. The first return value is the sub owned by requesterAccount, the
+// second is the counterpart's.
+func (s *MongoStore) FindDMSubscriptionPair(ctx context.Context, roomID, requesterAccount string) (*model.Subscription, *model.Subscription, error) {
+	cursor, err := s.subscriptions.Find(ctx, bson.M{
+		"roomId":   roomID,
+		"roomType": bson.M{"$in": []model.RoomType{model.RoomTypeDM, model.RoomTypeBotDM}},
+	})
 	if err != nil {
-		return nil, fmt.Errorf("find dm subscription: %w", err)
+		return nil, nil, err
 	}
-	return &sub, nil
+	var subs []model.Subscription
+	if err := cursor.All(ctx, &subs); err != nil {
+		return nil, nil, err
+	}
+	if len(subs) != 2 {
+		return nil, nil, model.ErrSubscriptionNotFound
+	}
+	var requesterSub, counterpartSub *model.Subscription
+	for i := range subs {
+		switch subs[i].User.Account {
+		case requesterAccount:
+			requesterSub = &subs[i]
+		default:
+			counterpartSub = &subs[i]
+		}
+	}
+	if requesterSub == nil || counterpartSub == nil {
+		return nil, nil, model.ErrSubscriptionNotFound
+	}
+	return requesterSub, counterpartSub, nil
 }

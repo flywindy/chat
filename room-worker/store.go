@@ -35,6 +35,11 @@ type OrgMemberStatus struct {
 type SubscriptionStore interface {
 	// --- existing methods (invite flow) ---
 	CreateSubscription(ctx context.Context, sub *model.Subscription) error
+	// BulkCreateSubscriptions upserts each sub keyed on (roomId, u.account)
+	// via $setOnInsert; collisions (e.g. JetStream redelivery) are a Mongo
+	// no-op so the persisted sub is preserved unchanged. Used by every
+	// membership write path (channel, DM, botDM, add-member); the
+	// re-subscribe semantic for botDM is owned by user-service.
 	BulkCreateSubscriptions(ctx context.Context, subs []*model.Subscription) error
 	// ListByRoom returns all subscriptions for roomID across every site.
 	ListByRoom(ctx context.Context, roomID string) ([]model.Subscription, error)
@@ -45,8 +50,12 @@ type SubscriptionStore interface {
 	GetRoom(ctx context.Context, roomID string) (*model.Room, error)
 	GetSubscription(ctx context.Context, account, roomID string) (*model.Subscription, error)
 	GetUser(ctx context.Context, account string) (*model.User, error)
-	// FindDMSubscription returns the requester's dm/botDM sub by Name; ErrSubscriptionNotFound on miss.
-	FindDMSubscription(ctx context.Context, account, targetName string) (*model.Subscription, error)
+	// FindDMSubscriptionPair returns both subs of a DM/botDM room in a
+	// single query. The first return value is the sub owned by
+	// requesterAccount, the second is the counterpart's. Returns
+	// ErrSubscriptionNotFound if the room does not have exactly two
+	// matching subs or if requesterAccount is not among them.
+	FindDMSubscriptionPair(ctx context.Context, roomID, requesterAccount string) (*model.Subscription, *model.Subscription, error)
 	AddRole(ctx context.Context, account, roomID string, role model.Role) error
 	RemoveRole(ctx context.Context, account, roomID string, role model.Role) error
 

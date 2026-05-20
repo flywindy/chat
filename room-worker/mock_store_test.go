@@ -170,19 +170,20 @@ func (mr *MockSubscriptionStoreMockRecorder) DeleteSubscriptionsByAccounts(ctx, 
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteSubscriptionsByAccounts", reflect.TypeOf((*MockSubscriptionStore)(nil).DeleteSubscriptionsByAccounts), ctx, roomID, accounts)
 }
 
-// FindDMSubscription mocks base method.
-func (m *MockSubscriptionStore) FindDMSubscription(ctx context.Context, account, targetName string) (*model.Subscription, error) {
+// FindDMSubscriptionPair mocks base method.
+func (m *MockSubscriptionStore) FindDMSubscriptionPair(ctx context.Context, roomID, requesterAccount string) (*model.Subscription, *model.Subscription, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "FindDMSubscription", ctx, account, targetName)
+	ret := m.ctrl.Call(m, "FindDMSubscriptionPair", ctx, roomID, requesterAccount)
 	ret0, _ := ret[0].(*model.Subscription)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
+	ret1, _ := ret[1].(*model.Subscription)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
 }
 
-// FindDMSubscription indicates an expected call of FindDMSubscription.
-func (mr *MockSubscriptionStoreMockRecorder) FindDMSubscription(ctx, account, targetName any) *gomock.Call {
+// FindDMSubscriptionPair indicates an expected call of FindDMSubscriptionPair.
+func (mr *MockSubscriptionStoreMockRecorder) FindDMSubscriptionPair(ctx, roomID, requesterAccount any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindDMSubscription", reflect.TypeOf((*MockSubscriptionStore)(nil).FindDMSubscription), ctx, account, targetName)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindDMSubscriptionPair", reflect.TypeOf((*MockSubscriptionStore)(nil).FindDMSubscriptionPair), ctx, roomID, requesterAccount)
 }
 
 // FindUsersByAccounts mocks base method.

@@ -455,18 +455,19 @@ func TestSubscriptionJSON(t *testing.T) {
 		hss := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 		lsa := time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
 		s := model.Subscription{
-			ID:                 "s1",
-			User:               model.SubscriptionUser{ID: "u1", Account: "alice"},
-			RoomID:             "r1",
-			RoomType:           model.RoomTypeChannel,
-			SiteID:             "site-a",
-			Roles:              []model.Role{model.RoleOwner},
-			HistorySharedSince: &hss,
-			JoinedAt:           time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
-			LastSeenAt:         &lsa,
-			HasMention:         true,
-			ThreadUnread:       []string{"parent-1", "parent-2"},
-			Alert:              true,
+			ID:                  "s1",
+			User:                model.SubscriptionUser{ID: "u1", Account: "alice"},
+			RoomID:              "r1",
+			RoomType:            model.RoomTypeChannel,
+			SiteID:              "site-a",
+			Roles:               []model.Role{model.RoleOwner},
+			HistorySharedSince:  &hss,
+			JoinedAt:            time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+			LastSeenAt:          &lsa,
+			HasMention:          true,
+			ThreadUnread:        []string{"parent-1", "parent-2"},
+			Alert:               true,
+			DisableNotification: true,
 		}
 		roundTrip(t, &s, &model.Subscription{})
 	})
@@ -517,6 +518,10 @@ func TestSubscriptionJSON_ThreadUnreadOmittedAlertAlwaysPresent(t *testing.T) {
 	alertVal, hasAlert := raw["alert"]
 	assert.True(t, hasAlert, "alert must be present in JSON even when false")
 	assert.Equal(t, false, alertVal)
+
+	disableVal, hasDisable := raw["disableNotification"]
+	assert.True(t, hasDisable, "disableNotification must be present in JSON even when false")
+	assert.Equal(t, false, disableVal)
 
 	var dst model.Subscription
 	require.NoError(t, json.Unmarshal(data, &dst))
