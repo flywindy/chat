@@ -11,6 +11,14 @@ vi.mock('./MessageActions/MessageActionMenu/MessageActionMenu', () => ({
   ),
 }))
 
+// Stub RoomEventsContext so MessageRow can read the active subscription's
+// historySharedSince without requiring a provider in unit tests. Individual
+// tests override via `mockSubscription` below.
+let mockSubscription
+vi.mock('@/context/RoomEventsContext', () => ({
+  useSubscription: () => mockSubscription,
+}))
+
 const msg = {
   id: 'm1',
   content: 'hello world',
@@ -81,6 +89,59 @@ describe('MessageRow', () => {
     expect(onThread).toHaveBeenCalledWith(msg)
     fireEvent.click(screen.getByRole('button', { name: /quote/i }))
     expect(onReply).toHaveBeenCalledWith(msg)
+  })
+})
+
+describe('MessageRow — historySharedSince quote gate', () => {
+  it('renders the placeholder when quote.createdAt is before the subscription historySharedSince', () => {
+    mockSubscription = { historySharedSince: '2026-05-13T10:00:00Z' }
+    const quoted = {
+      ...msg,
+      quotedParentMessage: {
+        messageId: 'orig',
+        sender: { engName: 'bob', account: 'bob' },
+        msg: 'the original',
+        createdAt: '2026-05-13T09:00:00Z',
+      },
+    }
+    render(<MessageRow message={quoted} room={room} context="main" onThread={() => {}} onReply={() => {}} onJumpToMessage={() => {}} />)
+    expect(screen.getByText('This message is unavailable')).toBeInTheDocument()
+    expect(screen.queryByText('the original')).not.toBeInTheDocument()
+    expect(screen.queryByText('bob')).not.toBeInTheDocument()
+    mockSubscription = undefined
+  })
+
+  it('renders the original quote content when quote.createdAt is after historySharedSince', () => {
+    mockSubscription = { historySharedSince: '2026-05-13T10:00:00Z' }
+    const quoted = {
+      ...msg,
+      quotedParentMessage: {
+        messageId: 'orig',
+        sender: { engName: 'bob', account: 'bob' },
+        msg: 'the original',
+        createdAt: '2026-05-13T11:00:00Z',
+      },
+    }
+    render(<MessageRow message={quoted} room={room} context="main" onThread={() => {}} onReply={() => {}} onJumpToMessage={() => {}} />)
+    expect(screen.getByText('the original')).toBeInTheDocument()
+    expect(screen.queryByText('This message is unavailable')).not.toBeInTheDocument()
+    mockSubscription = undefined
+  })
+
+  it('renders the original quote content when no historySharedSince is set (unrestricted)', () => {
+    mockSubscription = { historySharedSince: undefined }
+    const quoted = {
+      ...msg,
+      quotedParentMessage: {
+        messageId: 'orig',
+        sender: { engName: 'bob', account: 'bob' },
+        msg: 'the original',
+        createdAt: '2020-01-01T00:00:00Z',
+      },
+    }
+    render(<MessageRow message={quoted} room={room} context="main" onThread={() => {}} onReply={() => {}} onJumpToMessage={() => {}} />)
+    expect(screen.getByText('the original')).toBeInTheDocument()
+    mockSubscription = undefined
   })
 })
 

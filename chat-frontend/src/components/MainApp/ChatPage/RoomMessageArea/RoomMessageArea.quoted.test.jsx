@@ -12,6 +12,7 @@ vi.mock('@/context/NatsContext', () => ({
   useNats: () => ({ user: { account: 'alice', siteId: 's1' }, publish: vi.fn() }),
 }))
 vi.mock('@/context/RoomEventsContext', () => ({
+  useSubscription: () => undefined,
   useRoomEvents: () => ({
     messages: [
       {

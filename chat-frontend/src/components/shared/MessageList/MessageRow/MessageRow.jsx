@@ -1,6 +1,8 @@
 import MessageActions from './MessageActions/MessageActions'
 import QuotedBlock from '@/components/shared/QuotedBlock/QuotedBlock'
 import useHoverWithDelay from '@/hooks/useHoverWithDelay'
+import { useSubscription } from '@/context/RoomEventsContext'
+import { redactInaccessibleQuoteSnapshot } from '@/lib/redactQuote'
 import './style.css'
 
 function formatTime(dateStr) {
@@ -43,6 +45,15 @@ export default function MessageRow({
   // between them).
   const { hovered, handlers } = useHoverWithDelay(200)
 
+  // Mirror history-service's quote redaction client-side: the live broadcast
+  // path doesn't gate quote snapshots against the reader's access window, so
+  // a quote of a message older than historySharedSince would otherwise leak.
+  const subscription = useSubscription(room?.id)
+  const quoteSnapshot = redactInaccessibleQuoteSnapshot(
+    message.quotedParentMessage,
+    subscription?.historySharedSince,
+  )
+
   // Deleted messages are removed from the feed entirely. (Also filtered at
   // MessageList — this is defense-in-depth.)
   if (message.deleted) return null
@@ -70,10 +81,10 @@ export default function MessageRow({
         {/* QuotedBlock sits OUTSIDE message-bubble-wrap so hovering the
             quote doesn't trigger the action toolbar. CSS pulls it flush
             against the bubble's top so it still looks attached. */}
-        {message.quotedParentMessage && (
+        {quoteSnapshot && (
           <QuotedBlock
             variant="bubble"
-            snapshot={message.quotedParentMessage}
+            snapshot={quoteSnapshot}
             onClick={onJumpToMessage}
           />
         )}
