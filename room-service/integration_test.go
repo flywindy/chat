@@ -97,21 +97,21 @@ func TestMongoStore_Integration(t *testing.T) {
 	ctx := context.Background()
 
 	// Test CreateRoom and GetRoom
-	room := model.Room{ID: "r1", Name: "general", Type: model.RoomTypeChannel, SiteID: "site-a", CreatedBy: "u1", UserCount: 1}
-	require.NoError(t, store.CreateRoom(ctx, &room))
+	room := model.Room{ID: "r1", Name: "general", Type: model.RoomTypeChannel, SiteID: "site-a", UserCount: 1}
+	mustInsertRoom(t, db, &room)
 	got, err := store.GetRoom(ctx, "r1")
 	require.NoError(t, err)
 	assert.Equal(t, "general", got.Name)
 
 	// Test ListRooms
-	require.NoError(t, store.CreateRoom(ctx, &model.Room{ID: "r2", Name: "random", Type: model.RoomTypeChannel}))
+	mustInsertRoom(t, db, &model.Room{ID: "r2", Name: "random", Type: model.RoomTypeChannel})
 	rooms, err := store.ListRooms(ctx)
 	require.NoError(t, err)
 	assert.Len(t, rooms, 2)
 
 	// Test CreateSubscription and GetSubscription
 	sub := model.Subscription{ID: "s1", User: model.SubscriptionUser{ID: "u1", Account: "alice"}, RoomID: "r1", Roles: []model.Role{model.RoleOwner}}
-	require.NoError(t, store.CreateSubscription(ctx, &sub))
+	mustInsertSub(t, db, &sub)
 	gotSub, err := store.GetSubscription(ctx, "alice", "r1")
 	require.NoError(t, err)
 	// Bound the slice access explicitly with require.Len before indexing —
@@ -138,7 +138,7 @@ func TestMongoStore_GetSubscriptionWithMembership_Integration(t *testing.T) {
 		RoomID: "r1", SiteID: "site-a", Roles: []model.Role{model.RoleOwner},
 		JoinedAt: time.Now().UTC(),
 	}
-	require.NoError(t, store.CreateSubscription(ctx, sub))
+	mustInsertSub(t, db, sub)
 
 	t.Run("no individual or org membership", func(t *testing.T) {
 		result, err := store.GetSubscriptionWithMembership(ctx, "r1", "alice")
@@ -181,6 +181,44 @@ func TestMongoStore_GetSubscriptionWithMembership_Integration(t *testing.T) {
 		_, err := store.GetSubscriptionWithMembership(ctx, "r1", "nonexistent")
 		require.Error(t, err)
 	})
+}
+
+// TestMongoStore_GetSubscriptionWithMembership_DeptOnlyMatch_Integration pins
+// the dept-aware org-membership lookup: a user added via Orgs:["X"] whose
+// deptId is "X" (with no sectId match) must still report HasOrgMembership=true
+// so the remove flow preserves their subscription. Checking only sectId would
+// miss this case and the dual-membership branch wouldn't fire — the sub would
+// be deleted even though the user remains org-attached via the dept.
+func TestMongoStore_GetSubscriptionWithMembership_DeptOnlyMatch_Integration(t *testing.T) {
+	db := setupMongo(t)
+	store := NewMongoStore(db)
+	ctx := context.Background()
+
+	const roomID = "r-dept-only"
+	const account = "alice"
+
+	// Alice has deptId="X" and NO sectId. The org row in room_members is keyed
+	// by member.id="X" — the dept-blind sectId-only lookup would miss it.
+	mustInsertSub(t, db, &model.Subscription{
+		ID: "s1", User: model.SubscriptionUser{ID: "u1", Account: account},
+		RoomID: roomID, SiteID: "site-a", Roles: []model.Role{model.RoleMember},
+		JoinedAt: time.Now().UTC(),
+	})
+	_, err := db.Collection("users").InsertOne(ctx, model.User{
+		ID: "u1", Account: account, SiteID: "site-a",
+		DeptID: "X", DeptName: "Engineering",
+	})
+	require.NoError(t, err)
+	_, err = db.Collection("room_members").InsertOne(ctx, model.RoomMember{
+		ID: "rm-org", RoomID: roomID, Ts: time.Now().UTC(),
+		Member: model.RoomMemberEntry{ID: "X", Type: model.RoomMemberOrg},
+	})
+	require.NoError(t, err)
+
+	result, err := store.GetSubscriptionWithMembership(ctx, roomID, account)
+	require.NoError(t, err)
+	assert.True(t, result.HasOrgMembership,
+		"deptId match must count as org membership — without it, the dual-membership branch wouldn't fire and the sub would be deleted on remove")
 }
 
 func TestMongoStore_CountMembersAndOwners_Integration(t *testing.T) {
@@ -341,9 +379,9 @@ func TestMongoStore_ListRoomMembers_Integration(t *testing.T) {
 		_, err := db.Collection("room_members").InsertOne(ctx, rm)
 		require.NoError(t, err)
 	}
-	insertSub := func(t *testing.T, store *MongoStore, sub model.Subscription) {
+	insertSub := func(t *testing.T, db *mongo.Database, sub model.Subscription) {
 		t.Helper()
-		require.NoError(t, store.CreateSubscription(ctx, &sub))
+		mustInsertSub(t, db, &sub)
 	}
 	ptr := func(i int) *int { return &i }
 
@@ -372,11 +410,11 @@ func TestMongoStore_ListRoomMembers_Integration(t *testing.T) {
 		db := setupMongo(t)
 		store := NewMongoStore(db)
 		base := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
-		insertSub(t, store, model.Subscription{
+		insertSub(t, db, model.Subscription{
 			ID: "sub-a", User: model.SubscriptionUser{ID: "u-alice", Account: "alice"},
 			RoomID: "r1", SiteID: "site-a", JoinedAt: base.Add(10 * time.Second),
 		})
-		insertSub(t, store, model.Subscription{
+		insertSub(t, db, model.Subscription{
 			ID: "sub-b", User: model.SubscriptionUser{ID: "u-bob", Account: "bob"},
 			RoomID: "r1", SiteID: "site-a", JoinedAt: base.Add(20 * time.Second),
 		})
@@ -465,7 +503,7 @@ func TestMongoStore_ListRoomMembers_Integration(t *testing.T) {
 		insertRM(t, db, model.RoomMember{ID: "rm-org-2", RoomID: "r1", Ts: base.Add(20 * time.Second),
 			Member: model.RoomMemberEntry{ID: "org-2", Type: model.RoomMemberOrg}})
 		// Also seed a subscription — must NOT appear in the result since room_members is non-empty.
-		insertSub(t, store, model.Subscription{
+		insertSub(t, db, model.Subscription{
 			ID: "sub-ghost", User: model.SubscriptionUser{ID: "u-ghost", Account: "ghost"},
 			RoomID: "r1", SiteID: "site-a", JoinedAt: base,
 		})
@@ -513,9 +551,9 @@ func TestMongoStore_ListRoomMembers_Enrich_Integration(t *testing.T) {
 		_, err := db.Collection("users").InsertOne(ctx, u)
 		require.NoError(t, err)
 	}
-	insertSub := func(t *testing.T, store *MongoStore, sub model.Subscription) {
+	insertSub := func(t *testing.T, db *mongo.Database, sub model.Subscription) {
 		t.Helper()
-		require.NoError(t, store.CreateSubscription(ctx, &sub))
+		mustInsertSub(t, db, &sub)
 	}
 	ptr := func(i int) *int { return &i }
 
@@ -528,7 +566,7 @@ func TestMongoStore_ListRoomMembers_Enrich_Integration(t *testing.T) {
 			ID: "u-alice", Account: "alice", SiteID: "site-a",
 			EngName: "Alice Wang", ChineseName: "愛麗絲",
 		})
-		insertSub(t, store, model.Subscription{
+		insertSub(t, db, model.Subscription{
 			ID: "sub-alice", User: model.SubscriptionUser{ID: "u-alice", Account: "alice"},
 			RoomID: "r1", SiteID: "site-a",
 			Roles: []model.Role{model.RoleOwner}, JoinedAt: base,
@@ -555,7 +593,7 @@ func TestMongoStore_ListRoomMembers_Enrich_Integration(t *testing.T) {
 		base := time.Date(2026, 8, 2, 0, 0, 0, 0, time.UTC)
 
 		insertUser(t, db, model.User{ID: "u-bob", Account: "bob", EngName: "Bob", ChineseName: "鮑伯"})
-		insertSub(t, store, model.Subscription{
+		insertSub(t, db, model.Subscription{
 			ID: "sub-bob", User: model.SubscriptionUser{ID: "u-bob", Account: "bob"},
 			RoomID: "r1", Roles: []model.Role{model.RoleMember}, JoinedAt: base,
 		})
@@ -605,11 +643,11 @@ func TestMongoStore_ListRoomMembers_Enrich_Integration(t *testing.T) {
 
 		insertUser(t, db, model.User{ID: "u-alice", Account: "alice", EngName: "Alice Wang", ChineseName: "愛麗絲"})
 		insertUser(t, db, model.User{ID: "u-bob", Account: "bob", EngName: "Bob", ChineseName: "鮑伯"})
-		insertSub(t, store, model.Subscription{
+		insertSub(t, db, model.Subscription{
 			ID: "sub-a", User: model.SubscriptionUser{ID: "u-alice", Account: "alice"},
 			RoomID: "r1", Roles: []model.Role{model.RoleOwner}, JoinedAt: base.Add(10 * time.Second),
 		})
-		insertSub(t, store, model.Subscription{
+		insertSub(t, db, model.Subscription{
 			ID: "sub-b", User: model.SubscriptionUser{ID: "u-bob", Account: "bob"},
 			RoomID: "r1", Roles: []model.Role{model.RoleMember}, JoinedAt: base.Add(20 * time.Second),
 		})
@@ -634,7 +672,7 @@ func TestMongoStore_ListRoomMembers_Enrich_Integration(t *testing.T) {
 		base := time.Date(2026, 8, 5, 0, 0, 0, 0, time.UTC)
 
 		insertUser(t, db, model.User{ID: "u-alice", Account: "alice", EngName: "Alice Wang", ChineseName: "愛麗絲"})
-		insertSub(t, store, model.Subscription{
+		insertSub(t, db, model.Subscription{
 			ID: "sub-alice", User: model.SubscriptionUser{ID: "u-alice", Account: "alice"},
 			RoomID: "r1", Roles: []model.Role{model.RoleOwner}, JoinedAt: base,
 		})
@@ -689,6 +727,37 @@ func TestMongoStore_ListRoomMembers_Enrich_Integration(t *testing.T) {
 		assert.Equal(t, bare[0].ID, enriched[0].ID)
 		assert.Equal(t, bare[0].Member.Type, enriched[0].Member.Type)
 	})
+
+	// Bug 4 regression: when an org overlaps as both dept and sect, the
+	// service-side enrichment used to pick the dept branch unconditionally and
+	// drop the sect names — so a dept row with empty deptName collapsed to the
+	// orgID fallback while the worker's two-pass tiebreak rendered the sect
+	// name. The spec requires byte-identical output across both paths.
+	t.Run("org dept-first tiebreak falls back to sect names when dept names are empty", func(t *testing.T) {
+		db := setupMongo(t)
+		store := NewMongoStore(db)
+		base := time.Date(2026, 8, 7, 0, 0, 0, 0, time.UTC)
+
+		// One user with deptId="X" + empty deptName; one with sectId="X" +
+		// sectName="Engineering". The worker's dept-first-with-fallback logic
+		// renders "Engineering"; the service must match exactly.
+		insertUser(t, db, model.User{ID: "u-alice", Account: "alice",
+			DeptID: "X", DeptName: "", DeptTCName: "",
+		})
+		insertUser(t, db, model.User{ID: "u-bob", Account: "bob",
+			SectID: "X", SectName: "Engineering", SectTCName: "",
+		})
+		insertRM(t, db, model.RoomMember{
+			ID: "rm-org-X", RoomID: "r1", Ts: base,
+			Member: model.RoomMemberEntry{ID: "X", Type: model.RoomMemberOrg},
+		})
+
+		got, err := store.ListRoomMembers(ctx, "r1", nil, nil, true)
+		require.NoError(t, err)
+		require.Len(t, got, 1)
+		assert.Equal(t, "Engineering", got[0].Member.SectName,
+			"empty dept names must fall through to sect names; spec requires room-service output to match room-worker's two-pass tiebreak")
+	})
 }
 
 func TestMongoStore_ListOrgMembers_Integration(t *testing.T) {
@@ -741,6 +810,21 @@ func TestMongoStore_ListOrgMembers_Integration(t *testing.T) {
 		assert.True(t, errors.Is(err, errInvalidOrg), "want errInvalidOrg in chain, got %v", err)
 	})
 
+	t.Run("returns errInvalidOrg when neither sectId nor deptId matches", func(t *testing.T) {
+		// Users carry both sectId and deptId, but neither field equals the
+		// queried orgID — guards against an accidental match on the wrong
+		// branch of the $or (e.g. a future query rewrite that collapses to
+		// $or:[{sectId:...},{deptId:...}] with the wrong field).
+		db := setupMongo(t)
+		store := NewMongoStore(db)
+		insertUser(t, db, model.User{ID: "u-alice", Account: "alice", SectID: "sect-eng", DeptID: "dept-fe"})
+		insertUser(t, db, model.User{ID: "u-bob", Account: "bob", SectID: "sect-ops", DeptID: "dept-be"})
+
+		_, err := store.ListOrgMembers(ctx, "sect-nope")
+		require.Error(t, err)
+		assert.True(t, errors.Is(err, errInvalidOrg), "want errInvalidOrg in chain, got %v", err)
+	})
+
 	t.Run("returns expected OrgMember shape", func(t *testing.T) {
 		db := setupMongo(t)
 		store := NewMongoStore(db)
@@ -760,6 +844,143 @@ func TestMongoStore_ListOrgMembers_Integration(t *testing.T) {
 		assert.Equal(t, "Alice", m.EngName)
 		assert.Equal(t, "愛麗絲", m.ChineseName)
 		assert.Equal(t, "site-a", m.SiteID)
+	})
+
+	t.Run("matches by deptId", func(t *testing.T) {
+		// A dept-scoped org: room_members stores member.id = deptId. The
+		// query must find users by deptId, not sectId alone — symmetric to
+		// the GetUserWithMembership / GetSubscriptionWithMembership fixes
+		// in the dept-aware membership pass.
+		db := setupMongo(t)
+		store := NewMongoStore(db)
+		insertUser(t, db, model.User{ID: "u-alice", Account: "alice", EngName: "Alice", SiteID: "site-a", SectID: "sect-eng", DeptID: "dept-fe"})
+		insertUser(t, db, model.User{ID: "u-bob", Account: "bob", EngName: "Bob", SiteID: "site-a", SectID: "sect-eng", DeptID: "dept-fe"})
+		insertUser(t, db, model.User{ID: "u-carol", Account: "carol", EngName: "Carol", SiteID: "site-a", SectID: "sect-eng", DeptID: "dept-be"})
+
+		got, err := store.ListOrgMembers(ctx, "dept-fe")
+		require.NoError(t, err)
+		require.Len(t, got, 2)
+		accounts := []string{got[0].Account, got[1].Account}
+		assert.ElementsMatch(t, []string{"alice", "bob"}, accounts)
+	})
+
+	t.Run("matches dept users when orgId equals deptId without parent sect match", func(t *testing.T) {
+		// Truly dept-only: alice's sectId does NOT equal the orgID, so a
+		// regression that dropped the deptId branch would no longer find her.
+		db := setupMongo(t)
+		store := NewMongoStore(db)
+		insertUser(t, db, model.User{ID: "u-alice", Account: "alice", SiteID: "site-a", SectID: "sect-other", DeptID: "dept-x"})
+		insertUser(t, db, model.User{ID: "u-bob", Account: "bob", SiteID: "site-a", SectID: "sect-other", DeptID: ""})
+
+		got, err := store.ListOrgMembers(ctx, "dept-x")
+		require.NoError(t, err)
+		require.Len(t, got, 1)
+		assert.Equal(t, "alice", got[0].Account)
+	})
+}
+
+func TestMongoStore_FindExistingOrgIDs_Integration(t *testing.T) {
+	ctx := context.Background()
+
+	insertUser := func(t *testing.T, db *mongo.Database, u model.User) {
+		t.Helper()
+		_, err := db.Collection("users").InsertOne(ctx, u)
+		require.NoError(t, err)
+	}
+
+	t.Run("returns sectId and deptId matches as a set", func(t *testing.T) {
+		db := setupMongo(t)
+		store := NewMongoStore(db)
+		insertUser(t, db, model.User{ID: "u-alice", Account: "alice", SiteID: "site-a", SectID: "sect-eng", DeptID: "dept-fe"})
+		insertUser(t, db, model.User{ID: "u-bob", Account: "bob", SiteID: "site-a", SectID: "sect-ops", DeptID: "dept-be"})
+
+		got, err := store.FindExistingOrgIDs(ctx, []string{"sect-eng", "dept-be", "missing"})
+		require.NoError(t, err)
+		assert.ElementsMatch(t, []string{"sect-eng", "dept-be"}, got)
+	})
+
+	t.Run("returns empty when no org matches", func(t *testing.T) {
+		db := setupMongo(t)
+		store := NewMongoStore(db)
+		insertUser(t, db, model.User{ID: "u-alice", Account: "alice", SiteID: "site-a", SectID: "sect-eng", DeptID: "dept-fe"})
+
+		got, err := store.FindExistingOrgIDs(ctx, []string{"phantom-1", "phantom-2"})
+		require.NoError(t, err)
+		assert.Empty(t, got)
+	})
+
+	t.Run("empty input is a no-op", func(t *testing.T) {
+		db := setupMongo(t)
+		store := NewMongoStore(db)
+		got, err := store.FindExistingOrgIDs(ctx, nil)
+		require.NoError(t, err)
+		assert.Empty(t, got)
+	})
+
+	t.Run("orgId equal to deptId only (no parent sect) still resolves", func(t *testing.T) {
+		// Truly dept-only: alice's sectId does NOT equal the orgID, so the
+		// existence check must find her via the deptId branch alone.
+		db := setupMongo(t)
+		store := NewMongoStore(db)
+		insertUser(t, db, model.User{ID: "u-alice", Account: "alice", SiteID: "site-a", SectID: "sect-other", DeptID: "dept-x"})
+
+		got, err := store.FindExistingOrgIDs(ctx, []string{"dept-x"})
+		require.NoError(t, err)
+		assert.ElementsMatch(t, []string{"dept-x"}, got)
+	})
+
+	t.Run("orgId matched by sect on one user and dept on another dedupes", func(t *testing.T) {
+		// Same orgID "foo" lands on both the sectId branch (via alice) and
+		// the deptId branch (via bob). The dedup contract says it shows up
+		// once in the result, not twice.
+		db := setupMongo(t)
+		store := NewMongoStore(db)
+		insertUser(t, db, model.User{ID: "u-alice", Account: "alice", SiteID: "site-a", SectID: "foo", DeptID: "dept-a"})
+		insertUser(t, db, model.User{ID: "u-bob", Account: "bob", SiteID: "site-a", SectID: "sect-b", DeptID: "foo"})
+
+		got, err := store.FindExistingOrgIDs(ctx, []string{"foo"})
+		require.NoError(t, err)
+		assert.ElementsMatch(t, []string{"foo"}, got)
+		assert.Len(t, got, 1, "overlapping sect+dept match must appear exactly once")
+	})
+}
+
+func TestMongoStore_FindExistingAccounts_Integration(t *testing.T) {
+	ctx := context.Background()
+
+	insertUser := func(t *testing.T, db *mongo.Database, u model.User) {
+		t.Helper()
+		_, err := db.Collection("users").InsertOne(ctx, u)
+		require.NoError(t, err)
+	}
+
+	t.Run("returns the matching subset", func(t *testing.T) {
+		db := setupMongo(t)
+		store := NewMongoStore(db)
+		insertUser(t, db, model.User{ID: "u-alice", Account: "alice", SiteID: "site-a"})
+		insertUser(t, db, model.User{ID: "u-bob", Account: "bob", SiteID: "site-a"})
+
+		got, err := store.FindExistingAccounts(ctx, []string{"alice", "bob", "ghost"})
+		require.NoError(t, err)
+		assert.ElementsMatch(t, []string{"alice", "bob"}, got)
+	})
+
+	t.Run("returns empty when no account matches", func(t *testing.T) {
+		db := setupMongo(t)
+		store := NewMongoStore(db)
+		insertUser(t, db, model.User{ID: "u-alice", Account: "alice", SiteID: "site-a"})
+
+		got, err := store.FindExistingAccounts(ctx, []string{"ghost-1", "ghost-2"})
+		require.NoError(t, err)
+		assert.Empty(t, got)
+	})
+
+	t.Run("empty input is a no-op", func(t *testing.T) {
+		db := setupMongo(t)
+		store := NewMongoStore(db)
+		got, err := store.FindExistingAccounts(ctx, nil)
+		require.NoError(t, err)
+		assert.Empty(t, got)
 	})
 }
 
@@ -782,9 +1003,7 @@ func TestMongoStore_ListRoomsByIDs(t *testing.T) {
 		{ID: "r5", Name: "five", Type: model.RoomTypeChannel, SiteID: "site-a", LastMsgAt: &t5},
 	}
 	for i := range seed {
-		if err := store.CreateRoom(ctx, &seed[i]); err != nil {
-			t.Fatalf("seed CreateRoom %q: %v", seed[i].ID, err)
-		}
+		mustInsertRoom(t, db, &seed[i])
 	}
 
 	t.Run("returns matches and skips missing", func(t *testing.T) {
@@ -834,10 +1053,10 @@ func TestAddMembers_SameSiteChannel_RoomMembersPath(t *testing.T) {
 	ctx := context.Background()
 
 	// Target room on site-a
-	require.NoError(t, store.CreateRoom(ctx, &model.Room{ID: "target", Type: model.RoomTypeChannel, SiteID: "site-a"}))
+	mustInsertRoom(t, db, &model.Room{ID: "target", Type: model.RoomTypeChannel, SiteID: "site-a"})
 	// Source channel on site-a: seed room_members explicitly so ListRoomMembers takes the room_members
 	// branch (not the subscriptions fallback); also seed users so ResolveAccounts can find them.
-	require.NoError(t, store.CreateRoom(ctx, &model.Room{ID: "source", Type: model.RoomTypeChannel, SiteID: "site-a"}))
+	mustInsertRoom(t, db, &model.Room{ID: "source", Type: model.RoomTypeChannel, SiteID: "site-a"})
 	_, err := db.Collection("users").InsertMany(ctx, []interface{}{
 		model.User{ID: "u1", Account: "bob", SiteID: "site-a"},
 		model.User{ID: "u2", Account: "carol", SiteID: "site-a"},
@@ -854,10 +1073,10 @@ func TestAddMembers_SameSiteChannel_RoomMembersPath(t *testing.T) {
 	require.NoError(t, err)
 	// Subscriptions: requester must be subscribed on both rooms; the source room's subscriptions
 	// collection stays in sync with room_members so existing-subscription filtering works downstream.
-	require.NoError(t, store.CreateSubscription(ctx, &model.Subscription{ID: "s1", RoomID: "source", User: model.SubscriptionUser{ID: "u1", Account: "bob"}}))
-	require.NoError(t, store.CreateSubscription(ctx, &model.Subscription{ID: "s2", RoomID: "source", User: model.SubscriptionUser{ID: "u2", Account: "carol"}}))
-	require.NoError(t, store.CreateSubscription(ctx, &model.Subscription{ID: "s3", RoomID: "target", User: model.SubscriptionUser{ID: "req", Account: "alice"}, Roles: []model.Role{model.RoleOwner}}))
-	require.NoError(t, store.CreateSubscription(ctx, &model.Subscription{ID: "s4", RoomID: "source", User: model.SubscriptionUser{ID: "req", Account: "alice"}}))
+	mustInsertSub(t, db, &model.Subscription{ID: "s1", RoomID: "source", User: model.SubscriptionUser{ID: "u1", Account: "bob"}})
+	mustInsertSub(t, db, &model.Subscription{ID: "s2", RoomID: "source", User: model.SubscriptionUser{ID: "u2", Account: "carol"}})
+	mustInsertSub(t, db, &model.Subscription{ID: "s3", RoomID: "target", User: model.SubscriptionUser{ID: "req", Account: "alice"}, Roles: []model.Role{model.RoleOwner}})
+	mustInsertSub(t, db, &model.Subscription{ID: "s4", RoomID: "source", User: model.SubscriptionUser{ID: "req", Account: "alice"}})
 
 	// Same-site only: pass nil for memberListClient — the same-site branch in
 	// expandChannelRefs uses store.ListRoomMembers and never invokes the client.
@@ -906,8 +1125,8 @@ func TestAddMembers_SameSiteChannel_SubscriptionsFallback(t *testing.T) {
 
 	ctx := context.Background()
 
-	require.NoError(t, store.CreateRoom(ctx, &model.Room{ID: "target", Type: model.RoomTypeChannel, SiteID: "site-a"}))
-	require.NoError(t, store.CreateRoom(ctx, &model.Room{ID: "source", Type: model.RoomTypeChannel, SiteID: "site-a"}))
+	mustInsertRoom(t, db, &model.Room{ID: "target", Type: model.RoomTypeChannel, SiteID: "site-a"})
+	mustInsertRoom(t, db, &model.Room{ID: "source", Type: model.RoomTypeChannel, SiteID: "site-a"})
 	// Seed users so ResolveAccounts can find them.
 	_, err := db.Collection("users").InsertMany(ctx, []interface{}{
 		model.User{ID: "u1", Account: "bob", SiteID: "site-a"},
@@ -917,12 +1136,12 @@ func TestAddMembers_SameSiteChannel_SubscriptionsFallback(t *testing.T) {
 	})
 	require.NoError(t, err)
 	// Source only has subscriptions (no room_members rows) — ListRoomMembers falls back to subscriptions
-	require.NoError(t, store.CreateSubscription(ctx, &model.Subscription{ID: "s1", RoomID: "source", User: model.SubscriptionUser{ID: "u1", Account: "bob"}}))
-	require.NoError(t, store.CreateSubscription(ctx, &model.Subscription{ID: "s2", RoomID: "source", User: model.SubscriptionUser{ID: "u2", Account: "carol"}}))
-	require.NoError(t, store.CreateSubscription(ctx, &model.Subscription{ID: "s3", RoomID: "source", User: model.SubscriptionUser{ID: "u3", Account: "dave"}}))
+	mustInsertSub(t, db, &model.Subscription{ID: "s1", RoomID: "source", User: model.SubscriptionUser{ID: "u1", Account: "bob"}})
+	mustInsertSub(t, db, &model.Subscription{ID: "s2", RoomID: "source", User: model.SubscriptionUser{ID: "u2", Account: "carol"}})
+	mustInsertSub(t, db, &model.Subscription{ID: "s3", RoomID: "source", User: model.SubscriptionUser{ID: "u3", Account: "dave"}})
 	// Requester in both
-	require.NoError(t, store.CreateSubscription(ctx, &model.Subscription{ID: "s4", RoomID: "target", User: model.SubscriptionUser{ID: "req", Account: "alice"}, Roles: []model.Role{model.RoleOwner}}))
-	require.NoError(t, store.CreateSubscription(ctx, &model.Subscription{ID: "s5", RoomID: "source", User: model.SubscriptionUser{ID: "req", Account: "alice"}}))
+	mustInsertSub(t, db, &model.Subscription{ID: "s4", RoomID: "target", User: model.SubscriptionUser{ID: "req", Account: "alice"}, Roles: []model.Role{model.RoleOwner}})
+	mustInsertSub(t, db, &model.Subscription{ID: "s5", RoomID: "source", User: model.SubscriptionUser{ID: "req", Account: "alice"}})
 
 	// Same-site only: nil memberListClient is safe (the same-site branch never invokes it).
 	var publishedSubj string
@@ -967,10 +1186,10 @@ func TestAddMembers_RequesterNotSubscribed_Rejected(t *testing.T) {
 
 	ctx := context.Background()
 
-	require.NoError(t, store.CreateRoom(ctx, &model.Room{ID: "target", Type: model.RoomTypeChannel, SiteID: "site-a"}))
-	require.NoError(t, store.CreateRoom(ctx, &model.Room{ID: "source", Type: model.RoomTypeChannel, SiteID: "site-a"}))
+	mustInsertRoom(t, db, &model.Room{ID: "target", Type: model.RoomTypeChannel, SiteID: "site-a"})
+	mustInsertRoom(t, db, &model.Room{ID: "source", Type: model.RoomTypeChannel, SiteID: "site-a"})
 	// Requester subscribed to target but NOT source
-	require.NoError(t, store.CreateSubscription(ctx, &model.Subscription{RoomID: "target", User: model.SubscriptionUser{ID: "req", Account: "alice"}, Roles: []model.Role{model.RoleOwner}}))
+	mustInsertSub(t, db, &model.Subscription{RoomID: "target", User: model.SubscriptionUser{ID: "req", Account: "alice"}, Roles: []model.Role{model.RoleOwner}})
 
 	// Same-site only: nil memberListClient is safe — request fails on the same-site
 	// GetSubscription check before reaching the cross-site branch.
@@ -1007,26 +1226,26 @@ func TestAddMembers_TwoSiteEndToEnd(t *testing.T) {
 	ctx := context.Background()
 
 	// Site-A: target room; requester subscribed; user document needed for ResolveAccounts.
-	require.NoError(t, storeA.CreateRoom(ctx, &model.Room{ID: "target", Type: model.RoomTypeChannel, SiteID: "site-a"}))
+	mustInsertRoom(t, dbA, &model.Room{ID: "target", Type: model.RoomTypeChannel, SiteID: "site-a"})
 	_, err = dbA.Collection("users").InsertMany(ctx, []interface{}{
 		model.User{ID: "req", Account: "alice", SiteID: "site-a"},
 		model.User{ID: "u1", Account: "bob", SiteID: "site-a"},
 		model.User{ID: "u2", Account: "carol", SiteID: "site-a"},
 	})
 	require.NoError(t, err)
-	require.NoError(t, storeA.CreateSubscription(ctx, &model.Subscription{ID: "sa1", RoomID: "target", User: model.SubscriptionUser{ID: "req", Account: "alice"}, Roles: []model.Role{model.RoleOwner}}))
+	mustInsertSub(t, dbA, &model.Subscription{ID: "sa1", RoomID: "target", User: model.SubscriptionUser{ID: "req", Account: "alice"}, Roles: []model.Role{model.RoleOwner}})
 
 	// Site-B: source channel with members; requester subscribed on site-b too.
-	require.NoError(t, storeB.CreateRoom(ctx, &model.Room{ID: "source", Type: model.RoomTypeChannel, SiteID: "site-b"}))
+	mustInsertRoom(t, dbB, &model.Room{ID: "source", Type: model.RoomTypeChannel, SiteID: "site-b"})
 	_, err = dbB.Collection("users").InsertMany(ctx, []interface{}{
 		model.User{ID: "u1", Account: "bob", SiteID: "site-b"},
 		model.User{ID: "u2", Account: "carol", SiteID: "site-b"},
 		model.User{ID: "req", Account: "alice", SiteID: "site-b"},
 	})
 	require.NoError(t, err)
-	require.NoError(t, storeB.CreateSubscription(ctx, &model.Subscription{ID: "sb1", RoomID: "source", User: model.SubscriptionUser{ID: "u1", Account: "bob"}}))
-	require.NoError(t, storeB.CreateSubscription(ctx, &model.Subscription{ID: "sb2", RoomID: "source", User: model.SubscriptionUser{ID: "u2", Account: "carol"}}))
-	require.NoError(t, storeB.CreateSubscription(ctx, &model.Subscription{ID: "sb3", RoomID: "source", User: model.SubscriptionUser{ID: "req", Account: "alice"}}))
+	mustInsertSub(t, dbB, &model.Subscription{ID: "sb1", RoomID: "source", User: model.SubscriptionUser{ID: "u1", Account: "bob"}})
+	mustInsertSub(t, dbB, &model.Subscription{ID: "sb2", RoomID: "source", User: model.SubscriptionUser{ID: "u2", Account: "carol"}})
+	mustInsertSub(t, dbB, &model.Subscription{ID: "sb3", RoomID: "source", User: model.SubscriptionUser{ID: "req", Account: "alice"}})
 
 	// Site-B handler registers member.list endpoint (RegisterCRUD subscribes to MemberListWildcard).
 	handlerB := NewHandler(storeB, keyStore, nil, nil, "site-b", 1000, 500, 5*time.Second, func(context.Context, string, []byte) error { return nil })
@@ -1090,8 +1309,8 @@ func TestAddMembers_CrossSiteTimeout(t *testing.T) {
 	ctx := context.Background()
 
 	// Target on site-a, requester subscribed.
-	require.NoError(t, store.CreateRoom(ctx, &model.Room{ID: "target", Type: model.RoomTypeChannel, SiteID: "site-a"}))
-	require.NoError(t, store.CreateSubscription(ctx, &model.Subscription{ID: "s1", RoomID: "target", User: model.SubscriptionUser{ID: "req", Account: "alice"}, Roles: []model.Role{model.RoleOwner}}))
+	mustInsertRoom(t, db, &model.Room{ID: "target", Type: model.RoomTypeChannel, SiteID: "site-a"})
+	mustInsertSub(t, db, &model.Subscription{ID: "s1", RoomID: "target", User: model.SubscriptionUser{ID: "req", Account: "alice"}, Roles: []model.Role{model.RoleOwner}})
 
 	// Register a site-b responder that sleeps past the client timeout, so we actually
 	// exercise the context.WithTimeout path (not NATS "no responders" fast-fail).
@@ -1142,7 +1361,7 @@ func TestRoomsInfoBatchRPC(t *testing.T) {
 		{ID: "r3", Name: "room-3", Type: model.RoomTypeChannel, SiteID: "site-a", LastMsgAt: &earlier},
 	}
 	for i := range rooms {
-		require.NoError(t, store.CreateRoom(ctx, &rooms[i]))
+		mustInsertRoom(t, db, &rooms[i])
 	}
 
 	privKey1 := bytes.Repeat([]byte{0x01}, 32)
@@ -1387,14 +1606,14 @@ func TestMongoStore_UpdateSubscriptionRead_Integration(t *testing.T) {
 	store := NewMongoStore(db)
 	require.NoError(t, store.EnsureIndexes(ctx))
 
-	require.NoError(t, store.CreateSubscription(ctx, &model.Subscription{
+	mustInsertSub(t, db, &model.Subscription{
 		ID:       "s1",
 		User:     model.SubscriptionUser{ID: "u1", Account: "alice"},
 		RoomID:   "r1",
 		SiteID:   "site-a",
 		JoinedAt: time.Now().UTC().Add(-time.Hour),
 		Alert:    true,
-	}))
+	})
 
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	require.NoError(t, store.UpdateSubscriptionRead(ctx, "r1", "alice", now, false))
@@ -1443,19 +1662,19 @@ func TestMongoStore_MinSubscriptionLastSeenByRoomID_Integration(t *testing.T) {
 	// (no lastSeenAt). The unread sub MUST be excluded — being invited into a
 	// room doesn't mean the user has read anything, so its joinedAt must not
 	// pull the room floor down.
-	require.NoError(t, store.CreateSubscription(ctx, &model.Subscription{
+	mustInsertSub(t, db, &model.Subscription{
 		ID: "s1", User: model.SubscriptionUser{ID: "u1", Account: "alice"},
 		RoomID: "r1", JoinedAt: earliest, LastSeenAt: &mid,
-	}))
-	require.NoError(t, store.CreateSubscription(ctx, &model.Subscription{
+	})
+	mustInsertSub(t, db, &model.Subscription{
 		ID: "s2", User: model.SubscriptionUser{ID: "u2", Account: "bob"},
 		RoomID: "r1", JoinedAt: earliest, LastSeenAt: &latest,
-	}))
+	})
 	// Never-read sub: joined at `earliest` but never opened the room.
-	require.NoError(t, store.CreateSubscription(ctx, &model.Subscription{
+	mustInsertSub(t, db, &model.Subscription{
 		ID: "s3", User: model.SubscriptionUser{ID: "u3", Account: "carol"},
 		RoomID: "r1", JoinedAt: earliest,
-	}))
+	})
 
 	got, err := store.MinSubscriptionLastSeenByRoomID(ctx, "r1")
 	require.NoError(t, err)
@@ -1464,10 +1683,10 @@ func TestMongoStore_MinSubscriptionLastSeenByRoomID_Integration(t *testing.T) {
 
 	// Room with subs but none has lastSeenAt — return nil so the caller can
 	// $unset rooms.minUserLastSeenAt.
-	require.NoError(t, store.CreateSubscription(ctx, &model.Subscription{
+	mustInsertSub(t, db, &model.Subscription{
 		ID: "s4", User: model.SubscriptionUser{ID: "u4", Account: "dave"},
 		RoomID: "r2", JoinedAt: earliest,
-	}))
+	})
 	got, err = store.MinSubscriptionLastSeenByRoomID(ctx, "r2")
 	require.NoError(t, err)
 	assert.Nil(t, got)
@@ -1484,9 +1703,9 @@ func TestMongoStore_UpdateRoomMinUserLastSeenAt_Integration(t *testing.T) {
 	store := NewMongoStore(db)
 
 	now := time.Now().UTC().Truncate(time.Millisecond)
-	require.NoError(t, store.CreateRoom(ctx, &model.Room{
+	mustInsertRoom(t, db, &model.Room{
 		ID: "r1", Name: "x", Type: model.RoomTypeChannel, CreatedAt: now, UpdatedAt: now,
-	}))
+	})
 
 	require.NoError(t, store.UpdateRoomMinUserLastSeenAt(ctx, "r1", &now))
 	r, err := store.GetRoom(ctx, "r1")
@@ -1498,6 +1717,26 @@ func TestMongoStore_UpdateRoomMinUserLastSeenAt_Integration(t *testing.T) {
 	r, err = store.GetRoom(ctx, "r1")
 	require.NoError(t, err)
 	assert.Nil(t, r.MinUserLastSeenAt)
+}
+
+func TestMongoStore_CountNewMembers_OrgOnlyUserCountsZero_Integration(t *testing.T) {
+	ctx := context.Background()
+	db := setupMongo(t)
+	store := NewMongoStore(db)
+	require.NoError(t, store.EnsureIndexes(ctx))
+
+	const roomID = "room-1"
+	mustInsertUser(t, db, &model.User{ID: "u_alice", Account: "alice", SectID: "org-eng", SiteID: "site-a"})
+	// Alice already has a subscription via org-eng — adding her individually should add 0 new subs.
+	mustInsertSub(t, db, &model.Subscription{
+		ID: idgen.GenerateUUIDv7(), RoomID: roomID, SiteID: "site-a",
+		User:     model.SubscriptionUser{ID: "u_alice", Account: "alice"},
+		RoomType: model.RoomTypeChannel,
+	})
+
+	n, err := store.CountNewMembers(ctx, nil, []string{"alice"}, roomID, "")
+	require.NoError(t, err)
+	assert.Equal(t, 0, n, "alice already has a sub via org — capacity unchanged")
 }
 
 func TestMongoStore_ListReadReceipts_Integration(t *testing.T) {
@@ -1534,3 +1773,66 @@ func TestMongoStore_ListReadReceipts_Integration(t *testing.T) {
 	require.Empty(t, rows)
 }
 
+// TestMongoStore_ListRoomMembers_OrgDisplay_DeptFirst_Integration verifies that
+// when an org member's id matches both a user's deptId and another user's
+// sectId, the dept branch wins and the combined "name tcName" string is
+// surfaced via Member.SectName (the existing wire field for org display).
+func TestMongoStore_ListRoomMembers_OrgDisplay_DeptFirst_Integration(t *testing.T) {
+	ctx := context.Background()
+	db := setupMongo(t)
+	store := NewMongoStore(db)
+	require.NoError(t, store.EnsureIndexes(ctx))
+
+	const roomID = "room-1"
+	_, err := db.Collection("rooms").InsertOne(ctx, model.Room{
+		ID: roomID, Type: model.RoomTypeChannel, SiteID: "site-a", Name: "R",
+	})
+	require.NoError(t, err)
+	_, err = db.Collection("users").InsertOne(ctx, model.User{
+		ID: "u_alice", Account: "alice", SiteID: "site-a",
+		DeptID: "X", DeptName: "Engineering", DeptTCName: "工程部",
+	})
+	require.NoError(t, err)
+	_, err = db.Collection("users").InsertOne(ctx, model.User{
+		ID: "u_bob", Account: "bob", SiteID: "site-a",
+		SectID: "X", SectName: "Sect", SectTCName: "組",
+	})
+	require.NoError(t, err)
+	_, err = db.Collection("room_members").InsertOne(ctx, model.RoomMember{
+		ID: idgen.GenerateUUIDv7(), RoomID: roomID,
+		Member: model.RoomMemberEntry{ID: "X", Type: model.RoomMemberOrg},
+	})
+	require.NoError(t, err)
+
+	got, err := store.ListRoomMembers(ctx, roomID, nil, nil, true)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, "Engineering 工程部", got[0].Member.SectName, "dept wins on overlap; name+tcName combined")
+}
+
+// TestMongoStore_ListRoomMembers_OrgDisplay_FallbackToOrgId_Integration verifies
+// that when no users match the org id at all (neither deptId nor sectId), the
+// display string falls back to the raw member.id rather than emitting an empty
+// string — matching displayfmt.CombineWithFallback's third-argument semantics.
+func TestMongoStore_ListRoomMembers_OrgDisplay_FallbackToOrgId_Integration(t *testing.T) {
+	ctx := context.Background()
+	db := setupMongo(t)
+	store := NewMongoStore(db)
+	require.NoError(t, store.EnsureIndexes(ctx))
+
+	const roomID = "room-1"
+	_, err := db.Collection("rooms").InsertOne(ctx, model.Room{
+		ID: roomID, Type: model.RoomTypeChannel, SiteID: "site-a", Name: "R",
+	})
+	require.NoError(t, err)
+	_, err = db.Collection("room_members").InsertOne(ctx, model.RoomMember{
+		ID: idgen.GenerateUUIDv7(), RoomID: roomID,
+		Member: model.RoomMemberEntry{ID: "Y", Type: model.RoomMemberOrg},
+	})
+	require.NoError(t, err)
+
+	got, err := store.ListRoomMembers(ctx, roomID, nil, nil, true)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, "Y", got[0].Member.SectName, "no matching users → falls back to member.id")
+}

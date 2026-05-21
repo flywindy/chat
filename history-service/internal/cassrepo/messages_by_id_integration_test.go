@@ -55,7 +55,6 @@ func TestRepository_FullRow_AllColumns(t *testing.T) {
 	threadParent := ts.Add(-1 * time.Hour)
 
 	sender := models.Participant{ID: "u1", EngName: "Alice", CompanyName: "Acme", AppID: "app1", AppName: "MyApp", IsBot: false, Account: "alice"}
-	target := models.Participant{ID: "u2", Account: "bob"}
 	mentionUser := models.Participant{ID: "u3", Account: "charlie"}
 	reactUser := models.Participant{ID: "u4", Account: "dave"}
 	file := models.File{ID: "f1", Name: "doc.pdf", Type: "application/pdf"}
@@ -69,10 +68,10 @@ func TestRepository_FullRow_AllColumns(t *testing.T) {
 	pinnedAt := ts.Add(2 * time.Hour)
 	pinnedBy := models.Participant{ID: "u9", Account: "pinner"}
 
-	insertCQL := `INSERT INTO messages_by_id (room_id, created_at, message_id, sender, target_user, msg, mentions, attachments, file, card, card_action, tshow, thread_parent_id, thread_parent_created_at, quoted_parent_message, visible_to, reactions, deleted, type, sys_msg_data, site_id, edited_at, updated_at, thread_room_id, pinned_at, pinned_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	insertCQL := `INSERT INTO messages_by_id (room_id, created_at, message_id, sender, msg, mentions, attachments, file, card, card_action, tshow, thread_parent_id, thread_parent_created_at, quoted_parent_message, visible_to, reactions, deleted, type, sys_msg_data, site_id, edited_at, updated_at, thread_room_id, pinned_at, pinned_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	insertArgs := []any{
 		"r-full", ts, "m-full",
-		sender, target, "hello world",
+		sender, "hello world",
 		[]models.Participant{mentionUser},
 		[][]byte{[]byte("attach1"), []byte("attach2")},
 		file, card, cardAction,
@@ -101,11 +100,6 @@ func TestRepository_FullRow_AllColumns(t *testing.T) {
 	assert.Equal(t, "app1", msg.Sender.AppID)
 	assert.Equal(t, "MyApp", msg.Sender.AppName)
 	assert.False(t, msg.Sender.IsBot)
-
-	// Target user UDT
-	require.NotNil(t, msg.TargetUser)
-	assert.Equal(t, "u2", msg.TargetUser.ID)
-	assert.Equal(t, "bob", msg.TargetUser.Account)
 
 	// Text
 	assert.Equal(t, "hello world", msg.Msg)

@@ -27,7 +27,7 @@ func TestFormatRemovedUser(t *testing.T) {
 }
 
 func TestFormatRemovedOrg(t *testing.T) {
-	got := formatRemovedOrg("Engineering")
+	got := formatRemovedOrg("Engineering", "", "orgX")
 	assert.Equal(t, `"Engineering" has been removed from the channel`, got)
 }
 
@@ -96,4 +96,24 @@ func TestFormatAddedSingle_SingleNameSide(t *testing.T) {
 		&model.User{ChineseName: "鮑勃"},
 	)
 	assert.Equal(t, `"Alice" added "鮑勃" to the channel`, got)
+}
+
+func TestDisplayName_DelegatesToCombineWithFallback(t *testing.T) {
+	u := &model.User{Account: "alice", EngName: "Alice", ChineseName: "爱丽丝"}
+	assert.Equal(t, "Alice 爱丽丝", displayName(u))
+
+	u2 := &model.User{Account: "bob"}
+	assert.Equal(t, "bob", displayName(u2), "both names empty → fallback to Account")
+}
+
+func TestDisplayOrg(t *testing.T) {
+	assert.Equal(t, "Eng 工程部", displayOrg("Eng", "工程部", "orgX"))
+	assert.Equal(t, "Eng", displayOrg("Eng", "", "orgX"))
+	assert.Equal(t, "工程部", displayOrg("", "工程部", "orgX"))
+	assert.Equal(t, "orgX", displayOrg("", "", "orgX"))
+}
+
+func TestFormatRemovedOrg_NewSignature(t *testing.T) {
+	assert.Equal(t, `"Eng 工程部" has been removed from the channel`, formatRemovedOrg("Eng", "工程部", "orgX"))
+	assert.Equal(t, `"orgX" has been removed from the channel`, formatRemovedOrg("", "", "orgX"))
 }

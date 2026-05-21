@@ -165,6 +165,26 @@ func sanitizeAsyncJobError(err error) string {
 	return "operation failed"
 }
 
+// reconcileRoomOnDuplicateKey verifies the existing room is structurally compatible with the want spec; one source of truth for both create paths.
+// The structural check (Type + SiteID match) is sufficient: the caller's
+// BulkCreateSubscriptions runs idempotently (unique index dedups racing
+// inserts; missing inserts are completed on retry). Crucially, this means a
+// mid-write crash (CreateRoom succeeded but the worker died before
+// BulkCreateSubscriptions) is recovered by JetStream redelivery — the retry
+// finds the existing room, finishes the subscription writes, and the room
+// is not orphaned.
+func (h *Handler) reconcileRoomOnDuplicateKey(ctx context.Context, want *model.Room) (*model.Room, error) {
+	existing, err := h.store.GetRoom(ctx, want.ID)
+	if err != nil {
+		return nil, fmt.Errorf("fetch existing room on duplicate-key: %w", err)
+	}
+	if existing.Type != want.Type || existing.SiteID != want.SiteID {
+		return nil, newPermanent("room ID collision (existing type=%s site=%s; want %s/%s)",
+			existing.Type, existing.SiteID, want.Type, want.SiteID)
+	}
+	return existing, nil
+}
+
 func (h *Handler) HandleJetStreamMsg(ctx context.Context, msg jetstream.Msg) {
 	subj := msg.Subject()
 	var err error
@@ -296,13 +316,11 @@ func (h *Handler) processRemoveMember(ctx context.Context, data []byte) error {
 		roomkeymetrics.ValkeyErrors.Add(ctx, 1, metric.WithAttributes(attribute.String("op", "Get")))
 		return fmt.Errorf("get room key: %w", err)
 	}
-	// Skip-rotation guard: a prior redelivery of this canonical event already rotated Valkey past req.BaseKeyVersion.
-	shouldRotate := currentPair == nil || currentPair.Version <= req.BaseKeyVersion
 
 	if req.OrgID != "" {
-		return h.processRemoveOrg(ctx, &req, currentPair, shouldRotate)
+		return h.processRemoveOrg(ctx, &req, currentPair)
 	}
-	return h.processRemoveIndividual(ctx, &req, currentPair, shouldRotate)
+	return h.processRemoveIndividual(ctx, &req, currentPair)
 }
 
 // rotateAndFanOut generates v+1, fans it out to survivors, then commits via Valkey Rotate.
@@ -324,7 +342,6 @@ func (h *Handler) rotateAndFanOut(ctx context.Context, roomID string, currentPai
 			roomkeymetrics.ValkeyErrors.Add(ctx, 1, metric.WithAttributes(attribute.String("op", "Set")))
 			return fmt.Errorf("store room key (no prior): %w", err)
 		}
-		roomkeymetrics.KeyGenerated.Add(ctx, 1)
 		return nil
 	}
 	if _, err := h.keyStore.Rotate(ctx, roomID, *newPair); err != nil {
@@ -336,17 +353,15 @@ func (h *Handler) rotateAndFanOut(ctx context.Context, roomID string, currentPai
 				roomkeymetrics.ValkeyErrors.Add(ctx, 1, metric.WithAttributes(attribute.String("op", "SetWithVersion")))
 				return fmt.Errorf("store room key (fallback): %w", setErr)
 			}
-			roomkeymetrics.KeyGenerated.Add(ctx, 1)
 			return nil
 		}
 		roomkeymetrics.ValkeyErrors.Add(ctx, 1, metric.WithAttributes(attribute.String("op", "Rotate")))
 		return fmt.Errorf("rotate room key: %w", err)
 	}
-	roomkeymetrics.KeyRotated.Add(ctx, 1)
 	return nil
 }
 
-func (h *Handler) processRemoveIndividual(ctx context.Context, req *model.RemoveMemberRequest, currentPair *roomkeystore.VersionedKeyPair, shouldRotate bool) (err error) {
+func (h *Handler) processRemoveIndividual(ctx context.Context, req *model.RemoveMemberRequest, currentPair *roomkeystore.VersionedKeyPair) (err error) {
 	if req.Timestamp <= 0 {
 		req.Timestamp = time.Now().UTC().UnixMilli()
 	}
@@ -386,14 +401,12 @@ func (h *Handler) processRemoveIndividual(ctx context.Context, req *model.Remove
 	}
 
 	// Rotate after delete + reconcile; ListByRoom returns post-deletion survivors.
-	if shouldRotate {
-		survivors, listErr := h.store.ListByRoom(ctx, req.RoomID)
-		if listErr != nil {
-			return fmt.Errorf("list survivors for key fan-out (room %s): %w", req.RoomID, listErr)
-		}
-		if err := h.rotateAndFanOut(ctx, req.RoomID, currentPair, survivors); err != nil {
-			return err
-		}
+	survivors, listErr := h.store.ListByRoom(ctx, req.RoomID)
+	if listErr != nil {
+		return fmt.Errorf("list survivors for key fan-out (room %s): %w", req.RoomID, listErr)
+	}
+	if err := h.rotateAndFanOut(ctx, req.RoomID, currentPair, survivors); err != nil {
+		return fmt.Errorf("rotate and fan-out room key after remove-individual: %w", err)
 	}
 
 	now := time.Now().UTC()
@@ -518,7 +531,7 @@ func (h *Handler) processRemoveIndividual(ctx context.Context, req *model.Remove
 	return nil
 }
 
-func (h *Handler) processRemoveOrg(ctx context.Context, req *model.RemoveMemberRequest, currentPair *roomkeystore.VersionedKeyPair, shouldRotate bool) (err error) {
+func (h *Handler) processRemoveOrg(ctx context.Context, req *model.RemoveMemberRequest, currentPair *roomkeystore.VersionedKeyPair) (err error) {
 	if req.Timestamp <= 0 {
 		req.Timestamp = time.Now().UTC().UnixMilli()
 	}
@@ -532,28 +545,48 @@ func (h *Handler) processRemoveOrg(ctx context.Context, req *model.RemoveMemberR
 		return fmt.Errorf("get org members with individual status: %w", err)
 	}
 
-	// SectName is harvested from the UNFILTERED members slice (not toRemove) so
-	// it remains correct when every org member also has an individual sub and
-	// toRemove ends up empty. Pick the first non-empty SectName; an all-empty
-	// result is a data inconsistency upstream and must short-circuit before any
-	// mutating store call so the org-doc deletion is not lost to a malformed
-	// sys-message.
-	sectName := ""
+	// Single pass: dept wins on overlap; otherwise first sect row. Stash the
+	// first sect candidate as we scan so we don't need a second pass — the
+	// dept row (if any) overrides it. Name/TCName harvested from the
+	// UNFILTERED members slice so they remain correct when every org member
+	// also has an individual sub and toRemove ends up empty. The orgID
+	// fallback in displayOrg/CombineWithFallback guarantees a non-empty
+	// rendered string even when all names are empty, so an all-empty result
+	// is no longer a permanent error.
+	var name, tcName string
+	var sectName, sectTCName string
+	var sectFound bool
 	for _, m := range members {
-		if m.SectName != "" {
-			sectName = m.SectName
+		if m.IsDept {
+			name, tcName = m.Name, m.TCName
 			break
 		}
+		if !sectFound {
+			sectName, sectTCName = m.Name, m.TCName
+			sectFound = true
+		}
 	}
-	if sectName == "" {
-		return newPermanent("org %s missing SectName on all members (room %s)", req.OrgID, req.RoomID)
+	if name == "" && tcName == "" && sectFound {
+		name, tcName = sectName, sectTCName
+	}
+	if name == "" && tcName == "" {
+		slog.Warn("org-remove: no name resolved from any member; falling back to orgID",
+			"requestID", natsutil.RequestIDFromContext(ctx),
+			"roomID", req.RoomID, "orgID", req.OrgID)
 	}
 
+	// Skip members who still have an individual row OR are still reachable
+	// via another org row in the same room. The latter matters because this
+	// PR's dept-aware matching lets the same user be covered by two org rows
+	// concurrently (one matching their sectId, one matching their deptId);
+	// removing one of those orgs must not orphan the user's subscription
+	// while the sibling row still claims them as a member.
 	var toRemove []OrgMemberStatus
 	for _, m := range members {
-		if !m.HasIndividualMembership {
-			toRemove = append(toRemove, m)
+		if m.HasIndividualMembership || m.HasOtherOrgMembership {
+			continue
 		}
+		toRemove = append(toRemove, m)
 	}
 
 	accounts := make([]string, len(toRemove))
@@ -576,13 +609,13 @@ func (h *Handler) processRemoveOrg(ctx context.Context, req *model.RemoveMemberR
 	}
 
 	// Rotate only when something was actually deleted; ListByRoom returns post-deletion survivors.
-	if shouldRotate && len(accounts) > 0 {
+	if len(accounts) > 0 {
 		survivors, listErr := h.store.ListByRoom(ctx, req.RoomID)
 		if listErr != nil {
 			return fmt.Errorf("list survivors for key fan-out (room %s): %w", req.RoomID, listErr)
 		}
 		if err := h.rotateAndFanOut(ctx, req.RoomID, currentPair, survivors); err != nil {
-			return err
+			return fmt.Errorf("rotate and fan-out room key after remove-org: %w", err)
 		}
 	}
 
@@ -644,7 +677,7 @@ func (h *Handler) processRemoveOrg(ctx context.Context, req *model.RemoveMemberR
 	}
 	sysMsgPayload, _ := json.Marshal(model.MemberRemoved{
 		OrgID:             req.OrgID,
-		SectName:          sectName,
+		SectName:          displayOrg(name, tcName, req.OrgID),
 		RemovedUsersCount: len(toRemove),
 	})
 	seed := messageDedupSeed(ctx, "processRemoveOrg", req.RoomID,
@@ -655,7 +688,7 @@ func (h *Handler) processRemoveOrg(ctx context.Context, req *model.RemoveMemberR
 		UserID:      requester.ID,
 		UserAccount: requester.Account,
 		Type:        model.MessageTypeMemberRemoved,
-		Content:     formatRemovedOrg(sectName),
+		Content:     formatRemovedOrg(name, tcName, req.OrgID),
 		SysMsgData:  sysMsgPayload,
 		CreatedAt:   now,
 	}
@@ -733,31 +766,78 @@ func (h *Handler) processAddMembers(ctx context.Context, data []byte) (err error
 		return newPermanent("add-member only valid on channel rooms, got %s", room.Type)
 	}
 
-	// Expand org IDs + direct accounts to actual account list, excluding already-subscribed
-	accounts, err := h.store.ListNewMembers(ctx, req.Orgs, req.Users, req.RoomID)
+	// Resolve candidates and per-candidate flags (has-sub / has-individual-row).
+	// Splits the writes into needSub (no subscription yet) and needIRM (no
+	// individual room_members row yet, writeIndividuals-gated): this is what
+	// makes the org→individual upgrade path work — alice already has a sub
+	// from an earlier org expansion, but no individual row, so an explicit
+	// re-add via req.Users only needs to write the missing IRM row.
+	candidates, err := h.store.ListAddMemberCandidates(ctx, req.Orgs, req.Users, req.RoomID)
 	if err != nil {
-		return fmt.Errorf("list new members: %w", err)
+		return fmt.Errorf("list add-member candidates: %w", err)
 	}
-	if len(accounts) == 0 {
+
+	// Fail closed: defaulting hadOrgsBefore=false on error would trigger spurious first-org backfill.
+	hadOrgsBefore, err := h.store.HasOrgRoomMembers(ctx, req.RoomID)
+	if err != nil {
+		return fmt.Errorf("check existing org room members: %w", err)
+	}
+	writeIndividuals := len(req.Orgs) > 0 || hadOrgsBefore
+
+	allowedIndividual := make(map[string]struct{}, len(req.Users))
+	for _, acc := range req.Users {
+		allowedIndividual[acc] = struct{}{}
+	}
+
+	// needSub = no sub yet; needIRM = no individual row yet (writeIndividuals-gated, req.Users only).
+	needSub := make([]AddMemberCandidate, 0, len(candidates))
+	needIRM := make([]AddMemberCandidate, 0, len(candidates))
+	for _, c := range candidates {
+		if !c.HasSubscription {
+			needSub = append(needSub, c)
+		}
+		if writeIndividuals && !c.HasIndividualRoomMember {
+			if _, ok := allowedIndividual[c.Account]; ok {
+				needIRM = append(needIRM, c)
+			}
+		}
+	}
+
+	// Nothing to write: no new subs, no individual upgrades, no org rows.
+	if len(needSub) == 0 && len(needIRM) == 0 && len(req.Orgs) == 0 {
 		return nil
 	}
 
-	users, err := h.store.FindUsersByAccounts(ctx, accounts)
-	if err != nil {
-		return fmt.Errorf("find users by accounts: %w", err)
+	// Lookup-account set: anyone whose sub or individual row we'll write.
+	lookupAccounts := make([]string, 0, len(needSub)+len(needIRM))
+	seen := make(map[string]struct{}, len(needSub)+len(needIRM))
+	for _, c := range needSub {
+		if _, ok := seen[c.Account]; !ok {
+			lookupAccounts = append(lookupAccounts, c.Account)
+			seen[c.Account] = struct{}{}
+		}
 	}
-	userMap := make(map[string]model.User, len(users))
-	for i := range users {
-		userMap[users[i].Account] = users[i]
+	for _, c := range needIRM {
+		if _, ok := seen[c.Account]; !ok {
+			lookupAccounts = append(lookupAccounts, c.Account)
+			seen[c.Account] = struct{}{}
+		}
 	}
-	// `accounts` is the resolved set from ListNewMembers (which queries the
-	// users collection), so a missing entry here means the user was deleted
-	// between resolution and lookup — a hard data inconsistency that won't
-	// resolve via JetStream redelivery. Mirror the create-room contract and
-	// fail permanently rather than silently materializing partial membership.
-	for _, account := range accounts {
-		if _, ok := userMap[account]; !ok {
-			return newPermanent("user %s not found in room.member.add (room %s)", account, req.RoomID)
+
+	var userMap map[string]model.User
+	if len(lookupAccounts) > 0 {
+		users, err := h.store.FindUsersByAccounts(ctx, lookupAccounts)
+		if err != nil {
+			return fmt.Errorf("find users by accounts: %w", err)
+		}
+		userMap = make(map[string]model.User, len(users))
+		for i := range users {
+			userMap[users[i].Account] = users[i]
+		}
+		for _, acc := range lookupAccounts {
+			if _, ok := userMap[acc]; !ok {
+				return newPermanent("user %s not found in room.member.add (room %s)", acc, req.RoomID)
+			}
 		}
 	}
 
@@ -778,17 +858,14 @@ func (h *Handler) processAddMembers(ctx context.Context, data []byte) (err error
 	acceptedAt := time.UnixMilli(req.Timestamp).UTC()
 	now := time.Now().UTC()
 
-	// Build subscriptions and collect the resolved accounts in a single pass
-	// so we don't re-iterate `subs` later to build an account set or an
-	// actualAccounts slice.
-	subs := make([]*model.Subscription, 0, len(accounts))
-	actualAccounts := make([]string, 0, len(accounts))
-	resolvedAccountSet := make(map[string]struct{}, len(accounts))
-	for _, account := range accounts {
-		// Presence guaranteed by the userMap completeness check above.
-		user := userMap[account]
-		// RoomType is fixed to channel: room-service rejects member.add for
-		// any other room kind.
+	// Build subscriptions for accounts that don't yet have one. RoomType is
+	// fixed to channel: room-service rejects member.add for any other room
+	// kind. actualAccounts mirrors needSub for downstream event payloads
+	// (MemberAddEvent, sys-msg multi/single content).
+	subs := make([]*model.Subscription, 0, len(needSub))
+	actualAccounts := make([]string, 0, len(needSub))
+	for _, c := range needSub {
+		user := userMap[c.Account]
 		sub := &model.Subscription{
 			ID:       idgen.GenerateUUIDv7(),
 			User:     model.SubscriptionUser{ID: user.ID, Account: user.Account},
@@ -808,87 +885,97 @@ func (h *Handler) processAddMembers(ctx context.Context, data []byte) (err error
 		}
 		subs = append(subs, sub)
 		actualAccounts = append(actualAccounts, user.Account)
-		resolvedAccountSet[user.Account] = struct{}{}
 	}
 
-	if err := h.store.BulkCreateSubscriptions(ctx, subs); err != nil {
-		return fmt.Errorf("bulk create subscriptions: %w", err)
+	if len(subs) > 0 {
+		if err := h.store.BulkCreateSubscriptions(ctx, subs); err != nil {
+			return fmt.Errorf("bulk create subscriptions: %w", err)
+		}
 	}
-
-	// Fail closed: defaulting hadOrgsBefore=false on error would trigger spurious first-org backfill.
-	hadOrgsBefore, err := h.store.HasOrgRoomMembers(ctx, req.RoomID)
-	if err != nil {
-		return fmt.Errorf("check existing org room members: %w", err)
-	}
-	writeIndividuals := len(req.Orgs) > 0 || hadOrgsBefore
 
 	// Collect all room_member docs to write in a single bulk insert:
-	// new individuals + new orgs + (optional) backfill of existing subscribers.
-	roomMembers := make([]*model.RoomMember, 0, len(subs)+len(req.Orgs))
-	allowedIndividual := make(map[string]struct{}, len(req.Users))
-	for _, acc := range req.Users {
-		allowedIndividual[acc] = struct{}{}
+	// new individuals (from needSub ∩ req.Users) + individual upgrades
+	// (needIRM = req.Users with existing sub but no IRM row) + new orgs +
+	// (optional) backfill of existing subscribers. processedAccounts tracks
+	// every account we've already issued a sub or individual row for, so the
+	// backfill step below can skip them.
+	roomMembers := make([]*model.RoomMember, 0, len(needIRM)+len(req.Orgs))
+	processedAccounts := make(map[string]struct{}, len(needSub)+len(needIRM))
+	for _, c := range needSub {
+		processedAccounts[c.Account] = struct{}{}
 	}
-	if writeIndividuals {
-		for _, sub := range subs {
-			if _, ok := allowedIndividual[sub.User.Account]; !ok {
-				continue
-			}
-			roomMembers = append(roomMembers, &model.RoomMember{
-				ID:     idgen.GenerateUUIDv7(),
-				RoomID: req.RoomID,
-				Ts:     acceptedAt,
-				Member: model.RoomMemberEntry{
-					ID:      sub.User.ID,
-					Type:    model.RoomMemberIndividual,
-					Account: sub.User.Account,
-				},
-			})
-		}
+	for _, c := range needIRM {
+		processedAccounts[c.Account] = struct{}{}
+		user := userMap[c.Account]
+		roomMembers = append(roomMembers, &model.RoomMember{
+			ID:     idgen.GenerateUUIDv7(),
+			RoomID: req.RoomID,
+			Ts:     acceptedAt,
+			Member: model.RoomMemberEntry{
+				ID:      user.ID,
+				Type:    model.RoomMemberIndividual,
+				Account: user.Account,
+			},
+		})
 	}
 	for _, org := range req.Orgs {
 		roomMembers = append(roomMembers, &model.RoomMember{
 			ID:     idgen.GenerateUUIDv7(),
 			RoomID: req.RoomID,
 			Ts:     acceptedAt,
-			Member: model.RoomMemberEntry{
-				ID:   org,
-				Type: model.RoomMemberOrg,
-			},
+			Member: model.RoomMemberEntry{ID: org, Type: model.RoomMemberOrg},
 		})
 	}
 
 	// Backfill existing subscribers into room_members only when orgs are
 	// joining for the first time and we're starting to track individuals.
+	// Backfill errors propagate: log-and-continue would silently corrupt
+	// room_members (existing subs would never get IRM rows). Retry is safe —
+	// subs are already written so needSub is empty, hadOrgsBefore stays false
+	// until BulkCreateRoomMembers commits, and the backfill re-runs cleanly.
 	if len(req.Orgs) > 0 && !hadOrgsBefore {
 		existingAccounts, err := h.store.GetSubscriptionAccounts(ctx, req.RoomID)
 		if err != nil {
-			slog.Warn("get subscription accounts for backfill failed", "error", err)
-		} else {
-			var backfillAccounts []string
-			for _, account := range existingAccounts {
-				if _, isNew := resolvedAccountSet[account]; !isNew {
-					backfillAccounts = append(backfillAccounts, account)
+			return fmt.Errorf("get subscription accounts for backfill: %w", err)
+		}
+		var backfillAccounts []string
+		for _, account := range existingAccounts {
+			if _, processed := processedAccounts[account]; !processed {
+				backfillAccounts = append(backfillAccounts, account)
+			}
+		}
+		if len(backfillAccounts) > 0 {
+			backfillUsers, err := h.store.FindUsersByAccounts(ctx, backfillAccounts)
+			if err != nil {
+				return fmt.Errorf("find users for backfill: %w", err)
+			}
+			// Fail-hard if any requested account is missing. A partial result
+			// would commit some IRM rows + flip hadOrgsBefore=true (once
+			// BulkCreateRoomMembers writes the org row), after which no future
+			// redelivery can repair the missing rows — backfill only fires on
+			// the first-org transition. Better to halt and surface the stale
+			// sub via the async-job error than to bake permanent divergence
+			// between subscriptions and room_members.
+			found := make(map[string]struct{}, len(backfillUsers))
+			for i := range backfillUsers {
+				found[backfillUsers[i].Account] = struct{}{}
+			}
+			for _, acc := range backfillAccounts {
+				if _, ok := found[acc]; !ok {
+					return newPermanent("backfill user %s not found in room.member.add (room %s)", acc, req.RoomID)
 				}
 			}
-			if len(backfillAccounts) > 0 {
-				backfillUsers, err := h.store.FindUsersByAccounts(ctx, backfillAccounts)
-				if err != nil {
-					slog.Warn("find users for backfill failed", "error", err)
-				} else {
-					for i := range backfillUsers {
-						roomMembers = append(roomMembers, &model.RoomMember{
-							ID:     idgen.GenerateUUIDv7(),
-							RoomID: req.RoomID,
-							Ts:     acceptedAt,
-							Member: model.RoomMemberEntry{
-								ID:      backfillUsers[i].ID,
-								Type:    model.RoomMemberIndividual,
-								Account: backfillUsers[i].Account,
-							},
-						})
-					}
-				}
+			for i := range backfillUsers {
+				roomMembers = append(roomMembers, &model.RoomMember{
+					ID:     idgen.GenerateUUIDv7(),
+					RoomID: req.RoomID,
+					Ts:     acceptedAt,
+					Member: model.RoomMemberEntry{
+						ID:      backfillUsers[i].ID,
+						Type:    model.RoomMemberIndividual,
+						Account: backfillUsers[i].Account,
+					},
+				})
 			}
 		}
 	}
@@ -920,78 +1007,110 @@ func (h *Handler) processAddMembers(ctx context.Context, data []byte) (err error
 		}
 	}
 
-	if err := h.buildAndFanOutRoomKey(ctx, req.RoomID, users); err != nil {
-		return fmt.Errorf("fan out room key: %w", err)
+	// Fan out the room key only to newly-subscribed accounts. Accounts in
+	// needIRM already had a subscription (and thus already received the key
+	// on their original add), so they don't need a fresh delivery here.
+	// Get is intentionally post-Mongo: the key was created at room-create
+	// time and is not re-rotated for adds, so we just fetch the current pair.
+	newSubUsers := make([]model.User, 0, len(needSub))
+	for _, c := range needSub {
+		newSubUsers = append(newSubUsers, userMap[c.Account])
+	}
+	if len(newSubUsers) > 0 {
+		pair, err := h.keyStore.Get(ctx, req.RoomID)
+		if err != nil {
+			roomkeymetrics.ValkeyErrors.Add(ctx, 1, metric.WithAttributes(attribute.String("op", "Get")))
+			return fmt.Errorf("get room key for fan-out: %w", err)
+		}
+		if err := h.buildAndFanOutRoomKey(ctx, req.RoomID, pair, newSubUsers); err != nil {
+			return fmt.Errorf("fan out room key: %w", err)
+		}
 	}
 
-	// 8. Publish MemberAddEvent (actualAccounts was built above alongside subs)
+	// 8. Publish MemberAddEvent (actualAccounts was built above alongside subs).
+	// Gate on "actual membership change visible to room": new individual subs
+	// (actualAccounts) or new org rows (req.Orgs). The org→individual upgrade
+	// path (only needIRM populated) writes the missing individual room_members
+	// row silently — no membership state changed for the room itself, so
+	// emitting an empty MemberAddEvent and a "added members to the channel"
+	// sys-msg with no actual members listed would mislead end users.
 	historySharedSince := historySharedSincePtr(req.History, req.Timestamp, req.RoomID)
-	memberAddEvt := model.MemberAddEvent{
-		Type:               "member_added",
-		RoomID:             req.RoomID,
-		RoomName:           room.Name,
-		RoomType:           room.Type,
-		Accounts:           actualAccounts,
-		SiteID:             room.SiteID,
-		RequesterAccount:   req.RequesterAccount,
-		JoinedAt:           req.Timestamp,
-		HistorySharedSince: historySharedSince,
-		Timestamp:          now.UnixMilli(),
-	}
-	memberAddData, _ := json.Marshal(memberAddEvt)
-	if err := h.publish(ctx, subject.RoomMemberEvent(req.RoomID), memberAddData, ""); err != nil {
-		slog.Error("member add event publish failed", "error", err, "roomID", req.RoomID)
-	}
-
-	if len(actualAccounts) > 0 {
-		inboxOutbox := model.OutboxEvent{
-			Type:       "member_added",
-			SiteID:     room.SiteID,
-			DestSiteID: room.SiteID,
-			Payload:    memberAddData,
-			Timestamp:  now.UnixMilli(),
+	if len(actualAccounts) > 0 || len(req.Orgs) > 0 {
+		memberAddEvt := model.MemberAddEvent{
+			Type:               "member_added",
+			RoomID:             req.RoomID,
+			RoomName:           room.Name,
+			RoomType:           room.Type,
+			Accounts:           actualAccounts,
+			SiteID:             room.SiteID,
+			RequesterAccount:   req.RequesterAccount,
+			JoinedAt:           req.Timestamp,
+			HistorySharedSince: historySharedSince,
+			Timestamp:          now.UnixMilli(),
 		}
-		inboxData, _ := json.Marshal(inboxOutbox)
-		inboxSeed := fmt.Sprintf("%s:%s:%d", req.RoomID, req.RequesterAccount, req.Timestamp)
-		if err := h.publish(ctx, subject.InboxMemberAdded(room.SiteID), inboxData, natsutil.OutboxDedupID(ctx, room.SiteID, inboxSeed)); err != nil {
-			slog.Error("local inbox member_added publish failed", "error", err, "roomID", req.RoomID)
+		memberAddData, _ := json.Marshal(memberAddEvt)
+		if err := h.publish(ctx, subject.RoomMemberEvent(req.RoomID), memberAddData, ""); err != nil {
+			slog.Error("member add event publish failed",
+				"error", err,
+				"roomID", req.RoomID,
+				"requestID", natsutil.RequestIDFromContext(ctx),
+			)
 		}
-	}
 
-	membersAdded := model.MembersAdded{
-		Individuals:     actualAccounts,
-		Orgs:            req.Orgs,
-		Channels:        req.Channels,
-		AddedUsersCount: len(subs),
-	}
-	sysMsgData, _ := json.Marshal(membersAdded)
-	seed := messageDedupSeed(ctx, "processAddMembers", req.RoomID,
-		fmt.Sprintf("%s:%s:%d", req.RoomID, req.RequesterAccount, req.Timestamp))
-	// Single form only for direct 1-user adds; org-bearing adds always use multi.
-	content := formatAddedMulti(requester)
-	if len(subs) == 1 && len(req.Orgs) == 0 {
-		onlyUser := userMap[subs[0].User.Account]
-		content = formatAddedSingle(requester, &onlyUser)
-	}
-	sysMsg := model.Message{
-		ID:          idgen.MessageIDFromRequestID(seed, "addmembers"),
-		RoomID:      req.RoomID,
-		UserID:      requester.ID,
-		UserAccount: requester.Account,
-		Type:        model.MessageTypeMembersAdded,
-		Content:     content,
-		SysMsgData:  sysMsgData,
-		CreatedAt:   acceptedAt,
-	}
-	msgEvt := model.MessageEvent{
-		Event:     model.EventCreated,
-		Message:   sysMsg,
-		SiteID:    room.SiteID,
-		Timestamp: now.UnixMilli(),
-	}
-	msgEvtData, _ := json.Marshal(msgEvt)
-	if err := h.publish(ctx, subject.MsgCanonicalCreated(room.SiteID), msgEvtData, sysMsg.ID); err != nil {
-		return fmt.Errorf("publish add-members system message: %w", err)
+		if len(actualAccounts) > 0 {
+			inboxOutbox := model.OutboxEvent{
+				Type:       "member_added",
+				SiteID:     room.SiteID,
+				DestSiteID: room.SiteID,
+				Payload:    memberAddData,
+				Timestamp:  now.UnixMilli(),
+			}
+			inboxData, _ := json.Marshal(inboxOutbox)
+			inboxSeed := fmt.Sprintf("%s:%s:%d", req.RoomID, req.RequesterAccount, req.Timestamp)
+			if err := h.publish(ctx, subject.InboxMemberAdded(room.SiteID), inboxData, natsutil.OutboxDedupID(ctx, room.SiteID, inboxSeed)); err != nil {
+				slog.Error("local inbox member_added publish failed",
+					"error", err,
+					"roomID", req.RoomID,
+					"requestID", natsutil.RequestIDFromContext(ctx),
+				)
+			}
+		}
+
+		membersAdded := model.MembersAdded{
+			Individuals:     actualAccounts,
+			Orgs:            req.Orgs,
+			Channels:        req.Channels,
+			AddedUsersCount: len(subs),
+		}
+		sysMsgData, _ := json.Marshal(membersAdded)
+		seed := messageDedupSeed(ctx, "processAddMembers", req.RoomID,
+			fmt.Sprintf("%s:%s:%d", req.RoomID, req.RequesterAccount, req.Timestamp))
+		// Single form only for direct 1-user adds; org-bearing adds always use multi.
+		content := formatAddedMulti(requester)
+		if len(subs) == 1 && len(req.Orgs) == 0 {
+			onlyUser := userMap[subs[0].User.Account]
+			content = formatAddedSingle(requester, &onlyUser)
+		}
+		sysMsg := model.Message{
+			ID:          idgen.MessageIDFromRequestID(seed, "addmembers"),
+			RoomID:      req.RoomID,
+			UserID:      requester.ID,
+			UserAccount: requester.Account,
+			Type:        model.MessageTypeMembersAdded,
+			Content:     content,
+			SysMsgData:  sysMsgData,
+			CreatedAt:   acceptedAt,
+		}
+		msgEvt := model.MessageEvent{
+			Event:     model.EventCreated,
+			Message:   sysMsg,
+			SiteID:    room.SiteID,
+			Timestamp: now.UnixMilli(),
+		}
+		msgEvtData, _ := json.Marshal(msgEvt)
+		if err := h.publish(ctx, subject.MsgCanonicalCreated(room.SiteID), msgEvtData, sysMsg.ID); err != nil {
+			return fmt.Errorf("publish add-members system message: %w", err)
+		}
 	}
 
 	// 10. Outbox for cross-site members — batched by destination site
@@ -1132,7 +1251,6 @@ func (h *Handler) processCreateRoom(ctx context.Context, data []byte) (err error
 		ID:        req.RoomID,
 		Name:      resolveRoomName(&req, roomType),
 		Type:      roomType,
-		CreatedBy: requester.ID,
 		SiteID:    h.siteID,
 		CreatedAt: acceptedAt,
 		UpdatedAt: acceptedAt,
@@ -1156,28 +1274,14 @@ func (h *Handler) processCreateRoom(ctx context.Context, data []byte) (err error
 	}
 
 	if err := h.store.CreateRoom(ctx, room); err != nil {
-		if mongo.IsDuplicateKeyError(err) {
-			existing, fetchErr := h.store.GetRoom(ctx, room.ID)
-			if fetchErr != nil {
-				return fmt.Errorf("fetch on duplicate-key: %w", fetchErr)
-			}
-			// Replay equivalence: only treat the collision as a redelivery
-			// when the existing room is identical on all immutable identity
-			// fields (Type, SiteID, Name, CreatedBy). Any mismatch means the
-			// same ID resolves to a different room — appending subscriptions
-			// or system messages to it would corrupt unrelated state.
-			if existing.Type != room.Type ||
-				existing.SiteID != room.SiteID ||
-				existing.Name != room.Name ||
-				existing.CreatedBy != room.CreatedBy {
-				return newPermanent("room ID collision (existing type=%s site=%s name=%q createdBy=%q; want %s/%s/%q/%q)",
-					existing.Type, existing.SiteID, existing.Name, existing.CreatedBy,
-					room.Type, room.SiteID, room.Name, room.CreatedBy)
-			}
-			room = existing
-		} else {
+		if !mongo.IsDuplicateKeyError(err) {
 			return fmt.Errorf("create room: %w", err)
 		}
+		existing, err := h.reconcileRoomOnDuplicateKey(ctx, room)
+		if err != nil {
+			return fmt.Errorf("reconcile room on duplicate-key: %w", err)
+		}
+		room = existing
 	}
 
 	switch roomType {
@@ -1199,9 +1303,9 @@ func (h *Handler) processCreateRoom(ctx context.Context, data []byte) (err error
 			return fmt.Errorf("re-read DM subs after write: %w", err)
 		}
 		subs = []*model.Subscription{requesterSub, counterpartSub}
-		return h.finishCreateRoom(ctx, &req, room, requester, []model.User{*requester, *counterpart}, subs, requestID, now)
+		return h.finishCreateRoom(ctx, &req, room, requester, pair, []model.User{*requester, *counterpart}, subs, requestID, now)
 	case model.RoomTypeChannel:
-		return h.processCreateRoomChannel(ctx, &req, room, requester, requestID, acceptedAt, now)
+		return h.processCreateRoomChannel(ctx, &req, room, requester, pair, requestID, acceptedAt, now)
 	default:
 		return newPermanent("unknown room type %q", roomType)
 	}
@@ -1221,7 +1325,7 @@ func determineRoomTypeFromPayload(req *model.CreateRoomRequest) model.RoomType {
 	return model.RoomTypeChannel
 }
 
-func (h *Handler) processCreateRoomChannel(ctx context.Context, req *model.CreateRoomRequest, room *model.Room, requester *model.User, requestID string, acceptedAt, now time.Time) error {
+func (h *Handler) processCreateRoomChannel(ctx context.Context, req *model.CreateRoomRequest, room *model.Room, requester *model.User, pair *roomkeystore.VersionedKeyPair, requestID string, acceptedAt, now time.Time) error {
 	// Pass requester.Account as excludeAccount so org-expansion can't re-
 	// introduce the requester (who joins separately as owner). Mirrors the
 	// room-service capacity-check exclusion exactly.
@@ -1301,10 +1405,10 @@ func (h *Handler) processCreateRoomChannel(ctx context.Context, req *model.Creat
 	// brings in an org will backfill existing accounts (including the owner)
 	// into `room_members`.
 
-	return h.finishCreateRoom(ctx, req, room, requester, allUsers, subs, requestID, now)
+	return h.finishCreateRoom(ctx, req, room, requester, pair, allUsers, subs, requestID, now)
 }
 
-func (h *Handler) finishCreateRoom(ctx context.Context, req *model.CreateRoomRequest, room *model.Room, requester *model.User, allUsers []model.User, subs []*model.Subscription, requestID string, now time.Time) error {
+func (h *Handler) finishCreateRoom(ctx context.Context, req *model.CreateRoomRequest, room *model.Room, requester *model.User, pair *roomkeystore.VersionedKeyPair, allUsers []model.User, subs []*model.Subscription, requestID string, now time.Time) error {
 	if err := h.store.ReconcileMemberCounts(ctx, room.ID); err != nil {
 		return fmt.Errorf("reconcile member counts: %w", err)
 	}
@@ -1405,7 +1509,7 @@ func (h *Handler) finishCreateRoom(ctx context.Context, req *model.CreateRoomReq
 	// subscriptions are durable but no member received the initial key event;
 	// NAK so JetStream retries the whole handler rather than persisting silent
 	// missing-key state.
-	if err := h.buildAndFanOutRoomKey(ctx, room.ID, allUsers); err != nil {
+	if err := h.buildAndFanOutRoomKey(ctx, room.ID, pair, allUsers); err != nil {
 		return fmt.Errorf("room key fan-out (room %s): %w", room.ID, err)
 	}
 
@@ -1565,7 +1669,6 @@ func (h *Handler) handleSyncCreateDM(ctx context.Context, data []byte) (*model.S
 		ID:        roomID,
 		Name:      "",
 		Type:      req.RoomType,
-		CreatedBy: requester.ID,
 		SiteID:    h.siteID,
 		UserCount: userCount,
 		AppCount:  appCount,
@@ -1578,21 +1681,19 @@ func (h *Handler) handleSyncCreateDM(ctx context.Context, data []byte) (*model.S
 		if !mongo.IsDuplicateKeyError(err) {
 			return nil, fmt.Errorf("create room: %w", err)
 		}
-		existing, fetchErr := h.store.GetRoom(ctx, room.ID)
-		if fetchErr != nil {
-			return nil, fmt.Errorf("fetch room on duplicate-key: %w", fetchErr)
-		}
-		if existing.Type != room.Type ||
-			existing.SiteID != room.SiteID ||
-			existing.Name != room.Name ||
-			existing.CreatedBy != room.CreatedBy {
-			slog.Error("sync DM: room ID collision",
-				"roomID", room.ID,
-				"existingType", existing.Type, "wantType", room.Type,
-				"existingSiteID", existing.SiteID, "wantSiteID", room.SiteID,
-				"existingCreatedBy", existing.CreatedBy, "wantCreatedBy", room.CreatedBy,
-				"requestID", requestID)
-			return nil, errRoomIDCollision
+		existing, reconcileErr := h.reconcileRoomOnDuplicateKey(ctx, room)
+		if reconcileErr != nil {
+			// Permanent errors from reconcile mean an unrecoverable collision; the
+			// sync-DM caller surfaces errRoomIDCollision verbatim, so map any
+			// permanent error onto that sentinel and keep the rich detail in the log.
+			if errors.Is(reconcileErr, errPermanent) {
+				slog.Error("sync DM: room ID collision",
+					"roomID", room.ID,
+					"requestID", requestID,
+					"error", reconcileErr)
+				return nil, errRoomIDCollision
+			}
+			return nil, fmt.Errorf("reconcile sync DM room on duplicate-key: %w", reconcileErr)
 		}
 		// Sync-path duplicate-key: forward-only — no UIDs/Accounts backfill on the existing room.
 		room = existing
@@ -1737,15 +1838,9 @@ func (h *Handler) fanOutRoomKeyToSurvivors(ctx context.Context, roomID string, p
 	h.fanOutKey(ctx, roomID, accounts, &evt)
 }
 
-// buildAndFanOutRoomKey fetches the current key from Valkey, builds the RoomKeyEvent,
-// and fans it out to every room member account in users (local + remote).
-// NATS supercluster routes user-subjects to home sites.
-func (h *Handler) buildAndFanOutRoomKey(ctx context.Context, roomID string, users []model.User) error {
-	pair, err := h.keyStore.Get(ctx, roomID)
-	if err != nil {
-		roomkeymetrics.ValkeyErrors.Add(ctx, 1, metric.WithAttributes(attribute.String("op", "Get")))
-		return fmt.Errorf("get room key: %w", err)
-	}
+// buildAndFanOutRoomKey publishes pair as a RoomKeyEvent to every account in users.
+// Caller owns the Get; nil pair returns a permanent error as a defensive guard.
+func (h *Handler) buildAndFanOutRoomKey(ctx context.Context, roomID string, pair *roomkeystore.VersionedKeyPair, users []model.User) error {
 	if pair == nil {
 		roomkeymetrics.KeyAbsentErrors.Add(ctx, 1)
 		return newPermanentAbsent("room key absent for %s", roomID)

@@ -107,7 +107,6 @@ export interface Room {
   id: string
   name: string
   type: RoomType
-  createdBy: string
   siteId: string
   userCount: number
   appCount: number

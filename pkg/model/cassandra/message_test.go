@@ -140,7 +140,6 @@ func TestMessage_JSON(t *testing.T) {
 		CreatedAt:             now,
 		MessageID:             "m1",
 		Sender:                Participant{ID: "u1", Account: "alice", IsBot: false},
-		TargetUser:            &Participant{ID: "u2", Account: "bob"},
 		Msg:                   "hello world",
 		Mentions:              []Participant{{ID: "u3", Account: "charlie"}},
 		Attachments:           [][]byte{[]byte("attach1")},
@@ -172,7 +171,6 @@ func TestMessage_JSON(t *testing.T) {
 	assert.Equal(t, "r1", got.RoomID)
 	assert.Equal(t, "m1", got.MessageID)
 	assert.Equal(t, "alice", got.Sender.Account)
-	assert.Equal(t, "bob", got.TargetUser.Account)
 	assert.Len(t, got.Mentions, 1)
 	assert.Len(t, got.Attachments, 1)
 	assert.Equal(t, "doc.pdf", got.File.Name)
@@ -206,7 +204,6 @@ func TestMessage_JSON_Minimal(t *testing.T) {
 		Msg:       "hi",
 	}
 	got := roundTrip(t, msg)
-	assert.Nil(t, got.TargetUser)
 	assert.Nil(t, got.File)
 	assert.Nil(t, got.Card)
 	assert.Nil(t, got.CardAction)

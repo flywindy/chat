@@ -3,7 +3,6 @@ CREATE TABLE IF NOT EXISTS chat.pinned_messages_by_room (
   created_at            TIMESTAMP, // = pinnedAt
   message_id            TEXT,
   sender                FROZEN<"Participant">,
-  target_user           FROZEN<"Participant">,
   msg                   TEXT,
   mentions              SET<FROZEN<"Participant">>,
   attachments           LIST<BLOB>,

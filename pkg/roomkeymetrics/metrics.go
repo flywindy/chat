@@ -11,10 +11,6 @@ import (
 var (
 	// FanoutErrors counts the number of failed RoomKeyEvent sends to a single account.
 	FanoutErrors metric.Int64Counter
-	// KeyGenerated counts the number of new keys generated for rooms.
-	KeyGenerated metric.Int64Counter
-	// KeyRotated counts the number of successful key rotations.
-	KeyRotated metric.Int64Counter
 	// ValkeyErrors counts Valkey operation failures, tagged by operation name.
 	ValkeyErrors metric.Int64Counter
 	// KeyAbsentErrors fires when Valkey is healthy but no current key exists for a room
@@ -34,22 +30,6 @@ func init() {
 		// Fall back to a no-op counter so the program continues to run even if
 		// the global meter provider is not yet initialised at package init time.
 		FanoutErrors, _ = noop.NewMeterProvider().Meter("room-key").Int64Counter("room_key_fanout_errors_total")
-	}
-
-	KeyGenerated, err = m.Int64Counter(
-		"room_key_generated_total",
-		metric.WithDescription("Number of new room encryption keys generated"),
-	)
-	if err != nil {
-		KeyGenerated, _ = noop.NewMeterProvider().Meter("room-key").Int64Counter("room_key_generated_total")
-	}
-
-	KeyRotated, err = m.Int64Counter(
-		"room_key_rotated_total",
-		metric.WithDescription("Number of successful room key rotations"),
-	)
-	if err != nil {
-		KeyRotated, _ = noop.NewMeterProvider().Meter("room-key").Int64Counter("room_key_rotated_total")
 	}
 
 	ValkeyErrors, err = m.Int64Counter(

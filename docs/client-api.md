@@ -196,18 +196,22 @@ When the auth-service is started with `DEV_MODE=true`, the request body schema i
 |--------------------|----------|----------|-------|
 | `name`             | string   | yes      | Room name. |
 | `type`             | string   | yes      | One of `channel`, `dm`, `botDM`, `discussion`. |
-| `createdBy`        | string   | yes      | Internal user ID of the creator. |
-| `createdByAccount` | string   | yes      | Account name of the creator. Used for the owner subscription. |
 | `siteId`           | string   | yes      | The site that will own this room. |
 | `members`          | string[] | no       | Required exactly **one** entry when `type=dm` (the other user's ID); ignored otherwise. |
+| `users`            | string[] | no       | `channel` only. Internal user IDs (or accounts) to enroll as members at creation time. Rejected with `"user not found"` if any entry has no matching user document. |
+| `orgs`             | string[] | no       | `channel` only. Org IDs to enroll (expanded server-side to all org members). Rejected with `"invalid org"` if any entry matches zero users. |
+| `channels`         | array<ChannelRef> | no | `channel` only. Other channels whose members should be copied in. Each entry is `{ "roomId": string, "siteId": string }`. |
+
+The creator's account is taken from the `{account}` segment of the subject (`chat.user.{account}.request.rooms.create`); the client does not pass it in the body.
 
 ```json
 {
   "name": "engineering-announcements",
   "type": "channel",
-  "createdBy": "01970a4f8c2d7c9a01970a4f8c2d7c9a",
-  "createdByAccount": "alice",
-  "siteId": "siteA"
+  "siteId": "siteA",
+  "users": ["bob"],
+  "orgs": ["org-eng"],
+  "channels": []
 }
 ```
 
@@ -220,9 +224,8 @@ The created `Room` object.
 | `id`                | string  | Room ID. 17-char base62 for channels; sorted concat of two accounts for DMs. |
 | `name`              | string  |       |
 | `type`              | string  | Same values as request. |
-| `createdBy`         | string  |       |
 | `siteId`            | string  |       |
-| `userCount`         | number  | `1` immediately after creation (the owner). |
+| `userCount`         | number  | `1` for owner-only creates; higher when initial members were enrolled at creation via `users` / `orgs` / `channels`. |
 | `lastMsgAt`         | string  | Optional. RFC 3339 timestamp; absent until first message. |
 | `lastMsgId`         | string  | Empty until first message. |
 | `lastMentionAllAt`  | string  | Optional. RFC 3339 timestamp. |
@@ -238,7 +241,6 @@ The created `Room` object.
   "id": "01970a4f8c2d7c9aQ",
   "name": "engineering-announcements",
   "type": "channel",
-  "createdBy": "01970a4f8c2d7c9a01970a4f8c2d7c9a",
   "siteId": "siteA",
   "userCount": 1,
   "lastMsgId": "",
@@ -249,7 +251,7 @@ The created `Room` object.
 
 ##### Error response
 
-See [Error envelope](#6-error-envelope-reference).
+See [Error envelope](#6-error-envelope-reference). Channel creates also reject any `orgs` entry that matches zero users with `"invalid org"` and any `users` entry without a matching user document with `"user not found"` (same gates as Add Members — phantom org IDs or accounts do not create a room).
 
 ```json
 { "error": "DM requires exactly one other member, got 0" }
@@ -257,7 +259,7 @@ See [Error envelope](#6-error-envelope-reference).
 
 ##### Triggered events — success path
 
-`None — reply only.` Member additions are a separate RPC (Add Members); creating a room only enrolls the owner.
+`None — reply only.` Creation enrolls the owner (from the subject's `{account}`) plus any members supplied via `users` / `orgs` / `channels` per the request schema above. Adding members to an existing room is a separate RPC (Add Members).
 
 ##### Triggered events — error path
 
@@ -291,7 +293,6 @@ Empty. Send `{}` or no payload.
       "id": "01970a4f8c2d7c9aQ",
       "name": "engineering-announcements",
       "type": "channel",
-      "createdBy": "01970a4f8c2d7c9a01970a4f8c2d7c9a",
       "siteId": "siteA",
       "userCount": 12,
       "lastMsgAt": "2026-05-06T07:55:00Z",
@@ -341,7 +342,6 @@ A single `Room` object. See [Create Room](#create-room) for the `Room` schema.
   "id": "01970a4f8c2d7c9aQ",
   "name": "engineering-announcements",
   "type": "channel",
-  "createdBy": "01970a4f8c2d7c9a01970a4f8c2d7c9a",
   "siteId": "siteA",
   "userCount": 12,
   "lastMsgAt": "2026-05-06T07:55:00Z",
@@ -411,7 +411,7 @@ The fields `requesterId`, `requesterAccount`, and `timestamp` on the Go `AddMemb
 
 ##### Error response
 
-See [Error envelope](#6-error-envelope-reference). Returned synchronously when validation or authorization fails (e.g. requester not in room, room is full, room is restricted and requester is not owner).
+See [Error envelope](#6-error-envelope-reference). Returned synchronously when validation or authorization fails (e.g. requester not in room, room is full, room is restricted and requester is not owner). Any `orgs` entry that matches zero users (no user with `sectId == orgId` or `deptId == orgId`) is rejected with `"invalid org"`, and any `users` entry that has no matching user document is rejected with `"user not found"` — in both cases the request is not queued and no members are added.
 
 ```json
 { "error": "room is at maximum capacity (200): cannot add 5 members to room with 198 existing" }
@@ -864,7 +864,7 @@ See [Error envelope](#6-error-envelope-reference). Common errors:
 **Subject:** `chat.user.{account}.request.orgs.{orgID}.members`
 **Reply subject:** auto-generated `_INBOX.>` (NATS request/reply)
 
-The org ID is the second-to-last subject segment — there is no request body.
+The org ID is the second-to-last subject segment — there is no request body. `orgID` matches a user's `sectId` OR `deptId`; the response includes every user whose either field equals `orgID`. This mirrors the dept-aware org membership pipelines on the server side (a room may be added by sect-level or dept-level org and either form resolves through this endpoint).
 
 ##### Request body
 
@@ -935,7 +935,6 @@ Used by every history-service method that returns messages. Mirrors the Cassandr
 | `messageId` | string | 17- or 20-char base62. |
 | `sender` | object | A `Participant` — see below. |
 | `msg` | string | The message body. |
-| `targetUser` | object | Optional. `Participant` — set for direct/system messages addressed to a specific user. |
 | `mentions` | array<Participant> | Optional. |
 | `attachments` | string[] | Optional. Each entry is base64-encoded bytes. |
 | `file` | object | Optional. `{id, name, type}`. |

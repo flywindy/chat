@@ -78,7 +78,6 @@ type Message struct {
 	CreatedAt             time.Time                `json:"createdAt"                       cql:"created_at"`
 	MessageID             string                   `json:"messageId"                       cql:"message_id"`
 	Sender                Participant              `json:"sender"                          cql:"sender"`
-	TargetUser            *Participant             `json:"targetUser,omitempty"            cql:"target_user"`
 	Msg                   string                   `json:"msg"                             cql:"msg"`
 	Mentions              []Participant            `json:"mentions,omitempty"              cql:"mentions"`
 	Attachments           [][]byte                 `json:"attachments,omitempty"           cql:"attachments"`

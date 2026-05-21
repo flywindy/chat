@@ -88,34 +88,6 @@ func (mr *MockRoomStoreMockRecorder) CountOwners(ctx, roomID any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CountOwners", reflect.TypeOf((*MockRoomStore)(nil).CountOwners), ctx, roomID)
 }
 
-// CreateRoom mocks base method.
-func (m *MockRoomStore) CreateRoom(ctx context.Context, room *model.Room) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CreateRoom", ctx, room)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// CreateRoom indicates an expected call of CreateRoom.
-func (mr *MockRoomStoreMockRecorder) CreateRoom(ctx, room any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateRoom", reflect.TypeOf((*MockRoomStore)(nil).CreateRoom), ctx, room)
-}
-
-// CreateSubscription mocks base method.
-func (m *MockRoomStore) CreateSubscription(ctx context.Context, sub *model.Subscription) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CreateSubscription", ctx, sub)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// CreateSubscription indicates an expected call of CreateSubscription.
-func (mr *MockRoomStoreMockRecorder) CreateSubscription(ctx, sub any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateSubscription", reflect.TypeOf((*MockRoomStore)(nil).CreateSubscription), ctx, sub)
-}
-
 // FindDMSubscription mocks base method.
 func (m *MockRoomStore) FindDMSubscription(ctx context.Context, account, targetName string) (*model.Subscription, error) {
 	m.ctrl.T.Helper()
@@ -129,6 +101,36 @@ func (m *MockRoomStore) FindDMSubscription(ctx context.Context, account, targetN
 func (mr *MockRoomStoreMockRecorder) FindDMSubscription(ctx, account, targetName any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindDMSubscription", reflect.TypeOf((*MockRoomStore)(nil).FindDMSubscription), ctx, account, targetName)
+}
+
+// FindExistingAccounts mocks base method.
+func (m *MockRoomStore) FindExistingAccounts(ctx context.Context, accounts []string) ([]string, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FindExistingAccounts", ctx, accounts)
+	ret0, _ := ret[0].([]string)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FindExistingAccounts indicates an expected call of FindExistingAccounts.
+func (mr *MockRoomStoreMockRecorder) FindExistingAccounts(ctx, accounts any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindExistingAccounts", reflect.TypeOf((*MockRoomStore)(nil).FindExistingAccounts), ctx, accounts)
+}
+
+// FindExistingOrgIDs mocks base method.
+func (m *MockRoomStore) FindExistingOrgIDs(ctx context.Context, orgIDs []string) ([]string, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FindExistingOrgIDs", ctx, orgIDs)
+	ret0, _ := ret[0].([]string)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FindExistingOrgIDs indicates an expected call of FindExistingOrgIDs.
+func (mr *MockRoomStoreMockRecorder) FindExistingOrgIDs(ctx, orgIDs any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindExistingOrgIDs", reflect.TypeOf((*MockRoomStore)(nil).FindExistingOrgIDs), ctx, orgIDs)
 }
 
 // GetApp mocks base method.

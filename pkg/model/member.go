@@ -67,8 +67,6 @@ type RemoveMemberRequest struct {
 	OrgID     string `json:"orgId,omitempty"    bson:"orgId,omitempty"`
 	// Set by room-service at acceptance; stable seed for Message.ID + Nats-Msg-Id.
 	Timestamp int64 `json:"timestamp" bson:"timestamp"`
-	// Pre-rotation Valkey version observed by room-service; room-worker's skip-rotation guard fires when Valkey is already ahead.
-	BaseKeyVersion int `json:"baseKeyVersion" bson:"baseKeyVersion"`
 	// Set by room-service after the GetRoom check; carried to room-worker to avoid a redundant Mongo round-trip.
 	RoomType RoomType `json:"roomType,omitempty" bson:"roomType,omitempty"`
 }

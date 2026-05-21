@@ -149,7 +149,6 @@ room-service
 | ID | string | `id` | `_id` |
 | Name | string | `name` | `name` |
 | Type | RoomType | `type` | `type` |
-| CreatedBy | string | `createdBy` | `createdBy` |
 | SiteID | string | `siteId` | `siteId` |
 | UserCount | int | `userCount` | `userCount` |
 | CreatedAt | time.Time | `createdAt` | `createdAt` |

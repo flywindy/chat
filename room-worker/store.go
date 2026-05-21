@@ -28,13 +28,28 @@ type UserWithMembership struct {
 type OrgMemberStatus struct {
 	Account                 string `bson:"account"`
 	SiteID                  string `bson:"siteId"`
-	SectName                string `bson:"sectName"`
+	Name                    string `bson:"name"`
+	TCName                  string `bson:"tcName"`
+	IsDept                  bool   `bson:"isDept"`
 	HasIndividualMembership bool   `bson:"hasIndividualMembership"`
+	// HasOtherOrgMembership is true when the user is still reachable via
+	// ANOTHER org row in the same room (one whose member.id matches the
+	// user's sectId or deptId), excluding the org being removed.
+	// processRemoveOrg uses this to avoid deleting subs of users who remain
+	// covered by a sibling org — relevant since this PR's dept-aware match
+	// makes the same user potentially reachable via two org rows
+	// concurrently (sectId-org + deptId-org).
+	HasOtherOrgMembership bool `bson:"hasOtherOrgMembership"`
+}
+
+// AddMemberCandidate is one element returned by ListAddMemberCandidates.
+type AddMemberCandidate struct {
+	Account                 string `bson:"account"`
+	HasSubscription         bool   `bson:"hasSubscription"`
+	HasIndividualRoomMember bool   `bson:"hasIndividualRoomMember"`
 }
 
 type SubscriptionStore interface {
-	// --- existing methods (invite flow) ---
-	CreateSubscription(ctx context.Context, sub *model.Subscription) error
 	// BulkCreateSubscriptions upserts each sub keyed on (roomId, u.account)
 	// via $setOnInsert; collisions (e.g. JetStream redelivery) are a Mongo
 	// no-op so the persisted sub is preserved unchanged. Used by every
@@ -69,30 +84,25 @@ type SubscriptionStore interface {
 	DeleteRoomMember(ctx context.Context, roomID string, memberType model.RoomMemberType, memberID string) error
 
 	// --- add-member flow ---
-	CreateRoomMember(ctx context.Context, member *model.RoomMember) error
 	BulkCreateRoomMembers(ctx context.Context, members []*model.RoomMember) error
 	FindUsersByAccounts(ctx context.Context, accounts []string) ([]model.User, error)
 	HasOrgRoomMembers(ctx context.Context, roomID string) (bool, error)
 	GetSubscriptionAccounts(ctx context.Context, roomID string) ([]string, error)
-	// ListNewMembers returns the unique, non-bot accounts that would be added
-	// to roomID for a given (orgIDs, directAccounts) tuple — i.e. the union
-	// minus already-subscribed accounts. Used by processAddMembers to expand
-	// the room-service-supplied (orgs, users) into the actual write list.
-	// Delegates to pkg/pipelines.GetNewMembersPipeline + a $group/$addToSet
-	// terminal stage.
-	ListNewMembers(ctx context.Context, orgIDs, directAccounts []string, roomID string) ([]string, error)
+
+	// ListAddMemberCandidates: per-user {hasSub, hasIndividualRow} flags so the worker splits into needSub vs needIRM (org→individual upgrade).
+	ListAddMemberCandidates(ctx context.Context, orgIDs, directAccounts []string, roomID string) ([]AddMemberCandidate, error)
 
 	// CreateRoom inserts the room doc. Returns mongo.ErrDuplicateKey
 	// when the _id collides; the handler's idempotency logic handles
 	// matching-existing-room as success-on-redelivery.
 	CreateRoom(ctx context.Context, room *model.Room) error
 
-	// ListNewMembersForNewRoom is the empty-roomID variant of
-	// ListNewMembers — same dedup + bot filter, no "already-subscribed"
-	// pruning since the room doesn't exist yet. excludeAccount drops one
-	// account from the candidate set; create-channel passes the requester's
-	// account so they aren't materialized as a regular member in addition to
-	// being added separately as the owner.
+	// ListNewMembersForNewRoom is the empty-roomID variant of the
+	// ListAddMemberCandidates candidate resolution — same dedup + bot filter,
+	// no "already-subscribed" pruning since the room doesn't exist yet.
+	// excludeAccount drops one account from the candidate set; create-channel
+	// passes the requester's account so they aren't materialized as a regular
+	// member in addition to being added separately as the owner.
 	ListNewMembersForNewRoom(ctx context.Context, orgIDs, accounts []string, excludeAccount string) ([]string, error)
 }
 

@@ -98,34 +98,6 @@ func (mr *MockSubscriptionStoreMockRecorder) CreateRoom(ctx, room any) *gomock.C
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateRoom", reflect.TypeOf((*MockSubscriptionStore)(nil).CreateRoom), ctx, room)
 }
 
-// CreateRoomMember mocks base method.
-func (m *MockSubscriptionStore) CreateRoomMember(ctx context.Context, member *model.RoomMember) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CreateRoomMember", ctx, member)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// CreateRoomMember indicates an expected call of CreateRoomMember.
-func (mr *MockSubscriptionStoreMockRecorder) CreateRoomMember(ctx, member any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateRoomMember", reflect.TypeOf((*MockSubscriptionStore)(nil).CreateRoomMember), ctx, member)
-}
-
-// CreateSubscription mocks base method.
-func (m *MockSubscriptionStore) CreateSubscription(ctx context.Context, sub *model.Subscription) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CreateSubscription", ctx, sub)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// CreateSubscription indicates an expected call of CreateSubscription.
-func (mr *MockSubscriptionStoreMockRecorder) CreateSubscription(ctx, sub any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateSubscription", reflect.TypeOf((*MockSubscriptionStore)(nil).CreateSubscription), ctx, sub)
-}
-
 // DeleteRoomMember mocks base method.
 func (m *MockSubscriptionStore) DeleteRoomMember(ctx context.Context, roomID string, memberType model.RoomMemberType, memberID string) error {
 	m.ctrl.T.Helper()
@@ -306,6 +278,21 @@ func (mr *MockSubscriptionStoreMockRecorder) HasOrgRoomMembers(ctx, roomID any) 
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HasOrgRoomMembers", reflect.TypeOf((*MockSubscriptionStore)(nil).HasOrgRoomMembers), ctx, roomID)
 }
 
+// ListAddMemberCandidates mocks base method.
+func (m *MockSubscriptionStore) ListAddMemberCandidates(ctx context.Context, orgIDs, directAccounts []string, roomID string) ([]AddMemberCandidate, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListAddMemberCandidates", ctx, orgIDs, directAccounts, roomID)
+	ret0, _ := ret[0].([]AddMemberCandidate)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListAddMemberCandidates indicates an expected call of ListAddMemberCandidates.
+func (mr *MockSubscriptionStoreMockRecorder) ListAddMemberCandidates(ctx, orgIDs, directAccounts, roomID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListAddMemberCandidates", reflect.TypeOf((*MockSubscriptionStore)(nil).ListAddMemberCandidates), ctx, orgIDs, directAccounts, roomID)
+}
+
 // ListByRoom mocks base method.
 func (m *MockSubscriptionStore) ListByRoom(ctx context.Context, roomID string) ([]model.Subscription, error) {
 	m.ctrl.T.Helper()
@@ -319,21 +306,6 @@ func (m *MockSubscriptionStore) ListByRoom(ctx context.Context, roomID string) (
 func (mr *MockSubscriptionStoreMockRecorder) ListByRoom(ctx, roomID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListByRoom", reflect.TypeOf((*MockSubscriptionStore)(nil).ListByRoom), ctx, roomID)
-}
-
-// ListNewMembers mocks base method.
-func (m *MockSubscriptionStore) ListNewMembers(ctx context.Context, orgIDs, directAccounts []string, roomID string) ([]string, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ListNewMembers", ctx, orgIDs, directAccounts, roomID)
-	ret0, _ := ret[0].([]string)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// ListNewMembers indicates an expected call of ListNewMembers.
-func (mr *MockSubscriptionStoreMockRecorder) ListNewMembers(ctx, orgIDs, directAccounts, roomID any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListNewMembers", reflect.TypeOf((*MockSubscriptionStore)(nil).ListNewMembers), ctx, orgIDs, directAccounts, roomID)
 }
 
 // ListNewMembersForNewRoom mocks base method.

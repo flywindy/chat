@@ -90,19 +90,24 @@ export default function CreateRoomDialog({ onClose, onCreated }) {
         { treatAsSuccess: isDMExistsReply }
       )
       const roomId = sync.roomId
-      // On the dedup branch the server only tells us the existing roomId, not
-      // its type — could be either dm or botDM. Default to 'dm'; the canonical
-      // type arrives shortly via subscription.update.
-      const roomType = sync.roomType || (isDMExistsReply(sync) ? 'dm' : undefined)
       // For DM/BotDM the name is empty; fall back to the counterpart account
       // so the sidebar + header have something to show until the canonical
       // name arrives via subscription.update.
       const displayName = trimmedName || finalUsers[0] || ''
+
+      if (isDMExistsReply(sync)) {
+        // Dedup branch: server already confirmed the DM; skip the summaries-wait that can trip the 3s banner on a BUCKETS_LOADED race.
+        onCreated({ id: roomId, type: 'dm', siteId: user.siteId, name: displayName })
+        onClose()
+        return
+      }
+
+      // On the normal branch the server returns roomType explicitly.
       // Request is done; flip loading off so Cancel becomes re-enabled
       // during the subscription.update wait. The pendingRoom state marks
       // the wait phase — see the two useEffects above for the resolution
       // paths (summaries-match success vs timeout error).
-      setPendingRoom({ id: roomId, type: roomType, siteId: user.siteId, name: displayName })
+      setPendingRoom({ id: roomId, type: sync.roomType, siteId: user.siteId, name: displayName })
     } catch (err) {
       setError(formatAsyncJobError(err))
     } finally {

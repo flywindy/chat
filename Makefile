@@ -168,7 +168,7 @@ sast-gosec:
 # Requires outbound network access to https://vuln.go.dev.
 sast-vuln:
 	@test -x "$(GOVULNCHECK)" || { echo "govulncheck not installed — run 'make tools'"; exit 1; }
-	$(GOVULNCHECK) ./...
+	GOTOOLCHAIN=$(TOOLS_GO_TOOLCHAIN) $(GOVULNCHECK) ./...
 
 # semgrep: rule-based SAST (Go security + security-audit rulesets).
 # Requires outbound network access to the Semgrep registry on first run.

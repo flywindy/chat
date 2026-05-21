@@ -132,7 +132,6 @@ function subToRoom(sub: DMSubscription, fallbackSiteId: string): Room {
     appCount: 0,
     lastMsgId: sub.lastMsgId ?? '',
     lastMsgAt: sub.lastMsgAt ?? undefined,
-    createdBy: '',
     createdAt: '',
     updatedAt: '',
   }

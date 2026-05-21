@@ -136,30 +136,30 @@ describe('CreateRoomDialog', () => {
     )
   })
 
-  it('treats a "dm already exists" reply as success and navigates to the existing room', async () => {
-    const requestWithAsyncResult = vi.fn().mockResolvedValue({
-      sync: { error: 'dm already exists', roomId: 'r-existing' },
-      async: null,
-    })
-    useNats.mockReturnValue({
-      user: { account: 'alice', siteId: 'site-A' },
-      request: vi.fn(),
-      requestWithAsyncResult,
-    })
-    useRoomSummaries.mockReturnValue({ summaries: DEFAULT_SUMMARIES })
-    const onCreated = vi.fn()
-    const onClose = vi.fn()
-    render(<CreateRoomDialog onClose={onClose} onCreated={onCreated} />)
-    fireEvent.change(screen.getByLabelText(/Users/i), { target: { value: 'bob' } })
-    fireEvent.keyDown(screen.getByLabelText(/Users/i), { key: 'Enter' })
-    fireEvent.click(screen.getByRole('button', { name: /Create/i }))
-    await waitFor(() => expect(onCreated).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'r-existing', type: 'dm' })
-    ))
-    await waitFor(() => expect(onClose).toHaveBeenCalled())
-    expect(requestWithAsyncResult.mock.calls[0][2]).toMatchObject({
-      treatAsSuccess: expect.any(Function),
-    })
+  it('navigates directly to the existing room on dm-already-exists reply (no summaries-wait)', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const { onCreated, onClose } = setup({
+        summaries: [],
+        requestWithAsyncResult: vi.fn().mockResolvedValue({
+          sync: { error: 'dm already exists', roomId: 'r-existing' },
+          async: null,
+        }),
+      })
+
+      fireEvent.change(screen.getByLabelText(/Users/i), { target: { value: 'bob' } })
+      fireEvent.keyDown(screen.getByLabelText(/Users/i), { key: 'Enter' })
+      fireEvent.click(screen.getByRole('button', { name: /Create/i }))
+
+      await waitFor(() => expect(onCreated).toHaveBeenCalledTimes(1))
+      expect(onCreated).toHaveBeenCalledWith(expect.objectContaining({ id: 'r-existing', type: 'dm' }))
+      expect(onClose).toHaveBeenCalledTimes(1)
+
+      await vi.advanceTimersByTimeAsync(3500)
+      expect(screen.queryByText(/taking longer than expected/i)).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('auto-flushes typed-but-not-Entered text into the request payload', async () => {

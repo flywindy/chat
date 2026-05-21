@@ -41,12 +41,10 @@ type ReadReceiptRow struct {
 }
 
 type RoomStore interface {
-	CreateRoom(ctx context.Context, room *model.Room) error
 	GetRoom(ctx context.Context, id string) (*model.Room, error)
 	ListRooms(ctx context.Context) ([]model.Room, error)
 	ListRoomsByIDs(ctx context.Context, ids []string) ([]model.Room, error)
 	GetSubscription(ctx context.Context, account, roomID string) (*model.Subscription, error)
-	CreateSubscription(ctx context.Context, sub *model.Subscription) error
 	GetSubscriptionWithMembership(ctx context.Context, roomID, account string) (*SubscriptionWithMembership, error)
 	CountMembersAndOwners(ctx context.Context, roomID string) (*RoomCounts, error)
 	CountOwners(ctx context.Context, roomID string) (int, error)
@@ -64,10 +62,24 @@ type RoomStore interface {
 	// $lookup stages against users and subscriptions. When enrich=false,
 	// display fields are left zero.
 	ListRoomMembers(ctx context.Context, roomID string, limit, offset *int, enrich bool) ([]model.RoomMember, error)
-	// ListOrgMembers returns all users whose sectId equals orgID, projected
-	// as OrgMember rows sorted by account ascending. Returns errInvalidOrg
-	// when no users match (treated as "orgId is not valid").
+	// ListOrgMembers returns all users whose sectId OR deptId equals orgID,
+	// projected as OrgMember rows sorted by account ascending. Returns
+	// errInvalidOrg when no users match (treated as "orgId is not valid").
 	ListOrgMembers(ctx context.Context, orgID string) ([]model.OrgMember, error)
+	// FindExistingOrgIDs returns the subset of orgIDs that match at least
+	// one user via sectId or deptId. Used by handleAddMembers and
+	// handleCreateRoomChannel to reject requests carrying phantom org IDs
+	// before they reach the canonical stream — without this gate the
+	// worker would write a room_members row and fan out a "members added"
+	// system message for an org with zero backing users.
+	FindExistingOrgIDs(ctx context.Context, orgIDs []string) ([]string, error)
+	// FindExistingAccounts returns the subset of accounts that have a
+	// matching user document. Same shape and motivation as
+	// FindExistingOrgIDs but at the user dimension — without this gate, a
+	// typo'd or fake account in req.Users is silently dropped by the
+	// candidates pipeline and the async job reports success despite the
+	// requested user never being added.
+	FindExistingAccounts(ctx context.Context, accounts []string) ([]string, error)
 	// UpdateSubscriptionRead sets lastSeenAt and alert on the subscription
 	// keyed by (roomID, account). Returns model.ErrSubscriptionNotFound
 	// (wrapped) when no subscription matches.

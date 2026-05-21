@@ -28,7 +28,9 @@ services:
       - chat-local
 
   mongodb:
-    image: mongo:8
+    # Patch-pinned to match pkg/testutil/testimages/testimages.go so local dev
+    # tracks the same image testcontainers uses.
+    image: mongo:8.2.9
     container_name: chat-local-mongodb
     ports:
       - "27017:27017"
@@ -151,7 +153,8 @@ services:
   # --cluster-enabled, waits for it to accept connections, then assigns all
   # 16384 hash slots so it forms a valid one-node cluster.
   valkey:
-    image: valkey/valkey:8-alpine
+    # Patch-pinned (same rationale as mongodb above).
+    image: valkey/valkey:8.1.7-alpine
     container_name: chat-local-valkey
     ports:
       - "6379:6379"

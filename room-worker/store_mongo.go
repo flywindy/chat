@@ -31,11 +31,6 @@ func NewMongoStore(db *mongo.Database) *MongoStore {
 	}
 }
 
-func (s *MongoStore) CreateSubscription(ctx context.Context, sub *model.Subscription) error {
-	_, err := s.subscriptions.InsertOne(ctx, sub)
-	return err
-}
-
 func (s *MongoStore) ListByRoom(ctx context.Context, roomID string) ([]model.Subscription, error) {
 	cursor, err := s.subscriptions.Find(ctx, bson.M{"roomId": roomID})
 	if err != nil {
@@ -206,14 +201,22 @@ func (s *MongoStore) RemoveRole(ctx context.Context, account, roomID string, rol
 func (s *MongoStore) GetUserWithMembership(ctx context.Context, roomID, account string) (*UserWithMembership, error) {
 	pipeline := mongo.Pipeline{
 		{{Key: "$match", Value: bson.M{"account": account}}},
+		// Dept-aware org-membership lookup: a user added via Orgs:["X"] may
+		// match the org by deptId only (no sectId), so the room_members row
+		// has member.id = deptId. Checking only sectId would miss that case
+		// and report HasOrgMembership=false, causing the remove flow to drop
+		// the user's subscription even though they are still org-attached.
 		{{Key: "$lookup", Value: bson.M{
 			"from": "room_members",
-			"let":  bson.M{"sectId": "$sectId"},
+			"let":  bson.M{"sectId": "$sectId", "deptId": "$deptId"},
 			"pipeline": bson.A{
 				bson.M{"$match": bson.M{"$expr": bson.M{"$and": bson.A{
 					bson.M{"$eq": bson.A{"$rid", roomID}},
 					bson.M{"$eq": bson.A{"$member.type", "org"}},
-					bson.M{"$eq": bson.A{"$member.id", "$$sectId"}},
+					bson.M{"$or": bson.A{
+						bson.M{"$eq": bson.A{"$member.id", "$$sectId"}},
+						bson.M{"$eq": bson.A{"$member.id", "$$deptId"}},
+					}},
 				}}}},
 				bson.M{"$limit": 1},
 			},
@@ -261,25 +264,64 @@ func (s *MongoStore) GetUserWithMembership(ctx context.Context, roomID, account 
 
 func (s *MongoStore) GetOrgMembersWithIndividualStatus(ctx context.Context, roomID, orgID string) ([]OrgMemberStatus, error) {
 	pipeline := mongo.Pipeline{
-		{{Key: "$match", Value: bson.M{"sectId": orgID}}},
+		{{Key: "$match", Value: bson.M{"$or": bson.A{
+			bson.M{"sectId": orgID},
+			bson.M{"deptId": orgID},
+		}}}},
+		{{Key: "$addFields", Value: bson.M{
+			"isDept": bson.M{"$eq": bson.A{"$deptId", orgID}},
+			"name": bson.M{"$cond": bson.A{
+				bson.M{"$eq": bson.A{"$deptId", orgID}}, "$deptName", "$sectName"}},
+			"tcName": bson.M{"$cond": bson.A{
+				bson.M{"$eq": bson.A{"$deptId", orgID}}, "$deptTCName", "$sectTCName"}},
+		}}},
 		{{Key: "$lookup", Value: bson.M{
 			"from": "room_members",
-			"let":  bson.M{"acct": "$account"},
+			"let":  bson.M{"uid": "$_id"},
 			"pipeline": bson.A{
 				bson.M{"$match": bson.M{"$expr": bson.M{"$and": bson.A{
 					bson.M{"$eq": bson.A{"$rid", roomID}},
 					bson.M{"$eq": bson.A{"$member.type", "individual"}},
-					bson.M{"$eq": bson.A{"$member.account", "$$acct"}},
+					bson.M{"$eq": bson.A{"$member.id", "$$uid"}},
 				}}}},
 				bson.M{"$limit": 1},
+				// Outer stage only reads $size — drop everything else.
+				bson.M{"$project": bson.M{"_id": 1}},
 			},
 			"as": "individualMembership",
 		}}},
+		// Sibling-org lookup: is there ANOTHER org row in the same room whose
+		// member.id matches this user's sectId or deptId (excluding the org
+		// being removed)? If yes, the user remains a member via that sibling
+		// even after the current org is dropped, so processRemoveOrg must NOT
+		// delete their subscription.
+		{{Key: "$lookup", Value: bson.M{
+			"from": "room_members",
+			"let":  bson.M{"sectId": "$sectId", "deptId": "$deptId"},
+			"pipeline": bson.A{
+				bson.M{"$match": bson.M{"$expr": bson.M{"$and": bson.A{
+					bson.M{"$eq": bson.A{"$rid", roomID}},
+					bson.M{"$eq": bson.A{"$member.type", "org"}},
+					bson.M{"$ne": bson.A{"$member.id", orgID}},
+					bson.M{"$or": bson.A{
+						bson.M{"$eq": bson.A{"$member.id", "$$sectId"}},
+						bson.M{"$eq": bson.A{"$member.id", "$$deptId"}},
+					}},
+				}}}},
+				bson.M{"$limit": 1},
+				bson.M{"$project": bson.M{"_id": 1}},
+			},
+			"as": "otherOrgMembership",
+		}}},
 		{{Key: "$project", Value: bson.M{
+			"_id":                     0,
 			"account":                 1,
 			"siteId":                  1,
-			"sectName":                1,
+			"name":                    1,
+			"tcName":                  1,
+			"isDept":                  1,
 			"hasIndividualMembership": bson.M{"$gt": bson.A{bson.M{"$size": "$individualMembership"}, 0}},
+			"hasOtherOrgMembership":   bson.M{"$gt": bson.A{bson.M{"$size": "$otherOrgMembership"}, 0}},
 		}}},
 	}
 	cursor, err := s.users.Aggregate(ctx, pipeline)
@@ -340,16 +382,6 @@ func (s *MongoStore) BulkCreateSubscriptions(ctx context.Context, subs []*model.
 	return nil
 }
 
-func (s *MongoStore) CreateRoomMember(ctx context.Context, member *model.RoomMember) error {
-	if _, err := s.roomMembers.InsertOne(ctx, member); err != nil {
-		if mongo.IsDuplicateKeyError(err) {
-			return nil
-		}
-		return fmt.Errorf("create room member for room %q: %w", member.RoomID, err)
-	}
-	return nil
-}
-
 func (s *MongoStore) BulkCreateRoomMembers(ctx context.Context, members []*model.RoomMember) error {
 	if len(members) == 0 {
 		return nil
@@ -390,34 +422,29 @@ func (s *MongoStore) HasOrgRoomMembers(ctx context.Context, roomID string) (bool
 	return count > 0, nil
 }
 
-func (s *MongoStore) ListNewMembers(ctx context.Context, orgIDs, directAccounts []string, roomID string) ([]string, error) {
+func (s *MongoStore) ListAddMemberCandidates(ctx context.Context, orgIDs, directAccounts []string, roomID string) ([]AddMemberCandidate, error) {
 	if len(orgIDs) == 0 && len(directAccounts) == 0 {
 		return nil, nil
 	}
-
-	pipeline := pipelines.GetNewMembersPipeline(orgIDs, directAccounts, roomID, "")
-	pipeline = append(pipeline, bson.M{
-		"$group": bson.M{"_id": nil, "accounts": bson.M{"$addToSet": "$account"}},
-	})
-
+	pipeline, err := pipelines.GetAddMemberCandidatesPipeline(orgIDs, directAccounts, roomID, "")
+	if err != nil {
+		return nil, fmt.Errorf("build add-member candidates pipeline: %w", err)
+	}
 	cursor, err := s.users.Aggregate(ctx, pipeline)
 	if err != nil {
-		return nil, fmt.Errorf("list new members: %w", err)
+		return nil, fmt.Errorf("aggregate add-member candidates: %w", err)
 	}
-	var results []struct {
-		Accounts []string `bson:"accounts"`
+	defer cursor.Close(ctx)
+	var out []AddMemberCandidate
+	if err := cursor.All(ctx, &out); err != nil {
+		return nil, fmt.Errorf("decode add-member candidates: %w", err)
 	}
-	if err := cursor.All(ctx, &results); err != nil {
-		return nil, fmt.Errorf("decode list new members: %w", err)
-	}
-	if len(results) == 0 {
-		return nil, nil
-	}
-	return results[0].Accounts, nil
+	return out, nil
 }
 
 func (s *MongoStore) GetSubscriptionAccounts(ctx context.Context, roomID string) ([]string, error) {
-	cursor, err := s.subscriptions.Find(ctx, bson.M{"roomId": roomID})
+	cursor, err := s.subscriptions.Find(ctx, bson.M{"roomId": roomID},
+		options.Find().SetProjection(bson.M{"u.account": 1, "_id": 0}))
 	if err != nil {
 		return nil, fmt.Errorf("get subscription accounts for room %q: %w", roomID, err)
 	}

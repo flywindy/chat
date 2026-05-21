@@ -24,6 +24,15 @@ import (
 	"github.com/hmchangw/chat/pkg/subject"
 )
 
+// expectAllAccountsExist registers a FindExistingAccounts expectation that
+// echoes its input back — i.e. "every account being asked about exists".
+// Used by every add-member / create-channel happy-path test that doesn't
+// specifically test the missing-user branch.
+func expectAllAccountsExist(store *MockRoomStore) *gomock.Call {
+	return store.EXPECT().FindExistingAccounts(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, accs []string) ([]string, error) { return accs, nil })
+}
+
 func TestHandler_UpdateRole_Success(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	store := NewMockRoomStore(ctrl)
@@ -922,6 +931,7 @@ func TestHandler_AddMembers_CapacityExceeded(t *testing.T) {
 	store.EXPECT().
 		GetRoom(gomock.Any(), "r1").
 		Return(&model.Room{ID: "r1", Name: "general", Type: model.RoomTypeChannel, UserCount: 8}, nil)
+	expectAllAccountsExist(store)
 	store.EXPECT().
 		CountNewMembers(gomock.Any(), gomock.Any(), []string{"u1", "u2", "u3", "u4", "u5"}, "r1", gomock.Any()).
 		Return(5, nil)
@@ -952,6 +962,7 @@ func TestHandler_AddMembers_RestrictedOwnerAllowed(t *testing.T) {
 	store.EXPECT().GetRoom(gomock.Any(), "r1").Return(&model.Room{
 		ID: "r1", Type: model.RoomTypeChannel, Restricted: true, UserCount: 1,
 	}, nil)
+	expectAllAccountsExist(store)
 	store.EXPECT().CountNewMembers(gomock.Any(), gomock.Any(), gomock.Any(), "r1", gomock.Any()).
 		Return(1, nil)
 
@@ -979,6 +990,7 @@ func TestHandler_AddMembers_EmptyAfterResolve(t *testing.T) {
 	store.EXPECT().GetRoom(gomock.Any(), "r1").Return(&model.Room{
 		ID: "r1", Type: model.RoomTypeChannel, UserCount: 5,
 	}, nil)
+	expectAllAccountsExist(store)
 	store.EXPECT().CountNewMembers(gomock.Any(), gomock.Any(), gomock.Any(), "r1", gomock.Any()).
 		Return(0, nil)
 
@@ -1039,6 +1051,7 @@ func TestHandler_AddMembers_SilentlyFiltersBotsFromChannelRefs(t *testing.T) {
 	}, nil)
 
 	// CountNewMembers must be called with bob only — the bot is filtered before counting.
+	expectAllAccountsExist(store)
 	store.EXPECT().CountNewMembers(gomock.Any(), gomock.Any(),
 		[]string{"bob"}, "r1", gomock.Any()).Return(1, nil)
 
@@ -1063,6 +1076,209 @@ func TestHandler_AddMembers_SilentlyFiltersBotsFromChannelRefs(t *testing.T) {
 	assert.NotContains(t, published.Users, "weather.bot",
 		"bot from channel-ref must be silently filtered before publishing")
 	assert.Contains(t, published.Users, "bob")
+}
+
+// expectAliceOwnerOfR1 wires up the AddMembers preflight: alice is owner of
+// channel r1 with 1 existing member. Reused by every AddMembers phantom-validation case.
+func expectAliceOwnerOfR1(store *MockRoomStore) {
+	store.EXPECT().GetSubscription(gomock.Any(), "alice", "r1").Return(&model.Subscription{
+		User:  model.SubscriptionUser{ID: "u1", Account: "alice"},
+		Roles: []model.Role{model.RoleOwner},
+	}, nil)
+	store.EXPECT().GetRoom(gomock.Any(), "r1").Return(&model.Room{
+		ID: "r1", Type: model.RoomTypeChannel, UserCount: 1,
+	}, nil)
+}
+
+// errStoreFailure is a sentinel used in store-error branch tests. Distinct
+// from the validators' errInvalidOrg/errUserNotFound so the test can verify
+// that the store error wraps cleanly without being masked by the sentinel.
+var errStoreFailure = errors.New("store boom")
+
+// TestHandler_AddMembers_PhantomValidation covers the gate that converts the
+// candidates pipeline's silent-drop into a synchronous reject. Cases:
+//   - happy paths (no-orgs / no-users / no-channels) skip the matching validator
+//   - phantom org or user (incl. partially-invalid batch) rejects with the
+//     sentinel and no publish to the canonical stream
+//   - store error from either validator propagates wrapped (validates the
+//     coverage gap on the FindExistingOrgIDs / FindExistingAccounts error branch)
+func TestHandler_AddMembers_PhantomValidation(t *testing.T) {
+	tests := []struct {
+		name            string
+		req             model.AddMembersRequest
+		setupMocks      func(store *MockRoomStore)
+		wantErr         bool
+		wantErrSentinel error
+		wantPublish     bool
+	}{
+		{
+			name: "phantom org alone rejected",
+			req:  model.AddMembersRequest{Orgs: []string{"org-nope"}},
+			setupMocks: func(store *MockRoomStore) {
+				store.EXPECT().FindExistingOrgIDs(gomock.Any(), []string{"org-nope"}).Return(nil, nil)
+			},
+			wantErr: true, wantErrSentinel: errInvalidOrg, wantPublish: false,
+		},
+		{
+			name: "partially invalid org rejected",
+			req:  model.AddMembersRequest{Orgs: []string{"good-org", "bad-org"}},
+			setupMocks: func(store *MockRoomStore) {
+				store.EXPECT().FindExistingOrgIDs(gomock.Any(), gomock.InAnyOrder([]string{"good-org", "bad-org"})).
+					Return([]string{"good-org"}, nil)
+			},
+			wantErr: true, wantErrSentinel: errInvalidOrg, wantPublish: false,
+		},
+		{
+			name: "no orgs skips org validation",
+			req:  model.AddMembersRequest{Users: []string{"bob"}},
+			setupMocks: func(store *MockRoomStore) {
+				// No FindExistingOrgIDs expectation: gomock fails if called.
+				store.EXPECT().FindExistingAccounts(gomock.Any(), []string{"bob"}).Return([]string{"bob"}, nil)
+				store.EXPECT().CountNewMembers(gomock.Any(), gomock.Any(), []string{"bob"}, "r1", gomock.Any()).Return(1, nil)
+			},
+			wantErr: false, wantPublish: true,
+		},
+		{
+			name: "phantom user alone rejected",
+			req:  model.AddMembersRequest{Users: []string{"bob", "ghost"}},
+			setupMocks: func(store *MockRoomStore) {
+				store.EXPECT().FindExistingAccounts(gomock.Any(), gomock.InAnyOrder([]string{"bob", "ghost"})).
+					Return([]string{"bob"}, nil)
+			},
+			wantErr: true, wantErrSentinel: errUserNotFound, wantPublish: false,
+		},
+		{
+			name: "no users skips user validation",
+			req:  model.AddMembersRequest{Orgs: []string{"good-org"}},
+			setupMocks: func(store *MockRoomStore) {
+				store.EXPECT().FindExistingOrgIDs(gomock.Any(), []string{"good-org"}).Return([]string{"good-org"}, nil)
+				// No FindExistingAccounts expectation: gomock fails if called.
+				store.EXPECT().CountNewMembers(gomock.Any(), []string{"good-org"}, gomock.Any(), "r1", gomock.Any()).Return(1, nil)
+			},
+			wantErr: false, wantPublish: true,
+		},
+		{
+			name: "FindExistingOrgIDs store error propagates",
+			req:  model.AddMembersRequest{Orgs: []string{"org-a"}},
+			setupMocks: func(store *MockRoomStore) {
+				store.EXPECT().FindExistingOrgIDs(gomock.Any(), []string{"org-a"}).Return(nil, errStoreFailure)
+			},
+			wantErr: true, wantErrSentinel: errStoreFailure, wantPublish: false,
+		},
+		{
+			name: "FindExistingAccounts store error propagates",
+			req:  model.AddMembersRequest{Users: []string{"bob"}},
+			setupMocks: func(store *MockRoomStore) {
+				store.EXPECT().FindExistingAccounts(gomock.Any(), []string{"bob"}).Return(nil, errStoreFailure)
+			},
+			wantErr: true, wantErrSentinel: errStoreFailure, wantPublish: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			store := NewMockRoomStore(ctrl)
+			expectAliceOwnerOfR1(store)
+			tc.setupMocks(store)
+
+			publishCalled := false
+			h := &Handler{store: store, siteID: "site-a", maxRoomSize: 1000,
+				publishToStream: func(_ context.Context, _ string, _ []byte) error {
+					publishCalled = true
+					return nil
+				},
+			}
+			body, _ := json.Marshal(tc.req)
+			_, err := h.handleAddMembers(context.Background(), subject.MemberAdd("alice", "r1", "site-a"), body)
+			if tc.wantErr {
+				require.Error(t, err)
+				if tc.wantErrSentinel != nil {
+					assert.True(t, errors.Is(err, tc.wantErrSentinel), "want %v, got %v", tc.wantErrSentinel, err)
+				}
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, tc.wantPublish, publishCalled, "publish behavior mismatch")
+		})
+	}
+}
+
+// TestHandler_CreateRoomChannel_PhantomValidation is the parallel coverage for
+// handleCreateRoomChannel — the same validateOrgIDs / validateAccountsExist
+// gates are wired in but until now only the AddMembers path was exercised. A
+// regression that dropped the gate on create-channel would have shipped silently.
+func TestHandler_CreateRoomChannel_PhantomValidation(t *testing.T) {
+	tests := []struct {
+		name            string
+		req             model.CreateRoomRequest
+		setupMocks      func(store *MockRoomStore)
+		wantErr         bool
+		wantErrSentinel error
+		wantPublish     bool
+	}{
+		{
+			name: "phantom org rejected",
+			req:  model.CreateRoomRequest{Name: "general", Orgs: []string{"org-nope"}},
+			setupMocks: func(store *MockRoomStore) {
+				store.EXPECT().FindExistingOrgIDs(gomock.Any(), []string{"org-nope"}).Return(nil, nil)
+			},
+			wantErr: true, wantErrSentinel: errInvalidOrg, wantPublish: false,
+		},
+		{
+			name: "phantom user rejected",
+			req:  model.CreateRoomRequest{Name: "general", Users: []string{"bob", "ghost"}},
+			setupMocks: func(store *MockRoomStore) {
+				store.EXPECT().FindExistingAccounts(gomock.Any(), gomock.InAnyOrder([]string{"bob", "ghost"})).
+					Return([]string{"bob"}, nil)
+			},
+			wantErr: true, wantErrSentinel: errUserNotFound, wantPublish: false,
+		},
+		{
+			name: "FindExistingOrgIDs store error propagates",
+			req:  model.CreateRoomRequest{Name: "general", Orgs: []string{"org-a"}},
+			setupMocks: func(store *MockRoomStore) {
+				store.EXPECT().FindExistingOrgIDs(gomock.Any(), []string{"org-a"}).Return(nil, errStoreFailure)
+			},
+			wantErr: true, wantErrSentinel: errStoreFailure, wantPublish: false,
+		},
+		{
+			name: "FindExistingAccounts store error propagates",
+			req:  model.CreateRoomRequest{Name: "general", Users: []string{"bob"}},
+			setupMocks: func(store *MockRoomStore) {
+				store.EXPECT().FindExistingAccounts(gomock.Any(), []string{"bob"}).Return(nil, errStoreFailure)
+			},
+			wantErr: true, wantErrSentinel: errStoreFailure, wantPublish: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			store := NewMockRoomStore(ctrl)
+			store.EXPECT().GetUser(gomock.Any(), "alice").Return(aliceUser(), nil)
+			tc.setupMocks(store)
+
+			publishCalled := false
+			h := &Handler{store: store, siteID: "site-a", maxRoomSize: 1000,
+				publishToStream: func(_ context.Context, _ string, _ []byte) error {
+					publishCalled = true
+					return nil
+				},
+			}
+			body, _ := json.Marshal(tc.req)
+			_, err := h.handleCreateRoom(ctxWithReqID(), createRoomSubj("alice", "site-a"), body)
+			if tc.wantErr {
+				require.Error(t, err)
+				if tc.wantErrSentinel != nil {
+					assert.True(t, errors.Is(err, tc.wantErrSentinel), "want %v, got %v", tc.wantErrSentinel, err)
+				}
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, tc.wantPublish, publishCalled, "publish behavior mismatch")
+		})
+	}
 }
 
 func TestHandler_AddMembers_ChannelExpansion(t *testing.T) {
@@ -2232,6 +2448,7 @@ func TestHandleCreateRoom_Channel_HappyPath(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	store := NewMockRoomStore(ctrl)
 	store.EXPECT().GetUser(gomock.Any(), "alice").Return(aliceUser(), nil)
+	expectAllAccountsExist(store)
 	store.EXPECT().CountNewMembers(gomock.Any(), gomock.Any(), gomock.Any(), "", gomock.Any()).Return(2, nil)
 
 	var publishedData []byte
@@ -2295,6 +2512,7 @@ func TestHandleCreateRoom_Channel_NameAtBoundary(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	store := NewMockRoomStore(ctrl)
 	store.EXPECT().GetUser(gomock.Any(), "alice").Return(aliceUser(), nil)
+	expectAllAccountsExist(store)
 	store.EXPECT().CountNewMembers(gomock.Any(), gomock.Any(), gomock.Any(), "", gomock.Any()).Return(2, nil)
 	h := &Handler{store: store, siteID: "site-a", maxRoomSize: 1000,
 		publishToStream: func(_ context.Context, _ string, _ []byte) error { return nil },
@@ -2321,6 +2539,7 @@ func TestHandleCreateRoom_Channel_ExceedsCapacity(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	store := NewMockRoomStore(ctrl)
 	store.EXPECT().GetUser(gomock.Any(), "alice").Return(aliceUser(), nil)
+	expectAllAccountsExist(store)
 	store.EXPECT().CountNewMembers(gomock.Any(), gomock.Any(), gomock.Any(), "", gomock.Any()).Return(11, nil)
 	h := &Handler{store: store, siteID: "site-a", maxRoomSize: 10}
 
@@ -2336,6 +2555,7 @@ func TestHandleCreateRoom_Channel_ChannelRefsExpandToCreatorOnly(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	store := NewMockRoomStore(ctrl)
 	store.EXPECT().GetUser(gomock.Any(), "alice").Return(aliceUser(), nil)
+	expectAllAccountsExist(store)
 	// expandChannelRefs would resolve a same-site channel-ref where the only
 	// member is alice — after stripping the requester, allUsers/allOrgs are
 	// empty for the count call, returning 0.
@@ -2354,6 +2574,7 @@ func TestHandleCreateRoom_Channel_RejectsWhenCreatorWouldOverflow(t *testing.T) 
 	ctrl := gomock.NewController(t)
 	store := NewMockRoomStore(ctrl)
 	store.EXPECT().GetUser(gomock.Any(), "alice").Return(aliceUser(), nil)
+	expectAllAccountsExist(store)
 	store.EXPECT().CountNewMembers(gomock.Any(), gomock.Any(), gomock.Any(), "", gomock.Any()).Return(10, nil)
 	h := &Handler{store: store, siteID: "site-a", maxRoomSize: 10}
 
@@ -2369,6 +2590,7 @@ func TestHandleCreateRoom_Channel_AcceptsAtCreatorInclusiveCap(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	store := NewMockRoomStore(ctrl)
 	store.EXPECT().GetUser(gomock.Any(), "alice").Return(aliceUser(), nil)
+	expectAllAccountsExist(store)
 	store.EXPECT().CountNewMembers(gomock.Any(), gomock.Any(), gomock.Any(), "", gomock.Any()).Return(9, nil)
 	h := &Handler{store: store, siteID: "site-a", maxRoomSize: 10,
 		publishToStream: func(_ context.Context, _ string, _ []byte) error { return nil }}
@@ -2994,6 +3216,7 @@ func TestHandler_CreateRoom_WritesKeyBeforePublish(t *testing.T) {
 	keyStore := NewMockRoomKeyStore(ctrl)
 
 	store.EXPECT().GetUser(gomock.Any(), "alice").Return(aliceUser(), nil)
+	expectAllAccountsExist(store)
 	store.EXPECT().CountNewMembers(gomock.Any(), gomock.Any(), gomock.Any(), "", "alice").
 		Return(1, nil)
 
@@ -3033,6 +3256,7 @@ func TestHandler_CreateRoom_AbortsOnKeyStoreSetError(t *testing.T) {
 	keyStore := NewMockRoomKeyStore(ctrl)
 
 	store.EXPECT().GetUser(gomock.Any(), "alice").Return(aliceUser(), nil)
+	expectAllAccountsExist(store)
 	store.EXPECT().CountNewMembers(gomock.Any(), gomock.Any(), gomock.Any(), "", "alice").
 		Return(1, nil)
 	keyStore.EXPECT().Set(gomock.Any(), gomock.Any(), gomock.Any()).
@@ -3051,41 +3275,6 @@ func TestHandler_CreateRoom_AbortsOnKeyStoreSetError(t *testing.T) {
 		"chat.user.alice.request.room.site-a.create", data)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "store room key")
-}
-
-func TestHandler_RemoveMember_StampsBaseKeyVersion(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	store := NewMockRoomStore(ctrl)
-	keyStore := NewMockRoomKeyStore(ctrl)
-
-	store.EXPECT().GetRoom(gomock.Any(), "r1").Return(&model.Room{ID: "r1", Type: model.RoomTypeChannel}, nil)
-	store.EXPECT().GetSubscriptionWithMembership(gomock.Any(), "r1", "bob").Return(
-		&SubscriptionWithMembership{
-			Subscription:            &model.Subscription{User: model.SubscriptionUser{Account: "bob"}, RoomID: "r1", Roles: []model.Role{model.RoleMember}},
-			HasIndividualMembership: true,
-		}, nil)
-	store.EXPECT().GetSubscription(gomock.Any(), "alice", "r1").Return(
-		&model.Subscription{User: model.SubscriptionUser{Account: "alice"}, RoomID: "r1",
-			Roles: []model.Role{model.RoleOwner, model.RoleMember}}, nil)
-	store.EXPECT().CountMembersAndOwners(gomock.Any(), "r1").Return(
-		&RoomCounts{MemberCount: 5, OwnerCount: 2}, nil)
-	// Read current version; room-worker uses this as the skip-rotation baseline.
-	keyStore.EXPECT().Get(gomock.Any(), "r1").Return(&roomkeystore.VersionedKeyPair{Version: 4}, nil)
-
-	var captured model.RemoveMemberRequest
-	publish := func(_ context.Context, _ string, data []byte) error {
-		require.NoError(t, json.Unmarshal(data, &captured))
-		return nil
-	}
-
-	h := &Handler{store: store, keyStore: keyStore, siteID: "site-a", maxRoomSize: 1000, publishToStream: publish}
-
-	req := model.RemoveMemberRequest{Account: "bob"}
-	data, _ := json.Marshal(req)
-	_, err := h.handleRemoveMember(ctxWithReqID(),
-		"chat.user.alice.request.room.r1.site-a.member.remove", data)
-	require.NoError(t, err)
-	assert.Equal(t, 4, captured.BaseKeyVersion, "BaseKeyVersion must be stamped from the current Valkey version")
 }
 
 func TestHandler_EnsureRoomKey_KeyExists(t *testing.T) {

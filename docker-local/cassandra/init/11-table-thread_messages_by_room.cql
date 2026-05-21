@@ -6,7 +6,6 @@ CREATE TABLE IF NOT EXISTS chat.thread_messages_by_room (
   message_id            TEXT,
   thread_parent_id      TEXT,
   sender                FROZEN<"Participant">,
-  target_user           FROZEN<"Participant">,
   msg                   TEXT,
   mentions              SET<FROZEN<"Participant">>,
   attachments           LIST<BLOB>,

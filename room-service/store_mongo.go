@@ -10,6 +10,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
+	"github.com/hmchangw/chat/pkg/displayfmt"
 	"github.com/hmchangw/chat/pkg/model"
 	"github.com/hmchangw/chat/pkg/pipelines"
 )
@@ -70,6 +71,11 @@ func (s *MongoStore) EnsureIndexes(ctx context.Context) error {
 	}); err != nil {
 		return fmt.Errorf("ensure users (sectId,account) index: %w", err)
 	}
+	if _, err := s.users.Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys: bson.D{{Key: "deptId", Value: 1}, {Key: "account", Value: 1}},
+	}); err != nil {
+		return fmt.Errorf("ensure users (deptId,account) index: %w", err)
+	}
 	// Lookup index for botDM creation: GetApp filters by assistant.name.
 	appsIndex := mongo.IndexModel{
 		Keys:    bson.D{{Key: "assistant.name", Value: 1}},
@@ -91,11 +97,6 @@ func (s *MongoStore) EnsureIndexes(ctx context.Context) error {
 		return fmt.Errorf("ensure subscriptions (u.account,name) index: %w", err)
 	}
 	return nil
-}
-
-func (s *MongoStore) CreateRoom(ctx context.Context, room *model.Room) error {
-	_, err := s.rooms.InsertOne(ctx, room)
-	return err
 }
 
 func (s *MongoStore) GetRoom(ctx context.Context, id string) (*model.Room, error) {
@@ -130,11 +131,6 @@ func (s *MongoStore) GetSubscription(ctx context.Context, account, roomID string
 	return &sub, nil
 }
 
-func (s *MongoStore) CreateSubscription(ctx context.Context, sub *model.Subscription) error {
-	_, err := s.subscriptions.InsertOne(ctx, sub)
-	return err
-}
-
 // GetSubscriptionWithMembership loads the target subscription joined with their
 // individual and org membership sources. Used by the remove-member validation
 // flow to decide whether a user can leave or be removed individually.
@@ -160,18 +156,29 @@ func (s *MongoStore) GetSubscriptionWithMembership(ctx context.Context, roomID, 
 			"pipeline": bson.A{
 				bson.M{"$match": bson.M{"$expr": bson.M{"$eq": bson.A{"$account", "$$acct"}}}},
 				bson.M{"$limit": 1},
-				bson.M{"$project": bson.M{"sectId": 1}},
+				bson.M{"$project": bson.M{"sectId": 1, "deptId": 1}},
 			},
 			"as": "userDoc",
 		}}},
+		// Dept-aware org-membership lookup: a user added via Orgs:["X"] may
+		// match the org by deptId only (no sectId), so the room_members row
+		// has member.id = deptId. Checking only sectId would miss that case
+		// and report HasOrgMembership=false, leading the remove flow to drop
+		// the user's subscription even though they are still org-attached.
 		{{Key: "$lookup", Value: bson.M{
 			"from": "room_members",
-			"let":  bson.M{"sectId": bson.M{"$arrayElemAt": bson.A{"$userDoc.sectId", 0}}},
+			"let": bson.M{
+				"sectId": bson.M{"$arrayElemAt": bson.A{"$userDoc.sectId", 0}},
+				"deptId": bson.M{"$arrayElemAt": bson.A{"$userDoc.deptId", 0}},
+			},
 			"pipeline": bson.A{
 				bson.M{"$match": bson.M{"$expr": bson.M{"$and": bson.A{
 					bson.M{"$eq": bson.A{"$rid", roomID}},
 					bson.M{"$eq": bson.A{"$member.type", "org"}},
-					bson.M{"$eq": bson.A{"$member.id", "$$sectId"}},
+					bson.M{"$or": bson.A{
+						bson.M{"$eq": bson.A{"$member.id", "$$sectId"}},
+						bson.M{"$eq": bson.A{"$member.id", "$$deptId"}},
+					}},
 				}}}},
 				bson.M{"$limit": 1},
 			},
@@ -286,11 +293,8 @@ func (s *MongoStore) CountNewMembers(ctx context.Context, orgIDs, directAccounts
 	if len(orgIDs) == 0 && len(directAccounts) == 0 {
 		return 0, nil
 	}
-
 	pipeline := pipelines.GetNewMembersPipeline(orgIDs, directAccounts, roomID, excludeAccount)
-	pipeline = append(pipeline, bson.M{
-		"$count": "n",
-	})
+	pipeline = append(pipeline, bson.M{"$count": "n"})
 
 	cursor, err := s.users.Aggregate(ctx, pipeline)
 	if err != nil {
@@ -386,8 +390,33 @@ func (s *MongoStore) getRoomMembers(ctx context.Context, roomID string, limit, o
 		rm.Member.EngName = d.EngName
 		rm.Member.ChineseName = d.ChineseName
 		rm.Member.IsOwner = d.IsOwner
-		rm.Member.SectName = d.SectName
 		rm.Member.MemberCount = d.MemberCount
+		// Org rows resolve display Go-side using the two-pass dept-first
+		// tiebreak that mirrors room-worker's processRemoveOrg exactly:
+		//
+		//   1. Prefer dept names when a dept match exists AND has non-empty
+		//      name/tcName.
+		//   2. Otherwise fall back to the sect names (which the aggregation
+		//      now retains alongside the dept names — see the $group stage).
+		//   3. CombineWithFallback handles the both-empty case by emitting
+		//      the member.id, matching the worker's displayOrg/orgID fallback.
+		//
+		// Without the explicit fallback on empty dept names, a row with
+		// IsDept=true but empty deptName + a sibling row with sectName="Eng"
+		// would render the orgID server-side while the worker emits "Eng" —
+		// the spec requires byte-identical output between the two paths.
+		if rm.Member.Type == model.RoomMemberOrg {
+			var name, tcName string
+			if d.OrgRaw != nil {
+				if d.OrgRaw.IsDept && (d.OrgRaw.DeptName != "" || d.OrgRaw.DeptTCName != "") {
+					name, tcName = d.OrgRaw.DeptName, d.OrgRaw.DeptTCName
+				}
+				if name == "" && tcName == "" {
+					name, tcName = d.OrgRaw.SectName, d.OrgRaw.SectTCName
+				}
+			}
+			rm.Member.SectName = displayfmt.CombineWithFallback(name, tcName, rm.Member.ID)
+		}
 		members = append(members, rm)
 	}
 	return members, nil
@@ -406,11 +435,25 @@ type roomMemberEnrichedRow struct {
 }
 
 type roomMemberEnrichedDisplay struct {
-	EngName     string `bson:"engName,omitempty"`
-	ChineseName string `bson:"chineseName,omitempty"`
-	IsOwner     bool   `bson:"isOwner,omitempty"`
-	SectName    string `bson:"sectName,omitempty"`
-	MemberCount int    `bson:"memberCount,omitempty"`
+	EngName     string         `bson:"engName,omitempty"`
+	ChineseName string         `bson:"chineseName,omitempty"`
+	IsOwner     bool           `bson:"isOwner,omitempty"`
+	MemberCount int            `bson:"memberCount,omitempty"`
+	OrgRaw      *orgRawDisplay `bson:"orgRaw,omitempty"`
+}
+
+// orgRawDisplay carries the unresolved org-lookup result (one element of the
+// `_orgMatch` group). It exists so Go-side post-processing can pick the
+// dept-vs-sect branch and run displayfmt.CombineWithFallback — keeping the
+// final display string consistent with the sys-message formatter used by
+// room-worker. A nil pointer means no user matched the org id at all, in
+// which case the loop falls back to the raw member.id.
+type orgRawDisplay struct {
+	IsDept     bool   `bson:"isDept,omitempty"`
+	DeptName   string `bson:"deptName,omitempty"`
+	DeptTCName string `bson:"deptTCName,omitempty"`
+	SectName   string `bson:"sectName,omitempty"`
+	SectTCName string `bson:"sectTCName,omitempty"`
 }
 
 // enrichRoomMembersStages returns the $lookup + $set stages appended to the
@@ -455,7 +498,12 @@ func enrichRoomMembersStages(roomID string) []bson.D {
 			},
 			"as": "_subMatch",
 		}}},
-		// Orgs: join users on sectId = member.id → sectName + count.
+		// Orgs: join users whose deptId OR sectId matches member.id. The
+		// pipeline returns one grouped document carrying raw {isDept, deptName,
+		// deptTCName, sectName, sectTCName, memberCount}. The dept-vs-sect
+		// decision plus the localized + traditional name combine happen
+		// Go-side via displayfmt.CombineWithFallback so the output matches
+		// the sys-message formatter used by room-worker byte-for-byte.
 		{{Key: "$lookup", Value: bson.M{
 			"from": "users",
 			"let": bson.M{
@@ -465,20 +513,36 @@ func enrichRoomMembersStages(roomID string) []bson.D {
 			"pipeline": bson.A{
 				bson.M{"$match": bson.M{"$expr": bson.M{"$and": bson.A{
 					bson.M{"$eq": bson.A{"$$mtyp", "org"}},
-					bson.M{"$eq": bson.A{"$sectId", "$$orgId"}},
+					bson.M{"$or": bson.A{
+						bson.M{"$eq": bson.A{"$deptId", "$$orgId"}},
+						bson.M{"$eq": bson.A{"$sectId", "$$orgId"}},
+					}},
 				}}}},
-				// $first:$sectName relies on the invariant that all users
-				// sharing a sectId carry the same sectName; if that ever drifts,
-				// the chosen name is non-deterministic without an upstream $sort.
+				bson.M{"$addFields": bson.M{
+					"_isDept": bson.M{"$eq": bson.A{"$deptId", "$$orgId"}},
+					"_name":   bson.M{"$cond": bson.A{bson.M{"$eq": bson.A{"$deptId", "$$orgId"}}, "$deptName", "$sectName"}},
+					"_tcName": bson.M{"$cond": bson.A{bson.M{"$eq": bson.A{"$deptId", "$$orgId"}}, "$deptTCName", "$sectTCName"}},
+				}},
+				// $max over a bool surfaces "any user matched deptId" — when at
+				// least one dept-match exists it wins regardless of how many
+				// sect-only users join the same group. dept/sect *Name fields
+				// are gated by _isDept so the chosen branch's strings flow
+				// through and the other branch's are null-suppressed.
 				bson.M{"$group": bson.M{
 					"_id":         nil,
-					"sectName":    bson.M{"$first": "$sectName"},
+					"isDept":      bson.M{"$max": "$_isDept"},
+					"deptName":    bson.M{"$max": bson.M{"$cond": bson.A{"$_isDept", "$_name", nil}}},
+					"deptTCName":  bson.M{"$max": bson.M{"$cond": bson.A{"$_isDept", "$_tcName", nil}}},
+					"sectName":    bson.M{"$max": bson.M{"$cond": bson.A{"$_isDept", nil, "$_name"}}},
+					"sectTCName":  bson.M{"$max": bson.M{"$cond": bson.A{"$_isDept", nil, "$_tcName"}}},
 					"memberCount": bson.M{"$sum": 1},
 				}},
 			},
 			"as": "_orgMatch",
 		}}},
 		// Fold the three matches into a single `display` sub-document.
+		// `orgRaw` surfaces the raw org-lookup pair for Go-side combine —
+		// nil when no users matched, triggering the orgId fallback below.
 		{{Key: "$set", Value: bson.M{
 			"display": bson.M{
 				"engName":     bson.M{"$arrayElemAt": bson.A{"$_userMatch.engName", 0}},
@@ -490,7 +554,7 @@ func enrichRoomMembersStages(roomID string) []bson.D {
 						bson.A{},
 					}},
 				}},
-				"sectName":    bson.M{"$arrayElemAt": bson.A{"$_orgMatch.sectName", 0}},
+				"orgRaw":      bson.M{"$arrayElemAt": bson.A{"$_orgMatch", 0}},
 				"memberCount": bson.M{"$arrayElemAt": bson.A{"$_orgMatch.memberCount", 0}},
 			},
 		}}},
@@ -629,9 +693,14 @@ func (s *MongoStore) FindDMSubscription(ctx context.Context, account, targetName
 	return &sub, nil
 }
 
-// ListOrgMembers returns all users whose sectId equals orgID, projected as
-// OrgMember rows sorted by account ascending. Returns errInvalidOrg when the
-// query matches no users.
+// ListOrgMembers returns all users whose sectId OR deptId equals orgID,
+// projected as OrgMember rows sorted by account ascending. The dept branch
+// is symmetric to the membership-lookup pipelines (GetSubscriptionWithMembership,
+// GetUserWithMembership): an org added by a dept-only match stores
+// member.id = deptId in room_members, so the expansion RPC must look up
+// users by deptId too. Both (sectId, account) and (deptId, account) indexes
+// exist (see ensureIndexes) so the $or stays index-backed. Returns
+// errInvalidOrg when neither branch matches any users.
 func (s *MongoStore) ListOrgMembers(ctx context.Context, orgID string) ([]model.OrgMember, error) {
 	opts := options.Find().
 		SetSort(bson.D{{Key: "account", Value: 1}}).
@@ -642,7 +711,10 @@ func (s *MongoStore) ListOrgMembers(ctx context.Context, orgID string) ([]model.
 			"chineseName": 1,
 			"siteId":      1,
 		})
-	cursor, err := s.users.Find(ctx, bson.M{"sectId": orgID}, opts)
+	cursor, err := s.users.Find(ctx, bson.M{"$or": []bson.M{
+		{"sectId": orgID},
+		{"deptId": orgID},
+	}}, opts)
 	if err != nil {
 		return nil, fmt.Errorf("find users for org %q: %w", orgID, err)
 	}
@@ -656,6 +728,63 @@ func (s *MongoStore) ListOrgMembers(ctx context.Context, orgID string) ([]model.
 		return nil, fmt.Errorf("list org members for %q: %w", orgID, errInvalidOrg)
 	}
 	return members, nil
+}
+
+// FindExistingOrgIDs returns the subset of orgIDs that match at least one
+// user via sectId or deptId. Two parallel distinct calls — one on each
+// indexed field — keep the query covered by the (sectId, account) and
+// (deptId, account) compound indexes; the result of each distinct is
+// bounded by len(orgIDs) since the filter is an $in on the same field.
+//
+// A single $unionWith aggregation was tried (one round-trip instead of
+// two) and benchmarked ~8.5% faster end-to-end with the same index
+// coverage, but the aggregation form is more complex, ships ~55% more
+// Go-side allocations per call, and shifts behavior onto Mongo's
+// aggregation framework (slightly different optimizations across
+// versions, more surface area in a sharded future). The two-Distinct
+// form is simpler, version-agnostic from at least Mongo 4.4 onward, and
+// the perf delta is not material at this call rate. Keep it simple.
+func (s *MongoStore) FindExistingOrgIDs(ctx context.Context, orgIDs []string) ([]string, error) {
+	if len(orgIDs) == 0 {
+		return nil, nil
+	}
+	var sectIDs []string
+	if err := s.users.Distinct(ctx, "sectId", bson.M{"sectId": bson.M{"$in": orgIDs}}).Decode(&sectIDs); err != nil {
+		return nil, fmt.Errorf("distinct sectIds for org validation: %w", err)
+	}
+	var deptIDs []string
+	if err := s.users.Distinct(ctx, "deptId", bson.M{"deptId": bson.M{"$in": orgIDs}}).Decode(&deptIDs); err != nil {
+		return nil, fmt.Errorf("distinct deptIds for org validation: %w", err)
+	}
+	out := make([]string, 0, len(sectIDs)+len(deptIDs))
+	seen := make(map[string]struct{}, len(sectIDs)+len(deptIDs))
+	for _, id := range sectIDs {
+		if _, ok := seen[id]; !ok {
+			seen[id] = struct{}{}
+			out = append(out, id)
+		}
+	}
+	for _, id := range deptIDs {
+		if _, ok := seen[id]; !ok {
+			seen[id] = struct{}{}
+			out = append(out, id)
+		}
+	}
+	return out, nil
+}
+
+// FindExistingAccounts returns the subset of accounts that have a matching
+// user document. Distinct on the indexed `account` field keeps the result
+// bounded by len(accounts) regardless of how many users share an org.
+func (s *MongoStore) FindExistingAccounts(ctx context.Context, accounts []string) ([]string, error) {
+	if len(accounts) == 0 {
+		return nil, nil
+	}
+	var out []string
+	if err := s.users.Distinct(ctx, "account", bson.M{"account": bson.M{"$in": accounts}}).Decode(&out); err != nil {
+		return nil, fmt.Errorf("distinct accounts for user validation: %w", err)
+	}
+	return out, nil
 }
 
 // UpdateSubscriptionRead sets lastSeenAt and alert on the subscription
