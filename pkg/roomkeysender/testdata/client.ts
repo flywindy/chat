@@ -5,92 +5,33 @@ import { connect, type NatsConnection, type Msg } from "nats.ws";
 interface RoomKeyEvent {
   roomId: string;
   version: number;
-  publicKey: string;  // base64-encoded 65-byte uncompressed P-256 point
-  privateKey: string; // base64-encoded 32-byte scalar
+  privateKey: string; // base64-encoded 32-byte room secret, used directly as AES-256 key
 }
 
 interface EncryptedMessage {
-  ephemeralPublicKey: string; // base64-encoded 65-byte uncompressed P-256 point
-  nonce: string;              // base64-encoded 12-byte AES-GCM nonce
-  ciphertext: string;         // base64-encoded ciphertext + 16-byte GCM tag
+  version: number;
+  nonce: string;      // base64-encoded 12-byte AES-GCM nonce
+  ciphertext: string; // base64-encoded ciphertext + 16-byte GCM tag
 }
 
-// ---- Helpers ----
-
-function toBase64Url(buf: Buffer): string {
-  return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
-}
-
-// ---- Decryption (matches pkg/roomcrypto algorithm) ----
+// ---- Decryption (matches pkg/roomcrypto direct-import scheme) ----
 
 async function decryptMessage(
   encrypted: EncryptedMessage,
   roomPrivateKeyB64: string,
-  roomPublicKeyB64: string,
 ): Promise<string> {
   const privKeyBytes = Buffer.from(roomPrivateKeyB64, "base64");
-  const pubKeyBytes = Buffer.from(roomPublicKeyB64, "base64");
 
-  // Import room private key as JWK for ECDH.
-  const jwkPrivate: JsonWebKey = {
-    kty: "EC",
-    crv: "P-256",
-    d: toBase64Url(privKeyBytes),
-    x: toBase64Url(pubKeyBytes.slice(1, 33)),
-    y: toBase64Url(pubKeyBytes.slice(33, 65)),
-  };
-
-  const roomPrivKey = await crypto.subtle.importKey(
-    "jwk",
-    jwkPrivate,
-    { name: "ECDH", namedCurve: "P-256" },
-    false,
-    ["deriveBits"],
-  );
-
-  // Import ephemeral public key from encrypted message.
-  const ephKeyBytes = Buffer.from(encrypted.ephemeralPublicKey, "base64");
-  const jwkEph: JsonWebKey = {
-    kty: "EC",
-    crv: "P-256",
-    x: toBase64Url(ephKeyBytes.slice(1, 33)),
-    y: toBase64Url(ephKeyBytes.slice(33, 65)),
-  };
-
-  const ephPubKey = await crypto.subtle.importKey(
-    "jwk",
-    jwkEph,
-    { name: "ECDH", namedCurve: "P-256" },
-    false,
-    [],
-  );
-
-  // ECDH: derive shared secret.
-  const sharedSecretBits = await crypto.subtle.deriveBits(
-    { name: "ECDH", public: ephPubKey },
-    roomPrivKey,
-    256,
-  );
-
-  // HKDF-SHA256: derive AES-256-GCM key.
-  const hkdfKey = await crypto.subtle.importKey("raw", sharedSecretBits, "HKDF", false, [
-    "deriveKey",
-  ]);
-
-  const aesKey = await crypto.subtle.deriveKey(
-    {
-      name: "HKDF",
-      hash: "SHA-256",
-      salt: new Uint8Array(0),
-      info: new TextEncoder().encode("room-message-encryption"),
-    },
-    hkdfKey,
+  // Import room private key directly as AES-256-GCM key (no HKDF step).
+  const aesKey = await crypto.subtle.importKey(
+    "raw",
+    privKeyBytes,
     { name: "AES-GCM", length: 256 },
     false,
     ["decrypt"],
   );
 
-  // AES-256-GCM decrypt.
+  // AES-256-GCM decrypt (ciphertext includes the 16-byte GCM tag appended).
   const nonce = Buffer.from(encrypted.nonce, "base64");
   const ciphertext = Buffer.from(encrypted.ciphertext, "base64");
 
@@ -116,7 +57,7 @@ async function main(): Promise<void> {
   const msgSubject = `test.room.${roomID}.msg`;
 
   // Store received keys indexed by version number.
-  const keys = new Map<number, { publicKey: string; privateKey: string }>();
+  const keys = new Map<number, string>();
 
   const nc: NatsConnection = await connect({ servers: natsURL });
 
@@ -129,7 +70,7 @@ async function main(): Promise<void> {
   (async () => {
     for await (const msg of keySub) {
       const evt: RoomKeyEvent = JSON.parse(new TextDecoder().decode(msg.data));
-      keys.set(evt.version, { publicKey: evt.publicKey, privateKey: evt.privateKey });
+      keys.set(evt.version, evt.privateKey);
     }
   })();
 
@@ -143,14 +84,14 @@ async function main(): Promise<void> {
     }
 
     const version = parseInt(versionStr, 10);
-    const keyPair = keys.get(version);
-    if (!keyPair) {
+    const privateKey = keys.get(version);
+    if (!privateKey) {
       process.stderr.write(`no key found for version ${version}\n`);
       process.exit(1);
     }
 
     const encrypted: EncryptedMessage = JSON.parse(new TextDecoder().decode(msg.data));
-    const plaintext = await decryptMessage(encrypted, keyPair.privateKey, keyPair.publicKey);
+    const plaintext = await decryptMessage(encrypted, privateKey);
 
     process.stdout.write(plaintext);
     break;

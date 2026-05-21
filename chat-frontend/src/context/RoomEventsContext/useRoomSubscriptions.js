@@ -51,6 +51,11 @@ const MARK_READ_DEBOUNCE_MS = 500
  * the hook reads `stateRef.current.activeRoomId` + `summaries` from
  * inside long-lived subscription callbacks to decide whether to fire
  * a `markRoomRead` RPC on incoming messages.
+ *
+ * @param {(input: { roomId: string; version: number; nonceB64: string; ciphertextB64: string }) => Promise<string | null>} [decrypt]
+ *   Room-message decryption function from RoomKeysContext. Defaults to a
+ *   no-op that always returns null (pass-through: encrypted events reach
+ *   the reducer's placeholder branch unchanged).
  */
 export function useRoomSubscriptions(
   nats,
@@ -58,6 +63,7 @@ export function useRoomSubscriptions(
   stateRef,
   threadReplyHandlerRef,
   threadMessageMutationHandlerRef,
+  decrypt = async () => null,
 ) {
   const { user } = nats
   // Keep a live ref to `nats` so long-lived subscription callbacks
@@ -65,6 +71,11 @@ export function useRoomSubscriptions(
   // the latest connection without forcing the effect to re-run.
   const natsRef = useRef(nats)
   natsRef.current = nats
+
+  // Keep a live ref to `decrypt` so subscription callbacks always use
+  // the latest version without restarting the effect.
+  const decryptRef = useRef(decrypt)
+  decryptRef.current = decrypt
 
   // Bumped on every login (re)cycle so the provider's async fetch
   // callbacks can detect stale-generation dispatches.
@@ -203,36 +214,116 @@ export function useRoomSubscriptions(
       }
     }
 
-    const dmSub = subscribeToUserRoomEvents(liveNats, (evt) => {
-      if (evt?.type === 'new_message') {
-        safeDispatch({ type: 'MESSAGE_RECEIVED', event: evt })
-        fanThreadReply(evt)
-        // Thread replies don't advance the main-feed lastSeenAt.
-        if (!evt.message?.threadParentMessageId) {
-          scheduleMarkActiveRead(evt.roomId)
-        }
+    // Per-room dispatch chains. Each entry is a Promise representing the
+    // most recent in-flight work for that room. New events for the same
+    // room chain off it via .then(fn, fn) so they observe the same order
+    // they arrived in even when some are encrypted (await deriveAesKey +
+    // GCM.open) and others are plaintext (synchronous). Without this,
+    // a plaintext mutation event can finalize before a prior encrypted
+    // new_message resolves, scrambling the message-list order.
+    const dispatchChains = new Map()
+    const enqueueByRoom = (roomId, work) => {
+      if (!roomId) {
+        work()
         return
       }
-      handleMutationEvent(evt)
+      const prev = dispatchChains.get(roomId) ?? Promise.resolve()
+      const next = prev.then(work, work)
+      dispatchChains.set(roomId, next)
+    }
+
+    // Decrypt encrypted fields on an event, then call finalize(decoded).
+    // Handles two cases:
+    //   1. encryptedMessage (new_message with no plaintext body yet)
+    //   2. messageEdited.encryptedNewContent (edit events in encrypted rooms)
+    // Returns null on the key-not-yet-available path — the caller passes
+    // the event through unchanged and the reducer's placeholder branch
+    // handles the missing body gracefully.
+    const decryptAndDispatch = async (evt, finalize) => {
+      let decoded = evt
+      try {
+        // Handle encrypted full-message events.
+        if (decoded.encryptedMessage && !decoded.message) {
+          const enc = decoded.encryptedMessage
+          if (typeof enc.version === 'number' && enc.nonce && enc.ciphertext) {
+            const plaintext = await decryptRef.current({
+              roomId: decoded.roomId,
+              version: enc.version,
+              nonceB64: enc.nonce,
+              ciphertextB64: enc.ciphertext,
+            })
+            if (plaintext != null) {
+              const msg = JSON.parse(plaintext)
+              decoded = { ...decoded, message: msg, encryptedMessage: undefined }
+            }
+          }
+        }
+        // Handle encrypted message edits.
+        if (decoded.messageEdited && decoded.messageEdited.encryptedNewContent && !decoded.messageEdited.newContent) {
+          const enc = decoded.messageEdited.encryptedNewContent
+          if (typeof enc.version === 'number' && enc.nonce && enc.ciphertext) {
+            const plaintext = await decryptRef.current({
+              roomId: decoded.roomId,
+              version: enc.version,
+              nonceB64: enc.nonce,
+              ciphertextB64: enc.ciphertext,
+            })
+            if (plaintext != null) {
+              decoded = {
+                ...decoded,
+                messageEdited: { ...decoded.messageEdited, newContent: plaintext, encryptedNewContent: undefined },
+              }
+            }
+          }
+        }
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn('decryptAndDispatch failed; forwarding original event', err)
+      }
+      finalize(decoded)
+    }
+
+    const dmSub = subscribeToUserRoomEvents(liveNats, (evt) => {
+      enqueueByRoom(evt?.roomId, () => {
+        if (evt?.type === 'new_message') {
+          return decryptAndDispatch(evt, (decoded) => {
+            safeDispatch({ type: 'MESSAGE_RECEIVED', event: decoded })
+            fanThreadReply(decoded)
+            // Thread replies don't advance the main-feed lastSeenAt.
+            if (!decoded.message?.threadParentMessageId) {
+              scheduleMarkActiveRead(decoded.roomId)
+            }
+          })
+        }
+        handleMutationEvent(evt)
+      })
     })
 
     const openChannelSub = (roomId) => {
       if (channelSubs.current.has(roomId)) return
       const sub = subscribeToRoomEvents(natsRef.current, { roomId }, (evt) => {
-        if (evt?.type === 'new_message') {
-          const hasMention = (evt.mentions ?? []).some(
-            (p) => p.account === user.account
-          )
-          const normalized = { ...evt, hasMention }
-          safeDispatch({ type: 'MESSAGE_RECEIVED', event: normalized })
-          fanThreadReply(normalized)
-          // See dm path above — skip main-feed mark-read for thread replies.
-          if (!evt.message?.threadParentMessageId) {
-            scheduleMarkActiveRead(evt.roomId ?? roomId)
+        enqueueByRoom(evt?.roomId ?? roomId, () => {
+          if (evt?.type === 'new_message') {
+            return decryptAndDispatch(evt, (decoded) => {
+              const hasMention = (decoded.mentions ?? []).some(
+                (p) => p.account === user.account
+              )
+              const normalized = { ...decoded, hasMention }
+              safeDispatch({ type: 'MESSAGE_RECEIVED', event: normalized })
+              fanThreadReply(normalized)
+              // See dm path above — skip main-feed mark-read for thread replies.
+              if (!decoded.message?.threadParentMessageId) {
+                scheduleMarkActiveRead(decoded.roomId ?? roomId)
+              }
+            })
           }
-          return
-        }
-        handleMutationEvent(evt)
+          if (evt?.type === 'message_edited') {
+            return decryptAndDispatch(evt, (decoded) => {
+              handleMutationEvent(decoded)
+            })
+          }
+          handleMutationEvent(evt)
+        })
       })
       channelSubs.current.set(roomId, sub)
     }
@@ -319,6 +410,7 @@ export function useRoomSubscriptions(
       metaUpdate.unsubscribe()
       for (const sub of channelSubs.current.values()) sub.unsubscribe()
       channelSubs.current.clear()
+      dispatchChains.clear()
       // Cancel any in-flight mark-read trailing timer so it doesn't
       // fire after teardown (would `markRoomRead` against a dead nc).
       if (markReadTimeoutRef.current) {

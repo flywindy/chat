@@ -1684,8 +1684,8 @@ func TestHandler_handleRoomsInfoBatch(t *testing.T) {
 			},
 			setupKeys: func(k *MockRoomKeyStore) {
 				k.EXPECT().GetMany(gomock.Any(), []string{"r1", "r2", "r3"}).Return(map[string]*roomkeystore.VersionedKeyPair{
-					"r1": {Version: 1, KeyPair: roomkeystore.RoomKeyPair{PrivateKey: privBytes, PublicKey: []byte("pub1")}},
-					"r3": {Version: 5, KeyPair: roomkeystore.RoomKeyPair{PrivateKey: privBytes, PublicKey: []byte("pub3")}},
+					"r1": {Version: 1, KeyPair: roomkeystore.RoomKeyPair{PrivateKey: privBytes}},
+					"r3": {Version: 5, KeyPair: roomkeystore.RoomKeyPair{PrivateKey: privBytes}},
 				}, nil)
 			},
 			assertResp: func(t *testing.T, resp model.RoomsInfoBatchResponse) {
@@ -3002,7 +3002,6 @@ func TestHandler_CreateRoom_WritesKeyBeforePublish(t *testing.T) {
 	keyStore.EXPECT().Set(gomock.Any(), gomock.Any(), gomock.Any()).
 		DoAndReturn(func(_ context.Context, roomID string, pair roomkeystore.RoomKeyPair) (int, error) {
 			assert.NotEmpty(t, roomID)
-			assert.Len(t, pair.PublicKey, 65)
 			assert.Len(t, pair.PrivateKey, 32)
 			keyStored = true
 			return 0, nil
@@ -3096,7 +3095,6 @@ func TestHandler_EnsureRoomKey_KeyExists(t *testing.T) {
 	existing := &roomkeystore.VersionedKeyPair{
 		Version: 7,
 		KeyPair: roomkeystore.RoomKeyPair{
-			PublicKey:  bytes.Repeat([]byte{0xAB}, 65),
 			PrivateKey: bytes.Repeat([]byte{0xCD}, 32),
 		},
 	}
@@ -3144,8 +3142,7 @@ func TestHandler_EnsureRoomKey_KeyNotFound_SetsNew(t *testing.T) {
 	assert.Equal(t, "room-new", result.RoomID)
 	assert.Equal(t, 0, result.Version)
 
-	assert.Len(t, capturedPair.PublicKey, 65, "P-256 public key must be 65 bytes (uncompressed) — stored in Valkey")
-	assert.Len(t, capturedPair.PrivateKey, 32, "P-256 private key must be 32 bytes — stored in Valkey")
+	assert.Len(t, capturedPair.PrivateKey, 32, "room secret must be 32 bytes — stored in Valkey")
 	assert.NotContains(t, string(resp), "publicKey", "response must not include public key bytes")
 	assert.NotContains(t, string(resp), "privateKey", "response must not include private key bytes")
 }

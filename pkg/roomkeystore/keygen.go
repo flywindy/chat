@@ -1,19 +1,18 @@
 package roomkeystore
 
 import (
-	"crypto/ecdh"
 	"crypto/rand"
 	"fmt"
 )
 
-// GenerateKeyPair returns a fresh P-256 keypair for a room.
-func GenerateKeyPair() (RoomKeyPair, error) {
-	priv, err := ecdh.P256().GenerateKey(rand.Reader)
-	if err != nil {
-		return RoomKeyPair{}, fmt.Errorf("generate P-256 key: %w", err)
+// GenerateKeyPair returns a fresh 32-byte room secret used by roomcrypto
+// directly as an AES-256-GCM key (no key derivation step). The name retains
+// "KeyPair" for source compatibility with existing call sites; cryptographically
+// this is a single symmetric secret, not an asymmetric keypair.
+func GenerateKeyPair() (*RoomKeyPair, error) {
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return nil, fmt.Errorf("generate room key: %w", err)
 	}
-	return RoomKeyPair{
-		PublicKey:  priv.PublicKey().Bytes(),
-		PrivateKey: priv.Bytes(),
-	}, nil
+	return &RoomKeyPair{PrivateKey: buf}, nil
 }

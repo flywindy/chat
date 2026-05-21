@@ -15,12 +15,12 @@ type clusterAdapter struct {
 	c *redis.ClusterClient
 }
 
-func (a *clusterAdapter) hset(ctx context.Context, key string, pub, priv string) error {
-	return a.c.HSet(ctx, key, "pub", pub, "priv", priv, "ver", "0").Err()
+func (a *clusterAdapter) hset(ctx context.Context, key string, priv string) error {
+	return a.c.HSet(ctx, key, "priv", priv, "ver", "0").Err()
 }
 
-func (a *clusterAdapter) hsetWithVersion(ctx context.Context, key string, pub, priv string, version int) error {
-	return a.c.HSet(ctx, key, "pub", pub, "priv", priv, "ver", strconv.Itoa(version)).Err()
+func (a *clusterAdapter) hsetWithVersion(ctx context.Context, key string, priv string, version int) error {
+	return a.c.HSet(ctx, key, "priv", priv, "ver", strconv.Itoa(version)).Err()
 }
 
 func (a *clusterAdapter) hgetall(ctx context.Context, key string) (map[string]string, error) {
@@ -34,9 +34,8 @@ func (a *clusterAdapter) hgetall(ctx context.Context, key string) (map[string]st
 var rotateScript = redis.NewScript(`
 local currentKey = KEYS[1]
 local prevKey    = KEYS[2]
-local newPub     = ARGV[1]
-local newPriv    = ARGV[2]
-local graceSec   = tonumber(ARGV[3])
+local newPriv    = ARGV[1]
+local graceSec   = tonumber(ARGV[2])
 
 local cur = redis.call('HGETALL', currentKey)
 if #cur == 0 then
@@ -50,16 +49,16 @@ redis.call('DEL', prevKey)
 redis.call('HSET', prevKey, unpack(cur))
 redis.call('EXPIRE', prevKey, graceSec)
 
-redis.call('HSET', currentKey, 'pub', newPub, 'priv', newPriv, 'ver', tostring(newVer))
+redis.call('HSET', currentKey, 'priv', newPriv, 'ver', tostring(newVer))
 return newVer
 `)
 
-func (a *clusterAdapter) rotatePipeline(ctx context.Context, currentKey, prevKey string, pub, priv string, gracePeriod time.Duration) (int, error) {
+func (a *clusterAdapter) rotatePipeline(ctx context.Context, currentKey, prevKey string, priv string, gracePeriod time.Duration) (int, error) {
 	graceSec := int(gracePeriod.Seconds())
 	if graceSec < 1 {
 		graceSec = 1
 	}
-	result, err := rotateScript.Run(ctx, a.c, []string{currentKey, prevKey}, pub, priv, graceSec).Int()
+	result, err := rotateScript.Run(ctx, a.c, []string{currentKey, prevKey}, priv, graceSec).Int()
 	if isLuaNoCurrentKeyErr(err) {
 		return 0, ErrNoCurrentKey
 	}

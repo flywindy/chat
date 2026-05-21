@@ -3294,7 +3294,6 @@ func TestBuildAndFanOutRoomKey_SendsToAllMembersIncludingRemoteSite(t *testing.T
 	keyPair := &roomkeystore.VersionedKeyPair{
 		Version: 3,
 		KeyPair: roomkeystore.RoomKeyPair{
-			PublicKey:  []byte("pub"),
 			PrivateKey: []byte("priv"),
 		},
 	}
@@ -3368,7 +3367,6 @@ func TestProcessAddMembers_FansOutKeyToNewAccountsOnly(t *testing.T) {
 	pair := &roomkeystore.VersionedKeyPair{
 		Version: 1,
 		KeyPair: roomkeystore.RoomKeyPair{
-			PublicKey:  []byte("pubkey"),
 			PrivateKey: []byte("privkey"),
 		},
 	}
@@ -3522,7 +3520,7 @@ func TestFanOutRoomKeyToSurvivors_SendsToAllSurvivorsIncludingRemoteSite(t *test
 	keySender := roomkeysender.NewSender(pub)
 
 	pair := &roomkeystore.VersionedKeyPair{Version: 5, KeyPair: roomkeystore.RoomKeyPair{
-		PublicKey: bytes.Repeat([]byte{0x04}, 65), PrivateKey: bytes.Repeat([]byte{0x03}, 32),
+		PrivateKey: bytes.Repeat([]byte{0x03}, 32),
 	}}
 	survivors := []model.Subscription{
 		{User: model.SubscriptionUser{Account: "alice"}, RoomID: "r1", SiteID: "site-a"},
@@ -4309,4 +4307,53 @@ func TestProcessCreateRoom_InvalidRequestID_ReturnsPermanent(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorIs(t, err, errPermanent)
 	assert.Contains(t, err.Error(), "invalid X-Request-ID")
+}
+
+// TestHandler_RotateAndFanOut_ErrNoCurrentKey_UsesPredictedVersion pins the
+// contract that when Rotate returns ErrNoCurrentKey (Valkey lost the key between
+// Get and Rotate), the fallback calls SetWithVersion at predictedVersion
+// (currentPair.Version+1) rather than Set (which would stamp v0), preventing the
+// version mismatch that would render the next encrypted message undecryptable.
+func TestHandler_RotateAndFanOut_ErrNoCurrentKey_UsesPredictedVersion(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	mockKeys := NewMockRoomKeyStore(ctrl)
+
+	// currentPair simulates the key the handler fetched before calling rotateAndFanOut.
+	currentPair := &roomkeystore.VersionedKeyPair{
+		Version: 4,
+		KeyPair: roomkeystore.RoomKeyPair{
+			PrivateKey: bytes.Repeat([]byte{0xAA}, 32),
+		},
+	}
+	// predictedVersion = currentPair.Version + 1 = 5
+
+	// Step 1: Rotate fails with ErrNoCurrentKey — Valkey lost the current key
+	// between Get (which returned currentPair) and Rotate.
+	gomock.InOrder(
+		mockKeys.EXPECT().
+			Rotate(gomock.Any(), "test-room", gomock.Any()).
+			Return(0, roomkeystore.ErrNoCurrentKey),
+		// Step 2: fallback must write at predictedVersion=5, NOT at v0 via Set.
+		// If the bug were present (Set called instead), gomock would raise
+		// "unexpected call to Set" because Set is not expected here.
+		mockKeys.EXPECT().
+			SetWithVersion(gomock.Any(), "test-room", gomock.Any(), 5).
+			Return(nil),
+	)
+
+	h := &Handler{
+		store:     NewMockSubscriptionStore(ctrl),
+		siteID:    "site-a",
+		keyStore:  mockKeys,
+		keySender: testKeySender,
+		publish: func(_ context.Context, _ string, _ []byte, _ string) error {
+			return nil
+		},
+	}
+
+	// Call rotateAndFanOut directly — it is unexported but lives in package main,
+	// so the test (same package) can call it without test infrastructure.
+	// Pass an empty survivors slice: no fan-out side effects needed for this test.
+	err := h.rotateAndFanOut(context.Background(), "test-room", currentPair, nil)
+	require.NoError(t, err)
 }

@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from 'react'
 import { NatsProvider, useNats } from '@/context/NatsContext'
+import { RoomKeysProvider } from '@/context/RoomKeysContext'
 import { RoomEventsProvider } from '@/context/RoomEventsContext'
 import { ThreadEventsProvider } from '@/context/ThreadEventsContext'
 import LoginPage from '@/pages/LoginPage'
@@ -35,11 +36,13 @@ function AppContent() {
   }
 
   return (
-    <RoomEventsProvider>
-      <ThreadEventsProvider>
-        <MainApp />
-      </ThreadEventsProvider>
-    </RoomEventsProvider>
+    <RoomKeysProvider>
+      <RoomEventsProvider>
+        <ThreadEventsProvider>
+          <MainApp />
+        </ThreadEventsProvider>
+      </RoomEventsProvider>
+    </RoomKeysProvider>
   )
 }
 

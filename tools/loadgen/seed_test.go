@@ -41,23 +41,23 @@ func (f *fakeRoomKeyStore) Delete(_ context.Context, roomID string) error {
 func TestSeedRoomKeys_WritesOnePerRoom(t *testing.T) {
 	ks := newFakeRoomKeyStore()
 	keys := map[string]roomkeystore.RoomKeyPair{
-		"room-a": {PublicKey: []byte("pubA"), PrivateKey: []byte("privA")},
-		"room-b": {PublicKey: []byte("pubB"), PrivateKey: []byte("privB")},
-		"room-c": {PublicKey: []byte("pubC"), PrivateKey: []byte("privC")},
+		"room-a": {PrivateKey: []byte("privA")},
+		"room-b": {PrivateKey: []byte("privB")},
+		"room-c": {PrivateKey: []byte("privC")},
 	}
 
 	require.NoError(t, SeedRoomKeys(context.Background(), ks, keys))
 
 	assert.Len(t, ks.sets, 3)
-	assert.Equal(t, []byte("pubA"), ks.sets["room-a"].PublicKey)
+	assert.Equal(t, []byte("privA"), ks.sets["room-a"].PrivateKey)
 	assert.Equal(t, []byte("privB"), ks.sets["room-b"].PrivateKey)
-	assert.Equal(t, []byte("pubC"), ks.sets["room-c"].PublicKey)
+	assert.Equal(t, []byte("privC"), ks.sets["room-c"].PrivateKey)
 }
 
 func TestSeedRoomKeys_KeystoreError(t *testing.T) {
 	ks := newFakeRoomKeyStore()
 	ks.setErr = errors.New("boom")
-	keys := map[string]roomkeystore.RoomKeyPair{"room-a": {PublicKey: []byte("p"), PrivateKey: []byte("k")}}
+	keys := map[string]roomkeystore.RoomKeyPair{"room-a": {PrivateKey: []byte("k")}}
 
 	err := SeedRoomKeys(context.Background(), ks, keys)
 	require.Error(t, err)

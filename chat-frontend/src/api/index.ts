@@ -32,6 +32,7 @@ export { searchRooms } from './searchRooms'
 export { sendMessage } from './sendMessage'
 export { subscribeToRoomEvents } from './subscribeToRoomEvents'
 export { subscribeToRoomMetadataUpdates } from './subscribeToRoomMetadataUpdates'
+export { subscribeToRoomKeyEvents } from './subscribeToRoomKeyEvents'
 export { subscribeToSubscriptionUpdates } from './subscribeToSubscriptionUpdates'
 export { subscribeToUserRoomEvents } from './subscribeToUserRoomEvents'
 export { updateMemberRole } from './updateMemberRole'
@@ -72,4 +73,5 @@ export type {
   ChannelRef,
   HistoryConfig,
   HistoryMode,
+  RoomKeyEvent,
 } from './types'

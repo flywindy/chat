@@ -56,6 +56,10 @@ export function userRoomEvent(account: string): string {
   return `chat.user.${account}.event.room`
 }
 
+export function userRoomKey(account: string): string {
+  return `chat.user.${account}.event.room.key`
+}
+
 export function memberAdd(account: string, roomId: string, siteId: string): string {
   return `chat.user.${account}.request.room.${roomId}.${siteId}.member.add`
 }

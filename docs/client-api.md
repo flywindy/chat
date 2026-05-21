@@ -1852,7 +1852,7 @@ A `RoomEvent` published by `broadcast-worker`. Recipients: every client subscrib
 | `mentionAll` | boolean | Optional. `true` if the message mentioned `@all` or `@here`. |
 | `hasMention` | boolean | Optional. Per-recipient flag (DM event only). Always absent on channel events. |
 | `message` | object | Optional. The `ClientMessage` (see [Message schema](#message-schema) plus a `sender` Participant). Set for unencrypted rooms. |
-| `encryptedMessage` | object | Optional. Raw `roomcrypto.EncryptedMessage` JSON. Set for encrypted (channel) rooms. Use the room's current key to decrypt. |
+| `encryptedMessage` | object | Optional. The room ciphertext envelope `{version, nonce, ciphertext}` (see [§5.1](#51-room-encryption-keys)). Set for encrypted (channel) rooms. Clients decrypt by deriving the AES-256-GCM key from the room private key for `version` and unsealing with `nonce` + `ciphertext`. |
 
 ```json
 {
@@ -1866,9 +1866,9 @@ A `RoomEvent` published by `broadcast-worker`. Recipients: every client subscrib
   "lastMsgAt": "2026-05-06T07:55:00Z",
   "lastMsgId": "01970a4f8c2d7c9aQRST",
   "encryptedMessage": {
-    "v": 3,
-    "ciphertext": "<base64>",
-    "nonce": "<base64>"
+    "version": 3,
+    "nonce": "<base64-12-bytes>",
+    "ciphertext": "<base64-content-plus-16-byte-tag>"
   }
 }
 ```
@@ -1948,7 +1948,7 @@ Server-pushed events are delivered to clients on NATS subjects the client is alr
 
 ### 5.1 Room Encryption Keys
 
-Each room has a P-256 keypair generated server-side at create time. Channel rooms use the key for end-to-end message encryption: `broadcast-worker` populates `encryptedMessage` on channel events (§4.1) and clients use the private key to decrypt. DM and botDM rooms still receive a `RoomKeyEvent` at create time for implementation consistency, but currently broadcast plaintext `message` (no `encryptedMessage`), so clients may skip persisting DM/botDM keys.
+Each room has a 32-byte secret generated server-side at create time (`crypto/rand`). The secret is distributed to channel members and used directly as an AES-256-GCM key — no key derivation step. DM and botDM rooms receive a `RoomKeyEvent` at create time for implementation consistency, but currently broadcast plaintext `message` (no `encryptedMessage`), so clients may skip persisting DM/botDM keys.
 
 #### Subject
 
@@ -1964,17 +1964,21 @@ Clients are already authorized for `chat.user.{theirAccount}.>` and receive key 
 {
   "roomId": "<room id>",
   "version": 0,
-  "privateKey": "<base64-encoded 32-byte P-256 scalar>",
+  "privateKey": "<base64-encoded 32-byte room secret>",
   "timestamp": 1747000000000
 }
 ```
 
-`[]byte` fields marshal to standard base64 in JSON. The room's public key is server-side only (used by `broadcast-worker` to encrypt outgoing messages) and is not transmitted to clients — clients only need the private key to decrypt incoming ciphertext.
+`[]byte` fields marshal to standard base64 in JSON. The `privateKey` is the 32-byte room secret used directly as the AES-256-GCM key; no public key field is transmitted.
 
 #### Client behavior
 
 1. On every `RoomKeyEvent`, store the key under `(roomId, version) → privateKey`.
-2. When decrypting an incoming message, use the `version` stamped in the encrypted payload to look up the corresponding private key.
+2. To decrypt an incoming `encryptedMessage` payload:
+   - Look up `privateKey` for `(roomId, encryptedMessage.version)`.
+   - Use the 32-byte `privateKey` directly as the AES-256-GCM key (no key derivation step).
+   - Decrypt: `AES-GCM-Decrypt(privateKey, nonce, ciphertext, aad=empty)`. The ciphertext already includes the 16-byte GCM tag at the end (Go `cipher.AEAD.Seal` format).
+   - The plaintext is a UTF-8-encoded JSON `ClientMessage` (for `encryptedMessage`) or a UTF-8 string (for `messageEdited.encryptedNewContent`).
 3. Retain past versions to support history scrolling. The server retains the previous version in its store for at least `VALKEY_KEY_GRACE_PERIOD` (default 24h); after that, server-side decryption of old messages may not be possible, but clients holding old keys can still decrypt locally.
 
 #### When clients receive `RoomKeyEvent`s
@@ -1984,6 +1988,8 @@ Clients are already authorized for `chat.user.{theirAccount}.>` and receive key 
 - **Remove member (channels only):** the server rotates the room key. Surviving members receive a new `RoomKeyEvent` with an incremented `version`. The removed account stops receiving events for the room.
 
 Removed members keep prior keys for decrypting historical messages but cannot decrypt anything published after the rotation.
+
+**Initial key bootstrap on (re)connect:** live `RoomKeyEvent`s fire only when keys change. The initial set of keys for rooms the client is already subscribed to will be delivered as part of the `subscription.get*` RPC family (see user-service — to be documented). Until that extension lands, clients receive keys only via live events.
 
 ---
 

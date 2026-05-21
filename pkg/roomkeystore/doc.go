@@ -1,4 +1,4 @@
-// Package roomkeystore stores room encryption key pairs in Valkey.
+// Package roomkeystore stores room encryption secrets in Valkey.
 //
 // # Versioning
 //

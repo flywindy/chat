@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"slices"
@@ -1210,8 +1211,7 @@ func TestIntegration_CreateRoom_FansOutRoomKeyEvent(t *testing.T) {
 	keyStore := setupValkey(t)
 	const roomID = "test-fan-out-room"
 	seedPair := roomkeystore.RoomKeyPair{
-		PublicKey:  []byte("public-key-bytes"),
-		PrivateKey: []byte("private-key-bytes"),
+		PrivateKey: bytes.Repeat([]byte{0xAA}, 32),
 	}
 	_, err := keyStore.Set(ctx, roomID, seedPair)
 	require.NoError(t, err)
@@ -1272,7 +1272,7 @@ func TestIntegration_CreateRoom_FansOutRoomKeyEvent(t *testing.T) {
 		var evt model.RoomKeyEvent
 		require.NoError(t, json.Unmarshal(m.data, &evt))
 		assert.Equal(t, roomID, evt.RoomID, "RoomKeyEvent must carry the correct roomID")
-		assert.Empty(t, evt.PublicKey, "PublicKey must be omitted from the client wire payload")
+		assert.NotEmpty(t, evt.PrivateKey, "PrivateKey must be populated in the client wire payload")
 		assert.NotEmpty(t, evt.PrivateKey, "PrivateKey must be populated")
 	}
 	assert.ElementsMatch(t,

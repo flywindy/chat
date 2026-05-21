@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   userRoomEvent,
+  userRoomKey,
   roomEvent,
   memberAdd,
   memberRemove,
@@ -135,5 +136,11 @@ describe('subjects', () => {
       'chat.user.alice.request.user.site-A.subscription.count'
     )
   })
-
 })
+
+describe('userRoomKey', () => {
+  it('builds the per-user room-key event subject', () => {
+    expect(userRoomKey('alice')).toBe('chat.user.alice.event.room.key')
+  })
+})
+

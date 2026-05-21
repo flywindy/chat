@@ -83,11 +83,8 @@ func (s *MongoStore) EnsureIndexes(ctx context.Context) error {
 	}); err != nil {
 		return fmt.Errorf("ensure subscriptions (roomId,lastSeenAt) index: %w", err)
 	}
-	// Lookup index for FindDMSubscription, which filters on (u.account, name,
-	// roomType) without roomId. The existing (roomId, u.account) unique index
-	// can't satisfy this query as an index prefix because roomId isn't in the
-	// filter — without this index, every DM/BotDM lookup falls back to a
-	// collection scan on subscriptions.
+	// Lookup index for FindDMSubscription (filters on u.account+name).
+	// Without this index, FindDMSubscription falls back to a collection scan.
 	if _, err := s.subscriptions.Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys: bson.D{{Key: "u.account", Value: 1}, {Key: "name", Value: 1}},
 	}); err != nil {

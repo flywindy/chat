@@ -316,21 +316,24 @@ func (h *Handler) rotateAndFanOut(ctx context.Context, roomID string, currentPai
 	if currentPair != nil {
 		predictedVersion = currentPair.Version + 1
 	}
-	versioned := &roomkeystore.VersionedKeyPair{Version: predictedVersion, KeyPair: newPair}
+	versioned := &roomkeystore.VersionedKeyPair{Version: predictedVersion, KeyPair: *newPair}
 	h.fanOutRoomKeyToSurvivors(ctx, roomID, versioned, survivors)
 
 	if currentPair == nil {
-		if _, err := h.keyStore.Set(ctx, roomID, newPair); err != nil {
+		if _, err := h.keyStore.Set(ctx, roomID, *newPair); err != nil {
 			roomkeymetrics.ValkeyErrors.Add(ctx, 1, metric.WithAttributes(attribute.String("op", "Set")))
 			return fmt.Errorf("store room key (no prior): %w", err)
 		}
 		roomkeymetrics.KeyGenerated.Add(ctx, 1)
 		return nil
 	}
-	if _, err := h.keyStore.Rotate(ctx, roomID, newPair); err != nil {
+	if _, err := h.keyStore.Rotate(ctx, roomID, *newPair); err != nil {
 		if errors.Is(err, roomkeystore.ErrNoCurrentKey) {
-			if _, setErr := h.keyStore.Set(ctx, roomID, newPair); setErr != nil {
-				roomkeymetrics.ValkeyErrors.Add(ctx, 1, metric.WithAttributes(attribute.String("op", "Set")))
+			// Fan-out already committed survivors to predictedVersion; persist at
+			// the same version so broadcast-worker reads under the same key clients
+			// hold. Using Set here would stamp v0 and create a version mismatch.
+			if setErr := h.keyStore.SetWithVersion(ctx, roomID, *newPair, predictedVersion); setErr != nil {
+				roomkeymetrics.ValkeyErrors.Add(ctx, 1, metric.WithAttributes(attribute.String("op", "SetWithVersion")))
 				return fmt.Errorf("store room key (fallback): %w", setErr)
 			}
 			roomkeymetrics.KeyGenerated.Add(ctx, 1)

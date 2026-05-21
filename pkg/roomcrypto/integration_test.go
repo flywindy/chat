@@ -5,7 +5,6 @@ package roomcrypto
 import (
 	"bytes"
 	"context"
-	"crypto/ecdh"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
@@ -27,8 +26,7 @@ import (
 
 // decryptPayload is the JSON structure passed to the TypeScript decrypt script.
 type decryptPayload struct {
-	PrivateKey string            `json:"privateKey"` // base64(privKey.Bytes()) — 32-byte P-256 scalar
-	PublicKey  string            `json:"publicKey"`  // base64(pubKey.Bytes())  — 65-byte uncompressed point
+	PrivateKey string            `json:"privateKey"` // base64 — 32 bytes of high-entropy IKM
 	Message    *EncryptedMessage `json:"message"`
 }
 
@@ -101,18 +99,19 @@ func TestEncode_TypeScriptDecrypt(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			// Generate a fresh P-256 key pair for this subtest.
-			privKey, err := ecdh.P256().GenerateKey(rand.Reader)
+			// Generate a fresh 32-byte room private key (high-entropy IKM) for this subtest.
+			roomPriv := make([]byte, 32)
+			_, err := io.ReadFull(rand.Reader, roomPriv)
 			require.NoError(t, err)
 
-			// Encrypt with Go.
-			msg, err := Encode(tc.content, privKey.PublicKey().Bytes(), 0)
+			// Encrypt with Go (room private key used directly as AES-256-GCM key).
+			enc := NewEncoder()
+			msg, err := enc.Encode("room-integration", tc.content, roomPriv, 1)
 			require.NoError(t, err)
 
 			// Build the JSON payload the TypeScript script expects.
 			payload := decryptPayload{
-				PrivateKey: base64.StdEncoding.EncodeToString(privKey.Bytes()),
-				PublicKey:  base64.StdEncoding.EncodeToString(privKey.PublicKey().Bytes()),
+				PrivateKey: base64.StdEncoding.EncodeToString(roomPriv),
 				Message:    msg,
 			}
 			payloadJSON, err := json.Marshal(payload)
@@ -125,8 +124,8 @@ func TestEncode_TypeScriptDecrypt(t *testing.T) {
 			err = container.CopyFileToContainer(ctx, payloadFile, "/payload.json", 0o644)
 			require.NoError(t, err, "copy payload.json into container")
 
-			// Run the TypeScript decrypt script.
-			exitCode, reader, err := container.Exec(ctx, []string{"tsx", "/decrypt.ts", "/payload.json"})
+			// Run the TypeScript decrypt script, piping the payload via stdin.
+			exitCode, reader, err := container.Exec(ctx, []string{"sh", "-c", "cat /payload.json | tsx /decrypt.ts"})
 			require.NoError(t, err, "exec tsx decrypt")
 			stdout, combined := splitOutput(reader)
 			require.Equal(t, 0, exitCode, "decrypt script exited non-zero:\n%s", combined)

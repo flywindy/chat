@@ -39,10 +39,18 @@ type Handler struct {
 	pub       Publisher
 	keyStore  RoomKeyProvider
 	encrypt   bool
+	encoder   *roomcrypto.Encoder
 }
 
 func NewHandler(store Store, userStore userstore.UserStore, pub Publisher, keyStore RoomKeyProvider, encrypt bool) *Handler {
-	return &Handler{store: store, userStore: userStore, pub: pub, keyStore: keyStore, encrypt: encrypt}
+	return &Handler{
+		store:     store,
+		userStore: userStore,
+		pub:       pub,
+		keyStore:  keyStore,
+		encrypt:   encrypt,
+		encoder:   roomcrypto.NewEncoder(),
+	}
 }
 
 // HandleMessage processes a single MESSAGES_CANONICAL message payload.
@@ -209,7 +217,7 @@ func (h *Handler) encryptEditedContent(ctx context.Context, roomID string, edite
 	if err != nil {
 		return err
 	}
-	encrypted, err := roomcrypto.Encode(edited.NewContent, key.KeyPair.PublicKey, key.Version)
+	encrypted, err := h.encoder.Encode(roomID, edited.NewContent, key.KeyPair.PrivateKey, key.Version)
 	if err != nil {
 		return fmt.Errorf("encrypt edit content for room %s: %w", roomID, err)
 	}
@@ -253,7 +261,7 @@ func (h *Handler) publishChannelEvent(ctx context.Context, meta roommetacache.Me
 			return err
 		}
 
-		encrypted, err := roomcrypto.Encode(string(msgJSON), key.KeyPair.PublicKey, key.Version)
+		encrypted, err := h.encoder.Encode(meta.ID, string(msgJSON), key.KeyPair.PrivateKey, key.Version)
 		if err != nil {
 			return fmt.Errorf("encrypt message for room %s: %w", meta.ID, err)
 		}

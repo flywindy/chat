@@ -1,0 +1,9 @@
+{
+  "privateKey": "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=",
+  "plaintext": "fixture plaintext — encoded by the Go server, decoded by chat-frontend",
+  "message": {
+    "version": 1,
+    "nonce": "AAAAAAAAAAAAAAAA",
+    "ciphertext": "oBCjbcgncMVvRoVlGUTPgr9Xa4arlOlNDgUi0OPnlS5T/XELAmEELV0U2tgt1sfGwIg3QClV+arWLvN6mwVZYouONcolyueTq6J0SpCSQW7ZmWW3kkwzVw=="
+  }
+}

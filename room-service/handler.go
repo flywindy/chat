@@ -355,7 +355,7 @@ func (h *Handler) publishCreateRoom(ctx context.Context, req *model.CreateRoomRe
 		if err != nil {
 			return nil, fmt.Errorf("generate room key: %w", err)
 		}
-		if _, err := h.keyStore.Set(ctx, req.RoomID, pair); err != nil {
+		if _, err := h.keyStore.Set(ctx, req.RoomID, *pair); err != nil {
 			roomkeymetrics.ValkeyErrors.Add(ctx, 1, metric.WithAttributes(attribute.String("op", "Set")))
 			return nil, fmt.Errorf("store room key: %w", err)
 		}
@@ -1208,7 +1208,7 @@ func (h *Handler) handleEnsureRoomKey(ctx context.Context, data []byte) ([]byte,
 	if err != nil {
 		return nil, fmt.Errorf("ensure room key: generate key pair: %w", err)
 	}
-	ver, err := h.keyStore.Set(ctx, req.RoomID, newPair)
+	ver, err := h.keyStore.Set(ctx, req.RoomID, *newPair)
 	if err != nil {
 		return nil, fmt.Errorf("ensure room key: set: %w", err)
 	}

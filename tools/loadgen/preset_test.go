@@ -69,8 +69,6 @@ func TestBuildFixtures_RoomKeysOnePerRoom(t *testing.T) {
 	for _, r := range f.Rooms {
 		pair, ok := f.RoomKeys[r.ID]
 		require.True(t, ok, "missing key for room %s", r.ID)
-		// P-256 uncompressed public key is 65 bytes; scalar is 32 bytes.
-		assert.Len(t, pair.PublicKey, 65)
 		assert.Len(t, pair.PrivateKey, 32)
 	}
 }

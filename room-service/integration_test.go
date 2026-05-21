@@ -1145,12 +1145,11 @@ func TestRoomsInfoBatchRPC(t *testing.T) {
 		require.NoError(t, store.CreateRoom(ctx, &rooms[i]))
 	}
 
-	pubKey := bytes.Repeat([]byte{0xAB}, 65)
 	privKey1 := bytes.Repeat([]byte{0x01}, 32)
 	privKey2 := bytes.Repeat([]byte{0x02}, 32)
-	_, err := keyStore.Set(ctx, "r1", roomkeystore.RoomKeyPair{PublicKey: pubKey, PrivateKey: privKey1})
+	_, err := keyStore.Set(ctx, "r1", roomkeystore.RoomKeyPair{PrivateKey: privKey1})
 	require.NoError(t, err)
-	_, err = keyStore.Set(ctx, "r2", roomkeystore.RoomKeyPair{PublicKey: pubKey, PrivateKey: privKey2})
+	_, err = keyStore.Set(ctx, "r2", roomkeystore.RoomKeyPair{PrivateKey: privKey2})
 	require.NoError(t, err)
 
 	otelNC, err := otelnats.Connect(natsURL)
@@ -1251,7 +1250,6 @@ func TestIntegration_CreateRoom_PersistsKeyInValkey(t *testing.T) {
 	pair, err := keyStore.Get(ctx, reply.RoomID)
 	require.NoError(t, err)
 	require.NotNil(t, pair, "room key must be stored in Valkey immediately after create")
-	assert.NotEmpty(t, pair.KeyPair.PublicKey, "public key must be non-empty")
 	assert.NotEmpty(t, pair.KeyPair.PrivateKey, "private key must be non-empty")
 	assert.Equal(t, 0, pair.Version, "freshly created room key must have version 0")
 }
@@ -1535,3 +1533,4 @@ func TestMongoStore_ListReadReceipts_Integration(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, rows)
 }
+

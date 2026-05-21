@@ -26,11 +26,6 @@ func (m *mockPublisher) Publish(subject string, data []byte) error {
 }
 
 func TestSender_Send(t *testing.T) {
-	pub65 := make([]byte, 65)
-	pub65[0] = 0x04
-	for i := 1; i < 65; i++ {
-		pub65[i] = byte(i)
-	}
 	priv32 := make([]byte, 32)
 	for i := range priv32 {
 		priv32[i] = byte(i + 100)
@@ -50,7 +45,6 @@ func TestSender_Send(t *testing.T) {
 			evt: model.RoomKeyEvent{
 				RoomID:     "room-1",
 				Version:    0,
-				PublicKey:  pub65,
 				PrivateKey: priv32,
 			},
 			wantSubj: "chat.user.alice.event.room.key",
@@ -61,7 +55,6 @@ func TestSender_Send(t *testing.T) {
 			evt: model.RoomKeyEvent{
 				RoomID:     "room-2",
 				Version:    1,
-				PublicKey:  []byte{0x04, 0x01},
 				PrivateKey: []byte{0x0a},
 			},
 			wantSubj: "chat.user.bob.event.room.key",
@@ -72,7 +65,6 @@ func TestSender_Send(t *testing.T) {
 			evt: model.RoomKeyEvent{
 				RoomID:     "room-3",
 				Version:    2,
-				PublicKey:  []byte{0x04},
 				PrivateKey: []byte{0x01},
 			},
 			publishErr: errors.New("connection lost"),
@@ -83,11 +75,10 @@ func TestSender_Send(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Deep-copy the caller's event for the post-call non-mutation check:
-			// the shallow struct copy alone would share PublicKey / PrivateKey
-			// backing arrays with tt.evt, so an in-place slice mutation by Send
-			// would be invisible to a plain assert.Equal(before, tt.evt).
+			// the shallow struct copy alone would share PrivateKey backing array
+			// with tt.evt, so an in-place slice mutation by Send would be
+			// invisible to a plain assert.Equal(before, tt.evt).
 			before := tt.evt
-			before.PublicKey = append([]byte(nil), tt.evt.PublicKey...)
 			before.PrivateKey = append([]byte(nil), tt.evt.PrivateKey...)
 
 			pub := &mockPublisher{err: tt.publishErr}
@@ -114,7 +105,6 @@ func TestSender_Send(t *testing.T) {
 			require.NoError(t, json.Unmarshal(pub.data, &got))
 			assert.Equal(t, tt.evt.RoomID, got.RoomID)
 			assert.Equal(t, tt.evt.Version, got.Version)
-			assert.Equal(t, tt.evt.PublicKey, got.PublicKey)
 			assert.Equal(t, tt.evt.PrivateKey, got.PrivateKey)
 			assert.Greater(t, got.Timestamp, int64(0))
 		})

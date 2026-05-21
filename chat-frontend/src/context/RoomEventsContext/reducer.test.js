@@ -215,6 +215,32 @@ describe('roomEventsReducer: MESSAGE_RECEIVED', () => {
     })
   })
 
+  it('treats a successfully-decrypted MESSAGE_RECEIVED as a normal new-message event', () => {
+    // After Task 25, useRoomSubscriptions decrypts evt.encryptedMessage and
+    // dispatches with .message populated AND .encryptedMessage cleared.
+    // The reducer should see no difference between this and a plaintext event:
+    // no placeholder, content is the decoded plaintext, encrypted flag unset.
+    const event = newMessageEvent({
+      message: {
+        id: 'm-decoded',
+        roomId: 'a',
+        content: 'decrypted body',
+        createdAt: '2026-05-20T00:00:00Z',
+        sender: { account: 'bob', engName: 'Bob' },
+      },
+      lastMsgId: 'm-decoded',
+      encryptedMessage: undefined,
+    })
+    const next = roomEventsReducer(initialState, {
+      type: 'MESSAGE_RECEIVED',
+      event,
+    })
+    const inserted = next.roomState.a.messages.find((m) => m.id === 'm-decoded')
+    expect(inserted).toBeDefined()
+    expect(inserted.content).toBe('decrypted body')
+    expect(inserted.encrypted).toBeFalsy()
+  })
+
   it('does not drop an event that has both message and encryptedMessage — plaintext wins', () => {
     // Forward-compatible: if a future broadcaster sends both lanes (e.g.
     // during a rollout), the plaintext path is authoritative.

@@ -5,7 +5,6 @@ package roomkeysender
 import (
 	"bytes"
 	"context"
-	"crypto/ecdh"
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
@@ -249,11 +248,10 @@ func TestRoomKeySender_TypeScriptClient(t *testing.T) {
 	nc, wsURL := setupNATS(t, nw)
 	nodeContainer := setupNode(t, nw)
 
-	// 2. Generate a fresh P-256 key pair.
-	privKey, err := ecdh.P256().GenerateKey(rand.Reader)
+	// 2. Generate a fresh 32-byte room secret.
+	privKeyBytes := make([]byte, 32)
+	_, err := rand.Read(privKeyBytes)
 	require.NoError(t, err)
-	pubKeyBytes := privKey.PublicKey().Bytes()
-	privKeyBytes := privKey.Bytes()
 
 	// 3. Test parameters.
 	account := "alice"
@@ -292,7 +290,6 @@ func TestRoomKeySender_TypeScriptClient(t *testing.T) {
 	evt := &model.RoomKeyEvent{
 		RoomID:     roomID,
 		Version:    version,
-		PublicKey:  pubKeyBytes,
 		PrivateKey: privKeyBytes,
 	}
 	err = sender.Send(account, *evt)
@@ -301,8 +298,10 @@ func TestRoomKeySender_TypeScriptClient(t *testing.T) {
 	// 7. Small delay to ensure key is received before the encrypted message.
 	time.Sleep(500 * time.Millisecond)
 
-	// 8. Encrypt a message with the room public key.
-	encrypted, err := roomcrypto.Encode(plaintext, pubKeyBytes, version)
+	// 8. Encrypt a message using the Encoder (room private key used directly
+	// as AES-256-GCM key — no key derivation step).
+	encoder := roomcrypto.NewEncoder()
+	encrypted, err := encoder.Encode(roomID, plaintext, privKeyBytes, version)
 	require.NoError(t, err, "encrypt message")
 	encryptedJSON, err := json.Marshal(encrypted)
 	require.NoError(t, err, "marshal encrypted message")

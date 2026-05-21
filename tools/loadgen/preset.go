@@ -1,7 +1,6 @@
 package main
 
 import (
-	"crypto/ecdh"
 	"fmt"
 	"io"
 	"math/rand"
@@ -144,28 +143,15 @@ func BuildFixtures(p *Preset, seed int64, siteID string) Fixtures {
 	return Fixtures{Users: users, Rooms: rooms, Subscriptions: subs, RoomKeys: roomKeys}
 }
 
-// deterministicRoomKeyPair builds a P-256 keypair from bytes drawn from r.
-// Reads 32-byte scalars directly via NewPrivateKey instead of GenerateKey
-// because the stdlib's GenerateKey calls randutil.MaybeReadByte, which draws
-// 0 or 1 byte from its internal non-deterministic source and breaks
-// reproducibility across calls with the same math/rand seed. The retry loop
-// covers the astronomically rare case of a zero or out-of-range scalar; it
-// consumes only deterministic bytes from r so the output stays a function of
-// the seed alone.
+// deterministicRoomKeyPair generates a 32-byte room secret from bytes drawn
+// from r. The secret is used directly as an AES-256-GCM key by roomcrypto; no
+// key derivation step is needed. The name retains "KeyPair" for call-site compatibility.
 func deterministicRoomKeyPair(r io.Reader) roomkeystore.RoomKeyPair {
 	buf := make([]byte, 32)
-	for {
-		if _, err := io.ReadFull(r, buf); err != nil {
-			panic(fmt.Errorf("read deterministic key bytes: %w", err))
-		}
-		priv, err := ecdh.P256().NewPrivateKey(buf)
-		if err == nil {
-			return roomkeystore.RoomKeyPair{
-				PublicKey:  priv.PublicKey().Bytes(),
-				PrivateKey: priv.Bytes(),
-			}
-		}
+	if _, err := io.ReadFull(r, buf); err != nil {
+		panic(fmt.Errorf("read deterministic key bytes: %w", err))
 	}
+	return roomkeystore.RoomKeyPair{PrivateKey: buf}
 }
 
 func pickMembers(r *rand.Rand, p *Preset, roomIdx, totalRooms int, room *model.Room, users []model.User) []model.User {

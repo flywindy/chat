@@ -262,6 +262,19 @@ export interface SubscriptionUpdateEvent {
   timestamp: number
 }
 
+/**
+ * Mirrors pkg/model.RoomKeyEvent — payload of
+ * chat.user.{account}.event.room.key. PrivateKey is base64-encoded on
+ * the wire (Go's encoding/json default for []byte). PublicKey is
+ * omitted from the client wire payload.
+ */
+export interface RoomKeyEvent {
+  roomId: string
+  version: number
+  privateKey: string  // base64
+  timestamp: number
+}
+
 /** Two-phase async-job result returned by `requestWithAsyncResult`. */
 export interface AsyncJobResult<S = unknown, A = unknown> {
   requestId: string

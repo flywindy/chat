@@ -23,6 +23,12 @@ import MainApp from './MainApp'
 // If this test passes but the user reports the panel doesn't appear, the
 // remaining suspects are CSS clipping or browser-specific (nginx caching).
 
+// RoomEventsProvider calls useRoomKeys() internally. Stub it so this test
+// doesn't need a real RoomKeysProvider (which would try to connect to NATS).
+vi.mock('@/context/RoomKeysContext', () => ({
+  useRoomKeys: () => ({ decrypt: async () => null, hasKey: () => false }),
+}))
+
 vi.mock('./AppHeader/AppHeader', () => ({
   default: ({ onSelectRoom }) => (
     <header>

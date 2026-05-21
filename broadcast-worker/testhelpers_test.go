@@ -3,16 +3,12 @@ package main
 import (
 	"crypto/aes"
 	"crypto/cipher"
-	"crypto/ecdh"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	"io"
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"golang.org/x/crypto/hkdf"
 
 	"github.com/hmchangw/chat/pkg/model"
 	"github.com/hmchangw/chat/pkg/roomcrypto"
@@ -21,36 +17,20 @@ import (
 
 func testRoomKey(t *testing.T) *roomkeystore.VersionedKeyPair {
 	t.Helper()
-	priv, err := ecdh.P256().GenerateKey(rand.Reader)
+	buf := make([]byte, 32)
+	_, err := rand.Read(buf)
 	require.NoError(t, err)
 	return &roomkeystore.VersionedKeyPair{
 		Version: 3,
 		KeyPair: roomkeystore.RoomKeyPair{
-			PublicKey:  priv.PublicKey().Bytes(),
-			PrivateKey: priv.Bytes(),
+			PrivateKey: buf,
 		},
 	}
 }
 
 func decryptForTest(env *roomcrypto.EncryptedMessage, roomPrivateKey []byte) (string, error) {
-	privKey, err := ecdh.P256().NewPrivateKey(roomPrivateKey)
-	if err != nil {
-		return "", fmt.Errorf("parse room private key: %w", err)
-	}
-	ephPubKey, err := ecdh.P256().NewPublicKey(env.EphemeralPublicKey)
-	if err != nil {
-		return "", fmt.Errorf("parse ephemeral public key: %w", err)
-	}
-	sharedSecret, err := privKey.ECDH(ephPubKey)
-	if err != nil {
-		return "", fmt.Errorf("ecdh: %w", err)
-	}
-	aesKey := make([]byte, 32)
-	hkdfReader := hkdf.New(sha256.New, sharedSecret, nil, []byte("room-message-encryption"))
-	if _, err := io.ReadFull(hkdfReader, aesKey); err != nil {
-		return "", fmt.Errorf("hkdf: %w", err)
-	}
-	block, err := aes.NewCipher(aesKey)
+	// The room private key is used directly as the AES-256-GCM key (no HKDF step).
+	block, err := aes.NewCipher(roomPrivateKey)
 	if err != nil {
 		return "", fmt.Errorf("aes cipher: %w", err)
 	}

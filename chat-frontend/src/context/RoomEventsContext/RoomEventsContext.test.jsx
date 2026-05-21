@@ -6,6 +6,14 @@ import { RoomEventsProvider, useRoomEvents, useRoomSummaries, useSidebarSections
 import { BUFFER_MODE } from './reducer'
 // jumpToMessage / resetToLiveTail tests — see suite below
 
+// RoomEventsContext now calls useRoomKeys() internally. Stub it out so tests
+// don't need a real RoomKeysProvider (which would try to connect to NATS and
+// fetch key material). The no-op decrypt matches the default used in
+// useRoomSubscriptions when no key is available.
+vi.mock('@/context/RoomKeysContext', () => ({
+  useRoomKeys: () => ({ decrypt: async () => null, hasKey: () => false }),
+}))
+
 /** Turn an inline "room-shaped" fixture into a subscription record that
  *  the new bootstrap (3 subscription RPCs) returns. The real user-service
  *  embeds room metadata (userCount, lastMsgAt) inline on each subscription
