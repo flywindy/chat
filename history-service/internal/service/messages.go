@@ -12,6 +12,7 @@ import (
 	"github.com/hmchangw/chat/history-service/internal/models"
 	"github.com/hmchangw/chat/pkg/model"
 	"github.com/hmchangw/chat/pkg/natsrouter"
+	"github.com/hmchangw/chat/pkg/natsutil"
 	"github.com/hmchangw/chat/pkg/subject"
 )
 
@@ -356,7 +357,7 @@ func (s *HistoryService) EditMessage(c *natsrouter.Context, siteID string, req m
 		SiteID:    siteID,
 		Timestamp: editedAtMs,
 	}
-	s.publishCanonicalBestEffort(c, subject.MsgCanonicalUpdated(siteID), &canonicalEvt, req.MessageID, roomID)
+	s.publishCanonicalBestEffort(c, subject.MsgCanonicalUpdated(siteID), &canonicalEvt)
 
 	return &models.EditMessageResponse{
 		MessageID: req.MessageID,
@@ -431,7 +432,7 @@ func (s *HistoryService) DeleteMessage(c *natsrouter.Context, siteID string, req
 		SiteID:    siteID,
 		Timestamp: deletedAtMs,
 	}
-	s.publishCanonicalBestEffort(c, subject.MsgCanonicalDeleted(siteID), &canonicalEvt, req.MessageID, roomID)
+	s.publishCanonicalBestEffort(c, subject.MsgCanonicalDeleted(siteID), &canonicalEvt)
 
 	return &models.DeleteMessageResponse{
 		MessageID: req.MessageID,
@@ -439,18 +440,18 @@ func (s *HistoryService) DeleteMessage(c *natsrouter.Context, siteID string, req
 	}, nil
 }
 
-// publishCanonicalBestEffort marshals and publishes a canonical MessageEvent.
-// Cassandra is already the source of truth, so a marshal/publish failure is
-// logged and swallowed rather than failing the RPC (spec D2).
-func (s *HistoryService) publishCanonicalBestEffort(c *natsrouter.Context, subj string, evt *model.MessageEvent, messageID, roomID string) {
+// publishCanonicalBestEffort publishes a canonical MessageEvent best-effort:
+// Cassandra is the source of truth, so marshal/publish failures are logged
+// and swallowed rather than failing the RPC.
+func (s *HistoryService) publishCanonicalBestEffort(c *natsrouter.Context, subj string, evt *model.MessageEvent) {
 	payload, err := json.Marshal(evt)
 	if err != nil {
 		slog.Warn("canonical marshal failed",
-			"error", err, "subject", subj, "messageID", messageID, "roomID", roomID)
+			"error", err, "subject", subj, "messageID", evt.Message.ID, "roomID", evt.Message.RoomID)
 		return
 	}
-	if err := s.publisher.Publish(c, subj, payload); err != nil {
+	if err := s.publisher.Publish(c, subj, payload, natsutil.CanonicalDedupID(evt)); err != nil {
 		slog.Warn("canonical publish failed",
-			"error", err, "subject", subj, "messageID", messageID, "roomID", roomID)
+			"error", err, "subject", subj, "messageID", evt.Message.ID, "roomID", evt.Message.RoomID)
 	}
 }

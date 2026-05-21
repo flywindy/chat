@@ -102,14 +102,15 @@ type recordingPublisher struct {
 type recordedMessage struct {
 	Subject string
 	Data    []byte
+	MsgID   string
 }
 
-func (p *recordingPublisher) Publish(_ context.Context, subj string, data []byte) error {
+func (p *recordingPublisher) Publish(_ context.Context, subj string, data []byte, msgID string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	cp := make([]byte, len(data))
 	copy(cp, data)
-	p.sent = append(p.sent, recordedMessage{Subject: subj, Data: cp})
+	p.sent = append(p.sent, recordedMessage{Subject: subj, Data: cp, MsgID: msgID})
 	return nil
 }
 

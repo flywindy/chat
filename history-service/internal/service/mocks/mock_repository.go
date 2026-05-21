@@ -483,17 +483,17 @@ func (m *MockEventPublisher) EXPECT() *MockEventPublisherMockRecorder {
 }
 
 // Publish mocks base method.
-func (m *MockEventPublisher) Publish(ctx context.Context, subject string, data []byte) error {
+func (m *MockEventPublisher) Publish(ctx context.Context, subject string, data []byte, msgID string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Publish", ctx, subject, data)
+	ret := m.ctrl.Call(m, "Publish", ctx, subject, data, msgID)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // Publish indicates an expected call of Publish.
-func (mr *MockEventPublisherMockRecorder) Publish(ctx, subject, data any) *gomock.Call {
+func (mr *MockEventPublisherMockRecorder) Publish(ctx, subject, data, msgID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Publish", reflect.TypeOf((*MockEventPublisher)(nil).Publish), ctx, subject, data)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Publish", reflect.TypeOf((*MockEventPublisher)(nil).Publish), ctx, subject, data, msgID)
 }
 
 // MockThreadRoomRepository is a mock of ThreadRoomRepository interface.

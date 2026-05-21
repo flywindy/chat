@@ -223,7 +223,7 @@ func (h *Handler) processMessage(ctx context.Context, account, roomID, siteID st
 
 	canonicalSubj := subject.MsgCanonicalCreated(siteID)
 	canonicalMsg := natsutil.NewMsg(ctx, canonicalSubj, evtData)
-	if _, err := h.publish(ctx, canonicalMsg, jetstream.WithMsgID(msg.ID)); err != nil {
+	if _, err := h.publish(ctx, canonicalMsg, jetstream.WithMsgID(natsutil.CanonicalDedupID(&evt))); err != nil {
 		return nil, &infraError{cause: fmt.Errorf("publish to MESSAGES_CANONICAL: %w", err)}
 	}
 

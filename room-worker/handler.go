@@ -507,7 +507,7 @@ func (h *Handler) processRemoveIndividual(ctx context.Context, req *model.Remove
 		Timestamp: now.UnixMilli(),
 	}
 	msgEvtData, _ := json.Marshal(msgEvt)
-	if err := h.publish(ctx, subject.MsgCanonicalCreated(h.siteID), msgEvtData, sysMsg.ID); err != nil {
+	if err := h.publish(ctx, subject.MsgCanonicalCreated(h.siteID), msgEvtData, natsutil.CanonicalDedupID(&msgEvt)); err != nil {
 		return fmt.Errorf("publish individual removal system message: %w", err)
 	}
 
@@ -699,7 +699,7 @@ func (h *Handler) processRemoveOrg(ctx context.Context, req *model.RemoveMemberR
 		Timestamp: now.UnixMilli(),
 	}
 	msgEvtData, _ := json.Marshal(msgEvt)
-	if err := h.publish(ctx, subject.MsgCanonicalCreated(h.siteID), msgEvtData, sysMsg.ID); err != nil {
+	if err := h.publish(ctx, subject.MsgCanonicalCreated(h.siteID), msgEvtData, natsutil.CanonicalDedupID(&msgEvt)); err != nil {
 		return fmt.Errorf("publish org removal system message: %w", err)
 	}
 
@@ -1108,7 +1108,7 @@ func (h *Handler) processAddMembers(ctx context.Context, data []byte) (err error
 			Timestamp: now.UnixMilli(),
 		}
 		msgEvtData, _ := json.Marshal(msgEvt)
-		if err := h.publish(ctx, subject.MsgCanonicalCreated(room.SiteID), msgEvtData, sysMsg.ID); err != nil {
+		if err := h.publish(ctx, subject.MsgCanonicalCreated(room.SiteID), msgEvtData, natsutil.CanonicalDedupID(&msgEvt)); err != nil {
 			return fmt.Errorf("publish add-members system message: %w", err)
 		}
 	}
@@ -1579,7 +1579,7 @@ func (h *Handler) publishCanonical(ctx context.Context, msg *model.Message, site
 	if err != nil {
 		return fmt.Errorf("marshal MessageEvent: %w", err)
 	}
-	return h.publish(ctx, subject.MsgCanonicalCreated(siteID), data, msg.ID)
+	return h.publish(ctx, subject.MsgCanonicalCreated(siteID), data, natsutil.CanonicalDedupID(&evt))
 }
 
 // Sync DM endpoint handlers (chat.server.request.room.{siteID}.create.dm).

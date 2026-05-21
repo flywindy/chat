@@ -19,6 +19,7 @@ import (
 	"github.com/hmchangw/chat/history-service/internal/service/mocks"
 	"github.com/hmchangw/chat/pkg/model"
 	"github.com/hmchangw/chat/pkg/natsrouter"
+	"github.com/hmchangw/chat/pkg/natsutil"
 	"github.com/hmchangw/chat/pkg/subject"
 )
 
@@ -1082,8 +1083,8 @@ func TestHistoryService_EditMessage_PublishesCanonicalUpdatedEvent(t *testing.T)
 	msgs.EXPECT().UpdateMessageContent(gomock.Any(), hydrated, "updated content", gomock.Any()).Return(nil)
 
 	pub.EXPECT().
-		Publish(gomock.Any(), subject.MsgCanonicalUpdated("site-test"), gomock.Any()).
-		DoAndReturn(func(_ context.Context, _ string, data []byte) error {
+		Publish(gomock.Any(), subject.MsgCanonicalUpdated("site-test"), gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, _ string, data []byte, _ string) error {
 			var evt model.MessageEvent
 			require.NoError(t, json.Unmarshal(data, &evt))
 			assert.Equal(t, model.EventUpdated, evt.Event)
@@ -1123,7 +1124,7 @@ func TestHistoryService_EditMessage_PublishFailureDoesNotFailRPC(t *testing.T) {
 	msgs.EXPECT().UpdateMessageContent(gomock.Any(), hydrated, "updated content", gomock.Any()).Return(nil)
 
 	pub.EXPECT().
-		Publish(gomock.Any(), subject.MsgCanonicalUpdated("site-test"), gomock.Any()).
+		Publish(gomock.Any(), subject.MsgCanonicalUpdated("site-test"), gomock.Any(), gomock.Any()).
 		Return(errors.New("nats down"))
 
 	resp, err := svc.EditMessage(c, "site-test", models.EditMessageRequest{
@@ -1132,6 +1133,37 @@ func TestHistoryService_EditMessage_PublishFailureDoesNotFailRPC(t *testing.T) {
 	})
 	require.NoError(t, err, "publish failure must not fail the RPC")
 	require.NotNil(t, resp)
+}
+
+// Nats-Msg-Id shape "{messageID}:updated:{editedAtMs}": the op suffix avoids
+// collision with gatekeeper's `.created` key (bare messageID); editedAtMs
+// gives each distinct edit its own key.
+func TestHistoryService_EditMessage_PassesDedupMessageID(t *testing.T) {
+	svc, msgs, subs, pub, _ := newService(t)
+	c := testContext()
+
+	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, true, nil)
+	hydrated := &models.Message{
+		MessageID: "msg-1",
+		RoomID:    "r1",
+		Sender:    models.Participant{Account: "u1", ID: "u1-id"},
+		CreatedAt: time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC),
+		Msg:       "original",
+	}
+	msgs.EXPECT().GetMessageByID(gomock.Any(), "msg-1").Return(hydrated, nil)
+	msgs.EXPECT().UpdateMessageContent(gomock.Any(), hydrated, "updated", gomock.Any()).Return(nil)
+
+	pub.EXPECT().
+		Publish(gomock.Any(), subject.MsgCanonicalUpdated("site-test"), gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, _ string, data []byte, msgID string) error {
+			var evt model.MessageEvent
+			require.NoError(t, json.Unmarshal(data, &evt))
+			assert.Equal(t, natsutil.CanonicalDedupID(&evt), msgID)
+			return nil
+		})
+
+	_, err := svc.EditMessage(c, "site-test", models.EditMessageRequest{MessageID: "msg-1", NewMsg: "updated"})
+	require.NoError(t, err)
 }
 
 // --- DeleteMessage ---
@@ -1314,7 +1346,7 @@ func TestHistoryService_DeleteMessage_PublishFails(t *testing.T) {
 		})
 
 	pub.EXPECT().
-		Publish(gomock.Any(), subject.MsgCanonicalDeleted("site-test"), gomock.Any()).
+		Publish(gomock.Any(), subject.MsgCanonicalDeleted("site-test"), gomock.Any(), gomock.Any()).
 		Return(fmt.Errorf("nats disconnected"))
 
 	resp, err := svc.DeleteMessage(c, "site-test", models.DeleteMessageRequest{MessageID: "m-abc"})
@@ -1344,8 +1376,8 @@ func TestHistoryService_DeleteMessage_PublishesCanonicalDeletedEvent(t *testing.
 		})
 
 	pub.EXPECT().
-		Publish(gomock.Any(), subject.MsgCanonicalDeleted("site-test"), gomock.Any()).
-		DoAndReturn(func(_ context.Context, _ string, data []byte) error {
+		Publish(gomock.Any(), subject.MsgCanonicalDeleted("site-test"), gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, _ string, data []byte, _ string) error {
 			var evt model.MessageEvent
 			require.NoError(t, json.Unmarshal(data, &evt))
 			assert.Equal(t, model.EventDeleted, evt.Event)
@@ -1360,6 +1392,40 @@ func TestHistoryService_DeleteMessage_PublishesCanonicalDeletedEvent(t *testing.
 	resp, err := svc.DeleteMessage(c, "site-test", models.DeleteMessageRequest{MessageID: "msg-1"})
 	require.NoError(t, err)
 	require.NotNil(t, resp)
+}
+
+// Nats-Msg-Id shape "{messageID}:deleted": distinct from the `.created` key
+// so the JetStream dedup window doesn't collapse a delete against an earlier
+// create.
+func TestHistoryService_DeleteMessage_PassesDedupMessageID(t *testing.T) {
+	svc, msgs, subs, pub, _ := newService(t)
+	c := testContext()
+
+	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, true, nil)
+	hydrated := &models.Message{
+		MessageID: "msg-1",
+		RoomID:    "r1",
+		Sender:    models.Participant{Account: "u1", ID: "u1-id"},
+		Msg:       "content",
+	}
+	msgs.EXPECT().GetMessageByID(gomock.Any(), "msg-1").Return(hydrated, nil)
+	msgs.EXPECT().
+		SoftDeleteMessage(gomock.Any(), hydrated, gomock.Any()).
+		DoAndReturn(func(_ context.Context, _ *models.Message, deletedAt time.Time) (time.Time, bool, error) {
+			return deletedAt, true, nil
+		})
+
+	pub.EXPECT().
+		Publish(gomock.Any(), subject.MsgCanonicalDeleted("site-test"), gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, _ string, data []byte, msgID string) error {
+			var evt model.MessageEvent
+			require.NoError(t, json.Unmarshal(data, &evt))
+			assert.Equal(t, natsutil.CanonicalDedupID(&evt), msgID)
+			return nil
+		})
+
+	_, err := svc.DeleteMessage(c, "site-test", models.DeleteMessageRequest{MessageID: "msg-1"})
+	require.NoError(t, err)
 }
 
 // ============================================================

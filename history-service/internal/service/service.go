@@ -52,10 +52,11 @@ type RoomRepository interface {
 	GetRoomTimes(ctx context.Context, roomID string) (lastMsgAt, createdAt time.Time, err error)
 }
 
-// EventPublisher publishes live events to a NATS subject. Implemented by a
-// thin wrapper around *otelnats.Conn in main.go.
+// EventPublisher publishes canonical events to a JetStream-backed NATS
+// subject. msgID is sent as the Nats-Msg-Id header so the server collapses
+// duplicate publishes within the stream's dedup window.
 type EventPublisher interface {
-	Publish(ctx context.Context, subject string, data []byte) error
+	Publish(ctx context.Context, subject string, data []byte, msgID string) error
 }
 
 type ThreadRoomRepository interface {
