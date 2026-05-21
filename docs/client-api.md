@@ -25,7 +25,6 @@ paths.
    - [3.1 room-service](#31-room-service)
    - [3.2 history-service](#32-history-service)
    - [3.3 search-service](#33-search-service)
-   - [3.4 user-service (mock)](#34-user-service-mock)
 4. [Message Send](#4-message-send)
 5. [Server-Pushed Events](#5-server-pushed-events)
    - [5.1 Room Encryption Keys](#51-room-encryption-keys)
@@ -1733,44 +1732,6 @@ The response is a top-level JSON array of `SearchUser` objects (no wrapping obje
 |---|---|
 | `bad_request` | `query` is missing, empty, or whitespace-only. |
 | `internal` | Third-party HR endpoint unavailable or returned a non-2xx status. The raw third-party error is never forwarded to the caller. |
-
----
-
-### 3.4 user-service (mock)
-
-> **Dev-only.** Implemented by `mock-user-service` with hardcoded
-> responses. Subjects and shapes are stable; switch to a real
-> implementation later by swapping the handler bodies.
-
-All subjects share the prefix `chat.user.{account}.request.user.{siteID}.`
-unless noted. siteID must match the deployed mock's `SITE_ID`; otherwise
-the reply is `{"error":"unknown site","code":"not_found"}`.
-
-| # | Suffix | Builder | Request | Response |
-|---|---|---|---|---|
-| 1 | `status.getByName` | `subject.UserStatusGetByName(account, siteID)` | `{"name": "<string>"}` | `{"name": "<echoed>", "statusText": "available", "statusIsShow": true}` |
-| 2 | `status.set` | `subject.UserStatusSet(account, siteID)` | `{"statusText": "<string>", "statusIsShow": <bool>}` | `{"success": true}` |
-| 3 | `profile.getByName` | `subject.UserProfileGetByName(account, siteID)` | `{"name": "<string>"}` | `{"name": "<echoed>", "displayName": "Mock User", "email": "mock@example.test"}` |
-| 4 | `subscription.getCurrent` | `subject.UserSubscriptionGetCurrent(account, siteID)` | `{"favorite": <bool?>, "membersContain": <string[]?>, "accountNames": <string[]?>}` | `{"subscriptions": [<Subscription>, <Subscription>], "total": 2}` |
-| 5 | `subscription.getRooms` | `subject.UserSubscriptionGetRooms(account, siteID)` | same as #4 | same as #4 |
-| 6 | `subscription.getChannels` | `subject.UserSubscriptionGetChannels(account, siteID)` | same as #4 | same as #4 |
-| 7 | `subscription.getDM` | `subject.UserSubscriptionGetDM(account, siteID)` | `{"targetAccount": "<string>"}` | `{"subscription": <Subscription with User.Account == targetAccount>}` |
-| 8 | `subscription.getApps` | `subject.UserSubscriptionGetApps(account, siteID)` | `{"favorite": <bool?>}` | `{"subscriptions": [<Subscription>, <Subscription>], "total": 2}` |
-| 9 | `subscription.subscribeApp` | `subject.UserSubscriptionSubscribeApp(account, siteID)` | `{"appId": "<string>"}` | `{"success": true}` |
-| 10 | `subscription.unsubscribeApp` | `subject.UserSubscriptionUnsubscribeApp(account, siteID)` | `{"appId": "<string>"}` | `{"success": true}` |
-| 11 | `room.{roomID}.subscription.get` | `subject.UserRoomSubscriptionGet(account, siteID, roomID)` | _no body_ | `{"subscription": <Subscription with RoomID == roomID>}` |
-| 12 | `apps.list` | `subject.UserAppsList(account, siteID)` | _no body_ | `{"apps": [<App>, <App>], "total": 2}` |
-| 13 | `subscription.count` | `subject.UserSubscriptionCount(account, siteID)` | `{"unread": <bool>}` | `{"count": 42}` |
-
-`<Subscription>` and `<App>` are the standard `pkg/model.Subscription`
-and `pkg/model.App` JSON shapes. Filter fields on request bodies (`favorite`,
-`membersContain`, `accountNames`, `unread`) are accepted and ignored by the
-mock — every list endpoint returns the same two mock entries regardless of
-input, and `subscription.count` always returns `42`.
-
-**Error envelope:** all routes return the standard `{"error": "...", "code": "..."}`
-shape on failure. The only error returned by the mock is `unknown site`
-(`code: not_found`).
 
 ---
 
