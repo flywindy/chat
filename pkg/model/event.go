@@ -32,7 +32,7 @@ type RoomMetadataUpdateEvent struct {
 type SubscriptionUpdateEvent struct {
 	UserID       string       `json:"userId"`
 	Subscription Subscription `json:"subscription"`
-	Action       string       `json:"action"` // "added" | "removed"
+	Action       string       `json:"action"` // "added" | "removed" | "role_updated" | "mute_toggled"
 	Timestamp    int64        `json:"timestamp" bson:"timestamp"`
 }
 
@@ -82,6 +82,7 @@ const (
 	OutboxMemberAdded                OutboxEventType = "member_added"
 	OutboxMemberRemoved              OutboxEventType = "member_removed"
 	OutboxSubscriptionRead           OutboxEventType = "subscription_read"
+	OutboxSubscriptionMuteToggled    OutboxEventType = "subscription_mute_toggled"
 	OutboxThreadSubscriptionUpserted OutboxEventType = "thread_subscription_upserted"
 )
 
@@ -206,6 +207,20 @@ type RoomKeyEnsureRequest struct {
 type RoomKeyEnsureResponse struct {
 	RoomID  string `json:"roomId"`
 	Version int    `json:"version"`
+}
+
+// MuteToggleResponse is the sync reply for the mute.toggle RPC.
+type MuteToggleResponse struct {
+	Status string `json:"status"`
+	Muted  bool   `json:"muted"`
+}
+
+// SubscriptionMuteToggledEvent is the OutboxEvent.Payload for type "subscription_mute_toggled".
+type SubscriptionMuteToggledEvent struct {
+	Account   string `json:"account"              bson:"account"`
+	RoomID    string `json:"roomId"               bson:"roomId"`
+	Muted     bool   `json:"muted" bson:"muted"`
+	Timestamp int64  `json:"timestamp"            bson:"timestamp"`
 }
 
 type MemberRemoveEvent struct {

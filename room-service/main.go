@@ -119,12 +119,20 @@ func main() {
 	cassReader := NewCassMessageReader(cassSession)
 
 	memberListClient := NewNATSMemberListClient(nc.NatsConn(), cfg.MemberListTimeout)
-	handler := NewHandler(store, keyStore, memberListClient, cassReader, cfg.SiteID, cfg.MaxRoomSize, cfg.MaxBatchSize, cfg.MemberListTimeout, func(ctx context.Context, subj string, data []byte) error {
-		if _, err := js.PublishMsg(ctx, natsutil.NewMsg(ctx, subj, data)); err != nil {
-			return fmt.Errorf("publish to %q: %w", subj, err)
-		}
-		return nil
-	})
+	handler := NewHandler(store, keyStore, memberListClient, cassReader, cfg.SiteID, cfg.MaxRoomSize, cfg.MaxBatchSize, cfg.MemberListTimeout,
+		func(ctx context.Context, subj string, data []byte) error {
+			if _, err := js.PublishMsg(ctx, natsutil.NewMsg(ctx, subj, data)); err != nil {
+				return fmt.Errorf("publish to %q: %w", subj, err)
+			}
+			return nil
+		},
+		func(ctx context.Context, subj string, data []byte) error {
+			if err := nc.PublishMsg(ctx, natsutil.NewMsg(ctx, subj, data)); err != nil {
+				return fmt.Errorf("publish core to %q: %w", subj, err)
+			}
+			return nil
+		},
+	)
 
 	if err := handler.RegisterCRUD(nc); err != nil {
 		slog.Error("register CRUD handlers failed", "error", err)

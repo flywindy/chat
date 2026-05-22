@@ -1087,7 +1087,7 @@ func TestAddMembers_SameSiteChannel_RoomMembersPath(t *testing.T) {
 		publishedData = data
 		return nil
 	}
-	handler := NewHandler(store, keyStore, nil, nil, "site-a", 1000, 500, 5*time.Second, publish)
+	handler := NewHandler(store, keyStore, nil, nil, "site-a", 1000, 500, 5*time.Second, publish, func(context.Context, string, []byte) error { return nil })
 
 	req := model.AddMembersRequest{
 		Channels: []model.ChannelRef{{RoomID: "source", SiteID: "site-a"}},
@@ -1151,7 +1151,7 @@ func TestAddMembers_SameSiteChannel_SubscriptionsFallback(t *testing.T) {
 		publishedData = data
 		return nil
 	}
-	handler := NewHandler(store, keyStore, nil, nil, "site-a", 1000, 500, 5*time.Second, publish)
+	handler := NewHandler(store, keyStore, nil, nil, "site-a", 1000, 500, 5*time.Second, publish, func(context.Context, string, []byte) error { return nil })
 
 	req := model.AddMembersRequest{Channels: []model.ChannelRef{{RoomID: "source", SiteID: "site-a"}}}
 	data, err := json.Marshal(req)
@@ -1193,7 +1193,7 @@ func TestAddMembers_RequesterNotSubscribed_Rejected(t *testing.T) {
 
 	// Same-site only: nil memberListClient is safe — request fails on the same-site
 	// GetSubscription check before reaching the cross-site branch.
-	handler := NewHandler(store, keyStore, nil, nil, "site-a", 1000, 500, 5*time.Second, func(context.Context, string, []byte) error { return nil })
+	handler := NewHandler(store, keyStore, nil, nil, "site-a", 1000, 500, 5*time.Second, func(context.Context, string, []byte) error { return nil }, func(context.Context, string, []byte) error { return nil })
 
 	req := model.AddMembersRequest{Channels: []model.ChannelRef{{RoomID: "source", SiteID: "site-a"}}}
 	data, err := json.Marshal(req)
@@ -1248,7 +1248,7 @@ func TestAddMembers_TwoSiteEndToEnd(t *testing.T) {
 	mustInsertSub(t, dbB, &model.Subscription{ID: "sb3", RoomID: "source", User: model.SubscriptionUser{ID: "req", Account: "alice"}})
 
 	// Site-B handler registers member.list endpoint (RegisterCRUD subscribes to MemberListWildcard).
-	handlerB := NewHandler(storeB, keyStore, nil, nil, "site-b", 1000, 500, 5*time.Second, func(context.Context, string, []byte) error { return nil })
+	handlerB := NewHandler(storeB, keyStore, nil, nil, "site-b", 1000, 500, 5*time.Second, func(context.Context, string, []byte) error { return nil }, func(context.Context, string, []byte) error { return nil })
 	require.NoError(t, handlerB.RegisterCRUD(otelNCb))
 	require.NoError(t, otelNCb.NatsConn().Flush())
 
@@ -1268,7 +1268,7 @@ func TestAddMembers_TwoSiteEndToEnd(t *testing.T) {
 		publishedData = data
 		return nil
 	}
-	handlerA := NewHandler(storeA, keyStore, memberListClient, nil, "site-a", 1000, 500, 5*time.Second, publish)
+	handlerA := NewHandler(storeA, keyStore, memberListClient, nil, "site-a", 1000, 500, 5*time.Second, publish, func(context.Context, string, []byte) error { return nil })
 
 	// Call add-members on site-A with a site-B source channel
 	req := model.AddMembersRequest{Channels: []model.ChannelRef{{RoomID: "source", SiteID: "site-b"}}}
@@ -1328,7 +1328,7 @@ func TestAddMembers_CrossSiteTimeout(t *testing.T) {
 	t.Cleanup(func() { _ = sub.Unsubscribe() })
 
 	memberListClient := NewNATSMemberListClient(nc, 200*time.Millisecond)
-	handler := NewHandler(store, keyStore, memberListClient, nil, "site-a", 1000, 500, 200*time.Millisecond, func(context.Context, string, []byte) error { return nil })
+	handler := NewHandler(store, keyStore, memberListClient, nil, "site-a", 1000, 500, 200*time.Millisecond, func(context.Context, string, []byte) error { return nil }, func(context.Context, string, []byte) error { return nil })
 
 	req := model.AddMembersRequest{Channels: []model.ChannelRef{{RoomID: "source", SiteID: "site-b"}}}
 	data, err := json.Marshal(req)
@@ -1375,7 +1375,7 @@ func TestRoomsInfoBatchRPC(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = otelNC.Drain() })
 
-	handler := NewHandler(store, keyStore, nil, nil, "site-a", 1000, 500, 5*time.Second, func(context.Context, string, []byte) error { return nil })
+	handler := NewHandler(store, keyStore, nil, nil, "site-a", 1000, 500, 5*time.Second, func(context.Context, string, []byte) error { return nil }, func(context.Context, string, []byte) error { return nil })
 	require.NoError(t, handler.RegisterCRUD(otelNC))
 	require.NoError(t, otelNC.NatsConn().Flush())
 
@@ -1505,7 +1505,7 @@ func newRoomServiceHandler(t *testing.T, store *MongoStore, keyStore RoomKeyStor
 		lastData = data
 		return nil
 	}
-	h := NewHandler(store, keyStore, nil, nil, siteID, 1000, 500, 5*time.Second, publish)
+	h := NewHandler(store, keyStore, nil, nil, siteID, 1000, 500, 5*time.Second, publish, func(context.Context, string, []byte) error { return nil })
 	return h, func() (string, []byte) { return lastSubj, lastData }
 }
 
@@ -1771,6 +1771,46 @@ func TestMongoStore_ListReadReceipts_Integration(t *testing.T) {
 	rows, err = store.ListReadReceipts(ctx, "r1", msgTime.Add(2*time.Hour), "alice", 100)
 	require.NoError(t, err)
 	require.Empty(t, rows)
+}
+
+func TestMongoStore_ToggleSubscriptionMute(t *testing.T) {
+	db := testutil.MongoDB(t, "room-svc-mute")
+	store := NewMongoStore(db)
+	ctx := context.Background()
+
+	sub := &model.Subscription{
+		ID:       idgen.GenerateUUIDv7(),
+		User:     model.SubscriptionUser{ID: "u1", Account: "alice"},
+		RoomID:   "r1",
+		RoomType: model.RoomTypeChannel,
+		SiteID:   "site-a",
+		Roles:    []model.Role{model.RoleMember},
+		JoinedAt: time.Now().UTC(),
+		Muted:    false,
+	}
+	mustInsertSub(t, db, sub)
+
+	got, err := store.ToggleSubscriptionMute(ctx, "r1", "alice")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.True(t, got.Muted)
+	assert.Equal(t, "alice", got.User.Account)
+	assert.Equal(t, "r1", got.RoomID)
+
+	persisted, err := store.GetSubscription(ctx, "alice", "r1")
+	require.NoError(t, err)
+	assert.True(t, persisted.Muted)
+
+	got, err = store.ToggleSubscriptionMute(ctx, "r1", "alice")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.False(t, got.Muted)
+	assert.Equal(t, "alice", got.User.Account)
+	assert.Equal(t, "r1", got.RoomID)
+
+	gotNil, err := store.ToggleSubscriptionMute(ctx, "missing", "alice")
+	assert.Nil(t, gotNil)
+	assert.ErrorIs(t, err, model.ErrSubscriptionNotFound)
 }
 
 // TestMongoStore_ListRoomMembers_OrgDisplay_DeptFirst_Integration verifies that

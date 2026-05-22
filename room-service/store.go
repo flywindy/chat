@@ -84,6 +84,9 @@ type RoomStore interface {
 	// keyed by (roomID, account). Returns model.ErrSubscriptionNotFound
 	// (wrapped) when no subscription matches.
 	UpdateSubscriptionRead(ctx context.Context, roomID, account string, lastSeenAt time.Time, alert bool) error
+	// ToggleSubscriptionMute atomically flips muted via a single FindOneAndUpdate.
+	// Returns the post-flip subscription, or model.ErrSubscriptionNotFound (wrapped) when no match.
+	ToggleSubscriptionMute(ctx context.Context, roomID, account string) (*model.Subscription, error)
 	// GetUserSiteID returns the home site of a user looked up by account.
 	// Returns ("", nil) when the user is not found locally; callers treat
 	// that as "skip cross-site outbox".

@@ -361,6 +361,16 @@ func MessageReadReceiptWildcard(siteID string) string {
 	return fmt.Sprintf("chat.user.*.request.room.*.%s.message.read-receipt", siteID)
 }
 
+// MuteToggle returns the concrete subject for the per-user mute.toggle RPC.
+func MuteToggle(account, roomID, siteID string) string {
+	return fmt.Sprintf("chat.user.%s.request.room.%s.%s.mute.toggle", account, roomID, siteID)
+}
+
+// MuteToggleWildcard is the per-site subscription pattern for the mute.toggle RPC.
+func MuteToggleWildcard(siteID string) string {
+	return fmt.Sprintf("chat.user.*.request.room.*.%s.mute.toggle", siteID)
+}
+
 // RoomCreate: client→room-service create subject; siteID is the requester's site.
 func RoomCreate(account, siteID string) string {
 	return fmt.Sprintf("chat.user.%s.request.room.%s.create", account, siteID)

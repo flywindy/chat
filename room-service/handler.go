@@ -38,9 +38,10 @@ type Handler struct {
 	maxBatchSize      int
 	memberListTimeout time.Duration
 	publishToStream   func(ctx context.Context, subj string, data []byte) error
+	publishCore       func(ctx context.Context, subj string, data []byte) error
 }
 
-func NewHandler(store RoomStore, keyStore RoomKeyStore, memberListClient MemberListClient, msgReader MessageReader, siteID string, maxRoomSize, maxBatchSize int, memberListTimeout time.Duration, publishToStream func(context.Context, string, []byte) error) *Handler {
+func NewHandler(store RoomStore, keyStore RoomKeyStore, memberListClient MemberListClient, msgReader MessageReader, siteID string, maxRoomSize, maxBatchSize int, memberListTimeout time.Duration, publishToStream func(context.Context, string, []byte) error, publishCore func(context.Context, string, []byte) error) *Handler {
 	return &Handler{
 		store:             store,
 		keyStore:          keyStore,
@@ -51,6 +52,7 @@ func NewHandler(store RoomStore, keyStore RoomKeyStore, memberListClient MemberL
 		maxBatchSize:      maxBatchSize,
 		memberListTimeout: memberListTimeout,
 		publishToStream:   publishToStream,
+		publishCore:       publishCore,
 	}
 }
 
@@ -97,6 +99,9 @@ func (h *Handler) RegisterCRUD(nc *otelnats.Conn) error {
 	}
 	if _, err := nc.QueueSubscribe(subject.RoomKeyEnsure(h.siteID), queue, h.NatsHandleEnsureRoomKey); err != nil {
 		return fmt.Errorf("subscribe room key ensure: %w", err)
+	}
+	if _, err := nc.QueueSubscribe(subject.MuteToggleWildcard(h.siteID), queue, h.natsMuteToggle); err != nil {
+		return fmt.Errorf("subscribe mute toggle: %w", err)
 	}
 	return nil
 }
@@ -1280,4 +1285,89 @@ func (h *Handler) handleEnsureRoomKey(ctx context.Context, data []byte) ([]byte,
 		RoomID:  req.RoomID,
 		Version: ver,
 	})
+}
+
+func (h *Handler) natsMuteToggle(m otelnats.Msg) {
+	ctx := wrappedCtx(m)
+	resp, err := h.handleMuteToggle(ctx, m.Msg.Subject, m.Msg.Data)
+	if err != nil {
+		slog.Error("mute toggle failed", "error", err, "subject", m.Msg.Subject)
+		natsutil.ReplyError(m.Msg, sanitizeError(err))
+		return
+	}
+	if err := m.Msg.Respond(resp); err != nil {
+		slog.Error("failed to respond to mute toggle", "error", err)
+	}
+}
+
+func (h *Handler) handleMuteToggle(ctx context.Context, subj string, _ []byte) ([]byte, error) {
+	account, roomID, ok := subject.ParseUserRoomSubject(subj)
+	if !ok {
+		return nil, fmt.Errorf("invalid mute-toggle subject: %s", subj)
+	}
+
+	if span := trace.SpanFromContext(ctx); span.IsRecording() {
+		span.SetAttributes(
+			attribute.String("room.id", roomID),
+			attribute.String("site.id", h.siteID),
+		)
+	}
+
+	sub, err := h.store.ToggleSubscriptionMute(ctx, roomID, account)
+	if err != nil {
+		if errors.Is(err, model.ErrSubscriptionNotFound) {
+			return nil, errNotRoomMember
+		}
+		return nil, fmt.Errorf("toggle subscription mute: %w", err)
+	}
+
+	now := time.Now().UTC()
+
+	subEvt := model.SubscriptionUpdateEvent{
+		UserID:       sub.User.ID,
+		Subscription: *sub,
+		Action:       "mute_toggled",
+		Timestamp:    now.UnixMilli(),
+	}
+	subEvtData, err := json.Marshal(subEvt)
+	if err != nil {
+		return nil, fmt.Errorf("marshal subscription update event: %w", err)
+	}
+	if err := h.publishCore(ctx, subject.SubscriptionUpdate(account), subEvtData); err != nil {
+		slog.Error("subscription update publish failed", "error", err, "account", account)
+		// Non-fatal — the DB write is the source of truth; clients will reconcile on next refetch.
+	}
+
+	userSiteID, err := h.store.GetUserSiteID(ctx, account)
+	if err != nil {
+		return nil, fmt.Errorf("get user siteId: %w", err)
+	}
+	if userSiteID != "" && userSiteID != h.siteID {
+		payload := model.SubscriptionMuteToggledEvent{
+			Account:   account,
+			RoomID:    roomID,
+			Muted:     sub.Muted,
+			Timestamp: now.UnixMilli(),
+		}
+		payloadData, err := json.Marshal(payload)
+		if err != nil {
+			return nil, fmt.Errorf("marshal mute-toggled payload: %w", err)
+		}
+		outbox := model.OutboxEvent{
+			Type:       model.OutboxSubscriptionMuteToggled,
+			SiteID:     h.siteID,
+			DestSiteID: userSiteID,
+			Payload:    payloadData,
+			Timestamp:  now.UnixMilli(),
+		}
+		outboxData, err := json.Marshal(outbox)
+		if err != nil {
+			return nil, fmt.Errorf("marshal outbox event: %w", err)
+		}
+		if err := h.publishToStream(ctx, subject.Outbox(h.siteID, userSiteID, model.OutboxSubscriptionMuteToggled), outboxData); err != nil {
+			return nil, fmt.Errorf("publish mute-toggled outbox: %w", err)
+		}
+	}
+
+	return json.Marshal(model.MuteToggleResponse{Status: "ok", Muted: sub.Muted})
 }

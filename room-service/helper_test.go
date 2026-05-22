@@ -57,6 +57,7 @@ func TestSanitizeError(t *testing.T) {
 		{"safe capacity", errors.New("room is at maximum capacity (1000)"), "room is at maximum capacity (1000)"},
 		{"safe requester", errors.New("requester not in room: not found"), "requester not in room: not found"},
 		{"safe invalid", errors.New("invalid request: bad json"), "invalid request: bad json"},
+		{"passes through invalid mute-toggle subject", fmt.Errorf("invalid mute-toggle subject: chat.user.alice.foo"), "invalid mute-toggle subject: chat.user.alice.foo"},
 		{"internal db error", fmt.Errorf("mongo timeout"), "internal error"},
 		{"generic error", fmt.Errorf("unexpected failure"), "internal error"},
 	}

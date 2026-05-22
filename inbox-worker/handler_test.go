@@ -143,6 +143,18 @@ func (s *stubInboxStore) BulkCreateSubscriptions(_ context.Context, subs []*mode
 	return nil
 }
 
+func (s *stubInboxStore) UpdateSubscriptionMute(_ context.Context, roomID, account string, muted bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.subscriptions {
+		if s.subscriptions[i].RoomID == roomID && s.subscriptions[i].User.Account == account {
+			s.subscriptions[i].Muted = muted
+			return nil
+		}
+	}
+	return nil // missing-subscription → no-op
+}
+
 func (s *stubInboxStore) UpdateSubscriptionRead(_ context.Context, roomID, account string, lastSeenAt time.Time, alert bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1188,4 +1200,64 @@ func TestHandleMemberAdded_BulkCreate_NonDuplicateError_ReturnsError(t *testing.
 	err := h.HandleEvent(context.Background(), evtData)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "bulk create subscriptions")
+}
+
+func TestHandler_SubscriptionMuteToggled(t *testing.T) {
+	store := &stubInboxStore{
+		subscriptions: []model.Subscription{
+			{
+				ID:     "s1",
+				User:   model.SubscriptionUser{ID: "u1", Account: "alice"},
+				RoomID: "r1",
+			},
+		},
+	}
+	h := NewHandler(store)
+
+	payload, err := json.Marshal(model.SubscriptionMuteToggledEvent{
+		Account: "alice", RoomID: "r1", Muted: true, Timestamp: 12345,
+	})
+	require.NoError(t, err)
+	evt, err := json.Marshal(model.OutboxEvent{
+		Type: model.OutboxSubscriptionMuteToggled, SiteID: "site-a", DestSiteID: "site-b",
+		Payload: payload, Timestamp: 12345,
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, h.HandleEvent(context.Background(), evt))
+
+	subs := store.getSubscriptions()
+	require.Len(t, subs, 1)
+	assert.True(t, subs[0].Muted)
+}
+
+func TestHandler_SubscriptionMuteToggled_MissingSubscriptionNoOp(t *testing.T) {
+	store := &stubInboxStore{}
+	h := NewHandler(store)
+
+	payload, err := json.Marshal(model.SubscriptionMuteToggledEvent{
+		Account: "ghost", RoomID: "r1", Muted: true, Timestamp: 12345,
+	})
+	require.NoError(t, err)
+	evt, err := json.Marshal(model.OutboxEvent{
+		Type: model.OutboxSubscriptionMuteToggled, SiteID: "site-a", DestSiteID: "site-b",
+		Payload: payload, Timestamp: 12345,
+	})
+	require.NoError(t, err)
+
+	// missing subscription must be a silent no-op, not an error
+	require.NoError(t, h.HandleEvent(context.Background(), evt))
+}
+
+func TestHandler_SubscriptionMuteToggled_MalformedPayload(t *testing.T) {
+	store := &stubInboxStore{}
+	h := NewHandler(store)
+
+	evt, err := json.Marshal(model.OutboxEvent{
+		Type:    model.OutboxSubscriptionMuteToggled,
+		Payload: []byte("not-json"),
+	})
+	require.NoError(t, err)
+
+	require.Error(t, h.HandleEvent(context.Background(), evt))
 }

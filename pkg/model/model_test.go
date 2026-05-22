@@ -465,19 +465,19 @@ func TestSubscriptionJSON(t *testing.T) {
 		hss := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 		lsa := time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
 		s := model.Subscription{
-			ID:                  "s1",
-			User:                model.SubscriptionUser{ID: "u1", Account: "alice"},
-			RoomID:              "r1",
-			RoomType:            model.RoomTypeChannel,
-			SiteID:              "site-a",
-			Roles:               []model.Role{model.RoleOwner},
-			HistorySharedSince:  &hss,
-			JoinedAt:            time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
-			LastSeenAt:          &lsa,
-			HasMention:          true,
-			ThreadUnread:        []string{"parent-1", "parent-2"},
-			Alert:               true,
-			DisableNotification: true,
+			ID:                 "s1",
+			User:               model.SubscriptionUser{ID: "u1", Account: "alice"},
+			RoomID:             "r1",
+			RoomType:           model.RoomTypeChannel,
+			SiteID:             "site-a",
+			Roles:              []model.Role{model.RoleOwner},
+			HistorySharedSince: &hss,
+			JoinedAt:           time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+			LastSeenAt:         &lsa,
+			HasMention:         true,
+			ThreadUnread:       []string{"parent-1", "parent-2"},
+			Alert:              true,
+			Muted:              true,
 		}
 		roundTrip(t, &s, &model.Subscription{})
 	})
@@ -529,9 +529,9 @@ func TestSubscriptionJSON_ThreadUnreadOmittedAlertAlwaysPresent(t *testing.T) {
 	assert.True(t, hasAlert, "alert must be present in JSON even when false")
 	assert.Equal(t, false, alertVal)
 
-	disableVal, hasDisable := raw["disableNotification"]
-	assert.True(t, hasDisable, "disableNotification must be present in JSON even when false")
-	assert.Equal(t, false, disableVal)
+	mutedVal, hasMuted := raw["muted"]
+	assert.True(t, hasMuted, "muted must be present in JSON even when false")
+	assert.Equal(t, false, mutedVal)
 
 	var dst model.Subscription
 	require.NoError(t, json.Unmarshal(data, &dst))
@@ -2226,6 +2226,43 @@ func TestMessageTypeAndAsyncJobStatusConstants(t *testing.T) {
 	assert.Equal(t, "members_added", model.MessageTypeMembersAdded)
 	assert.Equal(t, "ok", model.AsyncJobStatusOK)
 	assert.Equal(t, "error", model.AsyncJobStatusError)
+}
+
+func TestMuteToggleResponseJSON(t *testing.T) {
+	src := model.MuteToggleResponse{
+		Status: "ok",
+		Muted:  true,
+	}
+	data, err := json.Marshal(src)
+	require.NoError(t, err)
+
+	var dst model.MuteToggleResponse
+	require.NoError(t, json.Unmarshal(data, &dst))
+	assert.Equal(t, src, dst)
+
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(data, &raw))
+	assert.Equal(t, "ok", raw["status"])
+	assert.Equal(t, true, raw["muted"])
+}
+
+func TestSubscriptionMuteToggledEventJSON(t *testing.T) {
+	src := model.SubscriptionMuteToggledEvent{
+		Account:   "alice",
+		RoomID:    "r1",
+		Muted:     true,
+		Timestamp: 1234567890,
+	}
+	data, err := json.Marshal(src)
+	require.NoError(t, err)
+
+	var dst model.SubscriptionMuteToggledEvent
+	require.NoError(t, json.Unmarshal(data, &dst))
+	assert.Equal(t, src, dst)
+}
+
+func TestOutboxSubscriptionMuteToggledConst(t *testing.T) {
+	assert.Equal(t, model.OutboxEventType("subscription_mute_toggled"), model.OutboxSubscriptionMuteToggled)
 }
 
 func TestSyncCreateDMRequestJSON(t *testing.T) {

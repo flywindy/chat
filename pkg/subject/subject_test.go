@@ -322,6 +322,30 @@ func TestMessageReadReceipt_ParseUserRoomSubject(t *testing.T) {
 	}
 }
 
+func TestMuteToggle(t *testing.T) {
+	got := subject.MuteToggle("alice", "r1", "site-a")
+	want := "chat.user.alice.request.room.r1.site-a.mute.toggle"
+	if got != want {
+		t.Errorf("MuteToggle: got %q, want %q", got, want)
+	}
+}
+
+func TestMuteToggleWildcard(t *testing.T) {
+	got := subject.MuteToggleWildcard("site-a")
+	want := "chat.user.*.request.room.*.site-a.mute.toggle"
+	if got != want {
+		t.Errorf("MuteToggleWildcard: got %q, want %q", got, want)
+	}
+}
+
+func TestMuteToggle_ParseUserRoomSubject(t *testing.T) {
+	subj := subject.MuteToggle("alice", "r1", "site-a")
+	account, roomID, ok := subject.ParseUserRoomSubject(subj)
+	if !ok || account != "alice" || roomID != "r1" {
+		t.Errorf("ParseUserRoomSubject(%q) = (%q,%q,%v), want (alice,r1,true)", subj, account, roomID, ok)
+	}
+}
+
 func TestParseRoomCreateSubject(t *testing.T) {
 	tests := []struct {
 		name        string

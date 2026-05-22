@@ -1323,7 +1323,7 @@ func TestIntegration_CreateRoom_FansOutRoomKeyEvent(t *testing.T) {
 // TestProcessCreateRoom_BotDM_DoesNotUpsert_Integration locks in that
 // processCreateRoom's botDM branch keeps its insert-only contract on a
 // JetStream redelivery: a pre-existing muted, inactive botDM subscription
-// must NOT be refreshed (DisableNotification, IsSubscribed, JoinedAt
+// must NOT be refreshed (Muted, IsSubscribed, JoinedAt
 // untouched). The re-subscribe refresh semantic is owned by user-service.
 func TestProcessCreateRoom_BotDM_DoesNotUpsert_Integration(t *testing.T) {
 	ctx := context.Background()
@@ -1348,15 +1348,15 @@ func TestProcessCreateRoom_BotDM_DoesNotUpsert_Integration(t *testing.T) {
 		Accounts: []string{"alice", "helper.bot"},
 	})
 	mustInsertSub(t, db, &model.Subscription{
-		ID:                  "existing-human-sub",
-		User:                model.SubscriptionUser{ID: "u_alice", Account: "alice"},
-		RoomID:              roomID,
-		SiteID:              "site-A",
-		RoomType:            model.RoomTypeBotDM,
-		Name:                "helper.bot",
-		IsSubscribed:        false,
-		DisableNotification: true,
-		JoinedAt:            oldJoinedAt,
+		ID:           "existing-human-sub",
+		User:         model.SubscriptionUser{ID: "u_alice", Account: "alice"},
+		RoomID:       roomID,
+		SiteID:       "site-A",
+		RoomType:     model.RoomTypeBotDM,
+		Name:         "helper.bot",
+		IsSubscribed: false,
+		Muted:        true,
+		JoinedAt:     oldJoinedAt,
 	})
 	mustInsertSub(t, db, &model.Subscription{
 		ID:           "existing-bot-sub",
@@ -1385,8 +1385,8 @@ func TestProcessCreateRoom_BotDM_DoesNotUpsert_Integration(t *testing.T) {
 
 	got, err := store.GetSubscription(ctx, "alice", roomID)
 	require.NoError(t, err)
-	assert.True(t, got.DisableNotification,
-		"botDM path must NOT clear DisableNotification on redelivery (insert-only contract)")
+	assert.True(t, got.Muted,
+		"botDM path must NOT clear Muted on redelivery (insert-only contract)")
 	assert.False(t, got.IsSubscribed,
 		"botDM path must NOT refresh IsSubscribed on redelivery (insert-only contract)")
 	assert.True(t, got.JoinedAt.Equal(oldJoinedAt),
@@ -1400,7 +1400,7 @@ func TestProcessCreateRoom_BotDM_DoesNotUpsert_Integration(t *testing.T) {
 // TestProcessCreateRoom_DM_DoesNotUpsert_Integration locks in that
 // processCreateRoom's regular-DM branch keeps its insert-only contract:
 // a pre-existing regular-DM subscription's state (specifically
-// DisableNotification = true and an old JoinedAt) must NOT be refreshed
+// Muted = true and an old JoinedAt) must NOT be refreshed
 // when processCreateRoom is replayed for the same (room, user) pair.
 // This regression guard prevents accidental upsert wiring on the DM
 // branch in future edits.
@@ -1428,14 +1428,14 @@ func TestProcessCreateRoom_DM_DoesNotUpsert_Integration(t *testing.T) {
 		Accounts: []string{"alice", "bob"},
 	})
 	mustInsertSub(t, db, &model.Subscription{
-		ID:                  "existing-alice-sub",
-		User:                model.SubscriptionUser{ID: "u_alice", Account: "alice"},
-		RoomID:              roomID,
-		SiteID:              "site-A",
-		RoomType:            model.RoomTypeDM,
-		Name:                "bob",
-		DisableNotification: true,
-		JoinedAt:            oldJoinedAt,
+		ID:       "existing-alice-sub",
+		User:     model.SubscriptionUser{ID: "u_alice", Account: "alice"},
+		RoomID:   roomID,
+		SiteID:   "site-A",
+		RoomType: model.RoomTypeDM,
+		Name:     "bob",
+		Muted:    true,
+		JoinedAt: oldJoinedAt,
 	})
 	mustInsertSub(t, db, &model.Subscription{
 		ID:       "existing-bob-sub",
@@ -1463,8 +1463,8 @@ func TestProcessCreateRoom_DM_DoesNotUpsert_Integration(t *testing.T) {
 
 	got, err := store.GetSubscription(ctx, "alice", roomID)
 	require.NoError(t, err)
-	assert.True(t, got.DisableNotification,
-		"regular-DM path must NOT clear DisableNotification on re-create (insert-only contract)")
+	assert.True(t, got.Muted,
+		"regular-DM path must NOT clear Muted on re-create (insert-only contract)")
 	assert.True(t, got.JoinedAt.Equal(oldJoinedAt),
 		"regular-DM path must NOT refresh JoinedAt on re-create (insert-only contract)")
 

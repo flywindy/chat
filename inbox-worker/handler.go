@@ -29,6 +29,8 @@ type InboxStore interface {
 	// silent no-ops. Missing-subscription is also a silent no-op.
 	UpdateSubscriptionRead(ctx context.Context, roomID, account string, lastSeenAt time.Time, alert bool) error
 	UpsertThreadSubscription(ctx context.Context, sub *model.ThreadSubscription) error
+	// UpdateSubscriptionMute sets muted by (roomID, account); missing-sub is a silent no-op for federation races.
+	UpdateSubscriptionMute(ctx context.Context, roomID, account string, muted bool) error
 }
 
 // Handler processes cross-site OutboxEvent messages; replicates only subscription/room metadata, never room keys.
@@ -59,6 +61,8 @@ func (h *Handler) HandleEvent(ctx context.Context, data []byte) error {
 		return h.handleRoleUpdated(ctx, &evt)
 	case "subscription_read":
 		return h.handleSubscriptionRead(ctx, &evt)
+	case "subscription_mute_toggled":
+		return h.handleSubscriptionMuteToggled(ctx, &evt)
 	case "thread_subscription_upserted":
 		return h.handleThreadSubscriptionUpserted(ctx, &evt)
 	default:
@@ -195,6 +199,18 @@ func (h *Handler) handleSubscriptionRead(ctx context.Context, evt *model.OutboxE
 	lastSeenAt := time.UnixMilli(e.LastSeenAt).UTC()
 	if err := h.store.UpdateSubscriptionRead(ctx, e.RoomID, e.Account, lastSeenAt, e.Alert); err != nil {
 		return fmt.Errorf("update subscription read for %q in room %q: %w", e.Account, e.RoomID, err)
+	}
+	return nil
+}
+
+// handleSubscriptionMuteToggled mirrors a room-side mute toggle onto the user's home-site subscription.
+func (h *Handler) handleSubscriptionMuteToggled(ctx context.Context, evt *model.OutboxEvent) error {
+	var e model.SubscriptionMuteToggledEvent
+	if err := json.Unmarshal(evt.Payload, &e); err != nil {
+		return fmt.Errorf("unmarshal subscription_mute_toggled payload: %w", err)
+	}
+	if err := h.store.UpdateSubscriptionMute(ctx, e.RoomID, e.Account, e.Muted); err != nil {
+		return fmt.Errorf("update subscription mute for %q in room %q: %w", e.Account, e.RoomID, err)
 	}
 	return nil
 }

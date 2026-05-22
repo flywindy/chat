@@ -782,6 +782,55 @@ See [Error envelope](#6-error-envelope-reference). Common errors:
 
 ---
 
+#### Toggle Mute
+
+**Subject:** `chat.user.{account}.request.room.{roomID}.{siteID}.mute.toggle`
+**Reply subject:** auto-generated `_INBOX.>` (NATS request/reply)
+
+Synchronous RPC. `room-service` flips `Subscription.muted` for the requester in a single atomic Mongo `FindOneAndUpdate`, replies with the resulting value, fans out a `subscription.update` event to the user's other client sessions, and (for cross-site users) publishes a `subscription_mute_toggled` outbox event so `inbox-worker` mirrors the change on the user's home site.
+
+Idempotency: this is a toggle, not a set — every successful call flips the bit. Clients must debounce the user-visible action; redelivery of the same RPC will flip back.
+
+##### Request body
+
+The subject already carries `account` and `roomID`, so no body fields are required. Clients may send `{}` or omit the body entirely; any body content is ignored.
+
+##### Success response
+
+| Field                  | Type    | Notes |
+|------------------------|---------|-------|
+| `status`               | string  | Always `"ok"`. |
+| `muted` | boolean | The resulting value of `Subscription.muted` after the flip. |
+
+```json
+{ "status": "ok", "muted": true }
+```
+
+##### Error response
+
+See [Error envelope](#6-error-envelope-reference). Common errors:
+
+- `"only room members can list members"` — the user has no subscription in the room (sentinel reused across membership-gated RPCs).
+- `"invalid mute-toggle subject: …"` — the subject is malformed.
+
+##### Triggered events — success path
+
+**`chat.user.{account}.event.subscription.update`** — emitted once for the requester so other client sessions reconcile.
+
+| Field          | Type   | Notes |
+|----------------|--------|-------|
+| `userId`       | string | The requester's internal user ID. |
+| `subscription` | object | The `Subscription` record with the updated `muted`. |
+| `action`       | string | `"mute_toggled"`. |
+| `timestamp`    | number | Milliseconds since Unix epoch (UTC). |
+
+##### Behaviour notes
+
+- **Cross-site federation:** if the user's home site (`users.siteId`) differs from the handler's site, a `subscription_mute_toggled` outbox event is published to `outbox.{handlerSite}.to.{userSite}.subscription_mute_toggled` with payload `{account, roomId, muted, timestamp}`. The destination `inbox-worker` applies an unconditional `$set` on the local subscription mirror.
+- **Notification delivery:** `notification-worker` does **not** yet consult `muted` before sending. End-to-end mute behaviour is wired only as far as the persisted flag; honouring it in fan-out is a follow-up.
+
+---
+
 #### Read Message Receipts
 
 **Subject:** `chat.user.{account}.request.room.{roomID}.{siteID}.message.read-receipt`

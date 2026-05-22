@@ -313,6 +313,21 @@ func (mr *MockRoomStoreMockRecorder) MinSubscriptionLastSeenByRoomID(ctx, roomID
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MinSubscriptionLastSeenByRoomID", reflect.TypeOf((*MockRoomStore)(nil).MinSubscriptionLastSeenByRoomID), ctx, roomID)
 }
 
+// ToggleSubscriptionMute mocks base method.
+func (m *MockRoomStore) ToggleSubscriptionMute(ctx context.Context, roomID, account string) (*model.Subscription, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ToggleSubscriptionMute", ctx, roomID, account)
+	ret0, _ := ret[0].(*model.Subscription)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ToggleSubscriptionMute indicates an expected call of ToggleSubscriptionMute.
+func (mr *MockRoomStoreMockRecorder) ToggleSubscriptionMute(ctx, roomID, account any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ToggleSubscriptionMute", reflect.TypeOf((*MockRoomStore)(nil).ToggleSubscriptionMute), ctx, roomID, account)
+}
+
 // UpdateRoomMinUserLastSeenAt mocks base method.
 func (m *MockRoomStore) UpdateRoomMinUserLastSeenAt(ctx context.Context, roomID string, t *time.Time) error {
 	m.ctrl.T.Helper()
