@@ -1,0 +1,88 @@
+# Local-dev observability stack: cAdvisor + Prometheus + Grafana.
+# Opt-in via `make obs-up` / `make obs-down`. Joins the chat-local network
+# created by `make deps-up`. Storage is ephemeral — no named volumes.
+#
+# Local-dev only: the cAdvisor mount posture (Docker socket + host bind mounts)
+# is unsuitable for shared or production environments.
+
+name: chat-local-observability
+
+services:
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    container_name: chat-local-cadvisor
+    privileged: true
+    # Required on Docker 24+ — without `cgroup: host` the container runs in a
+    # private cgroup namespace and cAdvisor only sees its own cgroup, producing
+    # metrics for itself but not for any other container on the host.
+    cgroup: host
+    # pid: host lets cAdvisor enumerate processes across all containers for
+    # richer per-container metrics. Optional but cheap.
+    pid: host
+    devices:
+      - /dev/kmsg
+    ports:
+      - "127.0.0.1:8088:8080"   # localhost-only; host :8088 avoids collision with auth-service's :8080
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    container_name: chat-local-prometheus
+    depends_on:
+      cadvisor:
+        condition: service_healthy
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+    ports:
+      - "127.0.0.1:9091:9090"   # localhost-only; host :9091 avoids collision with search-service's METRICS_ADDR=:9090
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9090/-/healthy"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    container_name: chat-local-grafana
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:3001:3000"   # localhost-only (anonymous-admin Grafana stays off LAN); host :3001 avoids collision with the frontend dev server's :3000
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: "Admin"
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_USERS_DEFAULT_THEME: "dark"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+# All three containers join the chat-local network created by `make deps-up`.
+# Lets future scrape jobs target service containers by their compose name
+# without re-architecting.
+networks:
+  default:
+    name: chat-local
+    external: true

@@ -1,0 +1,132 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "CPU % by container (100% = 1 core)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 0 },
+      "fieldConfig": {
+        "defaults": { "unit": "percent", "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10 } },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "label_replace(rate(container_cpu_usage_seconds_total{id=~\"/docker/.+|/system\\\\.slice/docker-.+\\\\.scope\"}[1m]) * 100, \"container\", \"$1\", \"id\", \"(?:/docker/|/system\\\\.slice/docker-)([^./]{12}).*\")",
+          "legendFormat": "{{container}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "bargauge",
+      "title": "Top 10 CPU consumers (100% = 1 core)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 9 },
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0 }, "overrides": [] },
+      "options": { "orientation": "horizontal", "displayMode": "gradient", "showUnfilled": true },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "topk(10, label_replace(rate(container_cpu_usage_seconds_total{id=~\"/docker/.+|/system\\\\.slice/docker-.+\\\\.scope\"}[1m]) * 100, \"container\", \"$1\", \"id\", \"(?:/docker/|/system\\\\.slice/docker-)([^./]{12}).*\"))",
+          "legendFormat": "{{container}}",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Container count",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 9 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "value" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "count(container_last_seen{id=~\"/docker/.+|/system\\\\.slice/docker-.+\\\\.scope\"})",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Memory usage by container",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 18 },
+      "fieldConfig": {
+        "defaults": { "unit": "bytes", "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10 } },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "label_replace(container_memory_working_set_bytes{id=~\"/docker/.+|/system\\\\.slice/docker-.+\\\\.scope\"}, \"container\", \"$1\", \"id\", \"(?:/docker/|/system\\\\.slice/docker-)([^./]{12}).*\")",
+          "legendFormat": "{{container}}"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Network RX/TX by container",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 27 },
+      "fieldConfig": {
+        "defaults": { "unit": "Bps", "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10 } },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "label_replace(rate(container_network_receive_bytes_total{id=~\"/docker/.+|/system\\\\.slice/docker-.+\\\\.scope\"}[1m]), \"container\", \"$1\", \"id\", \"(?:/docker/|/system\\\\.slice/docker-)([^./]{12}).*\")",
+          "legendFormat": "{{container}} rx"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "label_replace(rate(container_network_transmit_bytes_total{id=~\"/docker/.+|/system\\\\.slice/docker-.+\\\\.scope\"}[1m]), \"container\", \"$1\", \"id\", \"(?:/docker/|/system\\\\.slice/docker-)([^./]{12}).*\")",
+          "legendFormat": "{{container}} tx"
+        }
+      ]
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 39,
+  "tags": ["containers", "cpu", "local-dev"],
+  "templating": { "list": [] },
+  "time": { "from": "now-15m", "to": "now" },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Containers - CPU & Memory",
+  "uid": "containers-cpu",
+  "version": 1,
+  "weekStart": ""
+}

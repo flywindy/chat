@@ -1,11 +1,12 @@
 .PHONY: lint fmt test test-integration generate build deps-up deps-down up down \
-        tools sast sast-gosec sast-vuln sast-semgrep
+        obs-up obs-down tools sast sast-gosec sast-vuln sast-semgrep
 
 DEPS_COMPOSE     := docker-local/compose.deps.yaml
 SERVICES_COMPOSE := docker-local/compose.services.yaml
 NATS_CREDS       := docker-local/backend.creds
 NATS_CONF        := docker-local/nats.conf
 NATS_CONTAINER   := chat-local-nats
+OBS_COMPOSE      := tools/observability/docker-compose.yml
 
 # --- SAST / dev tooling ------------------------------------------------------
 # Pinned tool versions. Keep GOLANGCI_LINT_VERSION in sync with
@@ -127,6 +128,19 @@ ifdef SERVICE
 else
 	docker compose -f $(SERVICES_COMPOSE) down
 endif
+
+# --- Local observability targets ----------------------------------------------
+# Start cAdvisor + Prometheus + Grafana. Requires `make deps-up` first so the
+# chat-local network exists. Dashboard at http://localhost:3001.
+obs-up:
+	@docker network inspect chat-local >/dev/null 2>&1 || { \
+	  echo "chat-local network missing. Run 'make deps-up' first."; exit 1; \
+	}
+	docker compose -f $(OBS_COMPOSE) up -d --wait
+
+# Stop the observability stack.
+obs-down:
+	docker compose -f $(OBS_COMPOSE) down
 
 # --- SAST -------------------------------------------------------------------
 # Install pinned dev/SAST tooling. Go tools install into $(GOBIN_DIR) with
