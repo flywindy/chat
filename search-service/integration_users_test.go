@@ -32,7 +32,8 @@ func setupUsersFixture(t *testing.T, thirdPartyHandler http.Handler) *usersFixtu
 	t.Cleanup(stub.Close)
 
 	usersRC := restyutil.New(stub.URL, restyutil.WithTimeout(5*time.Second))
-	h := newHandler(nil, nil, newHTTPUsersClient(usersRC, ""), newFakeCache(), handlerConfig{
+	h := newHandler(nil, nil, newHTTPUsersClient(usersRC, ""), newFakeCache(), &handlerConfig{
+		SiteID:         testSiteID,
 		DocCounts:      25,
 		MaxDocCounts:   100,
 		RequestTimeout: 5 * time.Second,
@@ -53,7 +54,7 @@ func TestIntegration_SearchUsers_Happy(t *testing.T) {
 	reqBytes, err := json.Marshal(model.SearchUsersRequest{Query: "alice"})
 	require.NoError(t, err)
 
-	msg, err := f.clientNATS.Request(subject.SearchUsers("alice"), reqBytes, 5*time.Second)
+	msg, err := f.clientNATS.Request(subject.SearchUsers("alice", testSiteID), reqBytes, 5*time.Second)
 	require.NoError(t, err)
 
 	var users []model.SearchUser
@@ -74,7 +75,7 @@ func TestIntegration_SearchUsers_EmptyQueryReturnsBadRequest(t *testing.T) {
 	reqBytes, err := json.Marshal(model.SearchUsersRequest{Query: ""})
 	require.NoError(t, err)
 
-	msg, err := f.clientNATS.Request(subject.SearchUsers("alice"), reqBytes, 5*time.Second)
+	msg, err := f.clientNATS.Request(subject.SearchUsers("alice", testSiteID), reqBytes, 5*time.Second)
 	require.NoError(t, err)
 
 	var envelope model.ErrorResponse
@@ -91,7 +92,7 @@ func TestIntegration_SearchUsers_ThirdPartyErrorReturnsInternal(t *testing.T) {
 	reqBytes, err := json.Marshal(model.SearchUsersRequest{Query: "alice"})
 	require.NoError(t, err)
 
-	msg, err := f.clientNATS.Request(subject.SearchUsers("alice"), reqBytes, 5*time.Second)
+	msg, err := f.clientNATS.Request(subject.SearchUsers("alice", testSiteID), reqBytes, 5*time.Second)
 	require.NoError(t, err)
 
 	var envelope model.ErrorResponse

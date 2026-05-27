@@ -81,7 +81,7 @@ func (f *fakeCache) SetRestricted(_ context.Context, account string, rooms map[s
 }
 
 func newTestHandler(store SearchStore, mongo MongoStore, users SearchUsersClient, cache RestrictedRoomCache) *handler {
-	return newHandler(store, mongo, users, cache, handlerConfig{
+	return newHandler(store, mongo, users, cache, &handlerConfig{
 		DocCounts:               25,
 		MaxDocCounts:            100,
 		RestrictedRoomsCacheTTL: 5 * time.Minute,
@@ -192,7 +192,7 @@ func TestHandler_SearchMessages_SizeClamped(t *testing.T) {
 	cache := newFakeCache()
 	cache.store["alice"] = map[string]int64{}
 
-	h := newHandler(store, nil, nil, cache, handlerConfig{
+	h := newHandler(store, nil, nil, cache, &handlerConfig{
 		DocCounts:               25,
 		MaxDocCounts:            50,
 		RestrictedRoomsCacheTTL: time.Minute,

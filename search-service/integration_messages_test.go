@@ -49,7 +49,8 @@ func setupMessagesV2Fixture(t *testing.T) *messagesV2Fixture {
 
 	engine, err := searchengine.New(context.Background(), searchengine.Config{Backend: "elasticsearch", URL: esStub.URL})
 	require.NoError(t, err)
-	h := newHandler(newESStore(engine, testUserRoomIndex), nil, nil, fakeValkey, handlerConfig{
+	h := newHandler(newESStore(engine, testUserRoomIndex), nil, nil, fakeValkey, &handlerConfig{
+		SiteID:                  testSiteID,
 		DocCounts:               25,
 		MaxDocCounts:            100,
 		RestrictedRoomsCacheTTL: 5 * time.Minute,
@@ -68,7 +69,7 @@ func TestIntegration_SearchMessages_V2_HitProjection(t *testing.T) {
 	reqBytes, err := json.Marshal(model.SearchMessagesRequest{Query: "hello"})
 	require.NoError(t, err)
 
-	msg, err := f.clientNATS.Request(subject.SearchMessages("alice"), reqBytes, 5*time.Second)
+	msg, err := f.clientNATS.Request(subject.SearchMessages("alice", testSiteID), reqBytes, 5*time.Second)
 	require.NoError(t, err)
 
 	var resp model.SearchMessagesResponse
@@ -91,7 +92,7 @@ func TestIntegration_SearchMessages_V2_EmptyQueryReturnsBadRequest(t *testing.T)
 	reqBytes, err := json.Marshal(model.SearchMessagesRequest{Query: ""})
 	require.NoError(t, err)
 
-	msg, err := f.clientNATS.Request(subject.SearchMessages("alice"), reqBytes, 5*time.Second)
+	msg, err := f.clientNATS.Request(subject.SearchMessages("alice", testSiteID), reqBytes, 5*time.Second)
 	require.NoError(t, err)
 
 	var envelope model.ErrorResponse

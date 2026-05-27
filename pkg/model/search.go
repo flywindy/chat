@@ -2,7 +2,7 @@ package model
 
 import "time"
 
-// SearchMessagesRequest is the NATS payload for `chat.user.{account}.request.search.messages`.
+// SearchMessagesRequest is the NATS payload for `chat.user.{account}.request.search.{siteID}.messages`.
 //
 // RoomIDs, when empty, means global search across all rooms the user has
 // access to. When set, the search is scoped to the listed rooms; the service
@@ -42,7 +42,7 @@ type SearchMessage struct {
 }
 
 // SearchRoomsRequest is the NATS payload for
-// `chat.user.{account}.request.search.rooms`.
+// `chat.user.{account}.request.search.{siteID}.rooms`.
 //
 // Query is a non-empty substring match on room name (case-insensitive prefix).
 // RoomType filters by subscription type: "all" (default, same as empty),
@@ -72,7 +72,7 @@ type SearchRoom struct {
 	SiteID   string `json:"siteId"`
 }
 
-// SearchAppsRequest is the NATS payload for `chat.user.{account}.request.search.apps`.
+// SearchAppsRequest is the NATS payload for `chat.user.{account}.request.search.{siteID}.apps`.
 //
 // Query is a non-empty substring match (case-insensitive). AssistantEnabled is a
 // strict equality filter on `app.assistant.enabled` when non-nil; nil means no filter.
@@ -91,7 +91,7 @@ type SearchAppsResponse struct {
 	Apps []App `json:"apps"`
 }
 
-// SearchUsersRequest is the NATS payload for `chat.user.{account}.request.search.users`.
+// SearchUsersRequest is the NATS payload for `chat.user.{account}.request.search.{siteID}.users`.
 // Offset/Limit page the third-party HR endpoint; Limit defaults to 25 when 0.
 type SearchUsersRequest struct {
 	Query  string `json:"query"`

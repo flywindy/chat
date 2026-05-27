@@ -19,6 +19,7 @@ const defaultUsersLimit = 25
 // handlerConfig carries knobs read per request. `RequestTimeout` of zero
 // disables the context deadline so tests can skip wiring it.
 type handlerConfig struct {
+	SiteID                  string
 	DocCounts               int
 	MaxDocCounts            int
 	RestrictedRoomsCacheTTL time.Duration
@@ -36,7 +37,7 @@ type handler struct {
 	cfg   handlerConfig
 }
 
-func newHandler(store SearchStore, mongo MongoStore, users SearchUsersClient, cache RestrictedRoomCache, cfg handlerConfig) *handler {
+func newHandler(store SearchStore, mongo MongoStore, users SearchUsersClient, cache RestrictedRoomCache, cfg *handlerConfig) *handler {
 	if cfg.DocCounts <= 0 {
 		cfg.DocCounts = 25
 	}
@@ -49,14 +50,14 @@ func newHandler(store SearchStore, mongo MongoStore, users SearchUsersClient, ca
 	if cfg.RecentWindow <= 0 {
 		cfg.RecentWindow = 365 * 24 * time.Hour
 	}
-	return &handler{store: store, mongo: mongo, users: users, cache: cache, cfg: cfg}
+	return &handler{store: store, mongo: mongo, users: users, cache: cache, cfg: *cfg}
 }
 
 func (h *handler) Register(r *natsrouter.Router) {
-	natsrouter.Register(r, subject.SearchMessagesPattern(), h.searchMessages)
-	natsrouter.Register(r, subject.SearchRoomsPattern(), h.searchRooms)
-	natsrouter.Register(r, subject.SearchAppsPattern(), h.searchApps)
-	natsrouter.Register(r, subject.SearchUsersPattern(), h.searchUsers)
+	natsrouter.Register(r, subject.SearchMessagesPattern(h.cfg.SiteID), h.searchMessages)
+	natsrouter.Register(r, subject.SearchRoomsPattern(h.cfg.SiteID), h.searchRooms)
+	natsrouter.Register(r, subject.SearchAppsPattern(h.cfg.SiteID), h.searchApps)
+	natsrouter.Register(r, subject.SearchUsersPattern(h.cfg.SiteID), h.searchUsers)
 }
 
 func (h *handler) withRequestTimeout(parent context.Context) (context.Context, context.CancelFunc) {

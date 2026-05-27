@@ -80,7 +80,7 @@ type SearchConfig struct {
 // against the other or moved to a distinct prefix to avoid silent env
 // shadowing.
 type Config struct {
-	SiteID   string         `env:"SITE_ID" envDefault:"site-local"`
+	SiteID   string         `env:"SITE_ID,required"`
 	ES       ESConfig       `envPrefix:"SEARCH_"`
 	Valkey   ValkeyConfig   `envPrefix:"VALKEY_"`
 	NATS     NATSConfig     `envPrefix:"NATS_"`
@@ -153,7 +153,8 @@ func main() {
 	store := newESStore(engine, cfg.Search.UserRoomIndex)
 	cache := newValkeyCache(valkey)
 	mongoStore := newMongoStore(mongoDB)
-	handler := newHandler(store, mongoStore, usersClient, cache, handlerConfig{
+	handler := newHandler(store, mongoStore, usersClient, cache, &handlerConfig{
+		SiteID:                  cfg.SiteID,
 		DocCounts:               cfg.Search.DocCounts,
 		MaxDocCounts:            cfg.Search.MaxDocCounts,
 		RestrictedRoomsCacheTTL: cfg.Search.RestrictedRoomsCacheTTL,

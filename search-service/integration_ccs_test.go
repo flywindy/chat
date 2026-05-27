@@ -78,7 +78,8 @@ func setupCCSFixture(t *testing.T) *ccsFixture {
 	cacheClient := valkeyutil.WrapClusterClient(testutil.SharedValkeyCluster(t))
 	t.Cleanup(func() { testutil.FlushValkey(t) })
 
-	h := newHandler(newESStore(localEngine, testUserRoomIndex), nil, nil, newValkeyCache(cacheClient), handlerConfig{
+	h := newHandler(newESStore(localEngine, testUserRoomIndex), nil, nil, newValkeyCache(cacheClient), &handlerConfig{
+		SiteID:                  testSiteID,
 		DocCounts:               25,
 		MaxDocCounts:            100,
 		RestrictedRoomsCacheTTL: 5 * time.Minute,
@@ -324,7 +325,7 @@ func TestSearchService_SearchMessages_CCS_CrossCluster_Unrestricted(t *testing.T
 	require.NoError(t, err)
 
 	// Long timeout: first request is Valkey miss → ES prefetch → CCS fanout.
-	msg, err := f.clientNATS.Request(subject.SearchMessages(account), reqData, 30*time.Second)
+	msg, err := f.clientNATS.Request(subject.SearchMessages(account, testSiteID), reqData, 30*time.Second)
 	require.NoError(t, err, "NATS request failed")
 
 	t.Logf("response: %s", msg.Data)
@@ -467,7 +468,7 @@ func TestSearchService_SearchMessages_CCS_CrossCluster_Restricted(t *testing.T) 
 	reqData, err := json.Marshal(model.SearchMessagesRequest{Query: "hello"})
 	require.NoError(t, err)
 
-	msg, err := f.clientNATS.Request(subject.SearchMessages(account), reqData, 30*time.Second)
+	msg, err := f.clientNATS.Request(subject.SearchMessages(account, testSiteID), reqData, 30*time.Second)
 	require.NoError(t, err, "NATS request failed")
 	t.Logf("response: %s", msg.Data)
 

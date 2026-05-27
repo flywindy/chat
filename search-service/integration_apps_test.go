@@ -30,7 +30,8 @@ type appsFixture struct {
 func setupAppsFixture(t *testing.T) *appsFixture {
 	t.Helper()
 	mongoDB := testutil.MongoDB(t, "search_service_test")
-	h := newHandler(&fakeStore{}, newMongoStore(mongoDB), nil, newFakeCache(), handlerConfig{
+	h := newHandler(&fakeStore{}, newMongoStore(mongoDB), nil, newFakeCache(), &handlerConfig{
+		SiteID:                  testSiteID,
 		DocCounts:               25,
 		MaxDocCounts:            100,
 		RestrictedRoomsCacheTTL: 5 * time.Minute,
@@ -56,7 +57,7 @@ func TestIntegration_SearchApps_PrototypePipeline(t *testing.T) {
 	reqBytes, err := json.Marshal(model.SearchAppsRequest{Query: "weather"})
 	require.NoError(t, err)
 
-	msg, err := f.clientNATS.Request(subject.SearchApps("alice"), reqBytes, 5*time.Second)
+	msg, err := f.clientNATS.Request(subject.SearchApps("alice", testSiteID), reqBytes, 5*time.Second)
 	require.NoError(t, err)
 
 	var resp model.SearchAppsResponse
@@ -85,7 +86,7 @@ func TestIntegration_SearchApps_AssistantEnabledFilter(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	msg, err := f.clientNATS.Request(subject.SearchApps("alice"), reqBytes, 5*time.Second)
+	msg, err := f.clientNATS.Request(subject.SearchApps("alice", testSiteID), reqBytes, 5*time.Second)
 	require.NoError(t, err)
 
 	var resp model.SearchAppsResponse
@@ -101,7 +102,7 @@ func TestIntegration_SearchApps_EmptyQueryReturnsBadRequest(t *testing.T) {
 	reqBytes, err := json.Marshal(model.SearchAppsRequest{Query: ""})
 	require.NoError(t, err)
 
-	msg, err := f.clientNATS.Request(subject.SearchApps("alice"), reqBytes, 5*time.Second)
+	msg, err := f.clientNATS.Request(subject.SearchApps("alice", testSiteID), reqBytes, 5*time.Second)
 	require.NoError(t, err)
 
 	var envelope model.ErrorResponse

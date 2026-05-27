@@ -43,7 +43,8 @@ func setupRoomsFixture(t *testing.T) *roomsFixture {
 
 	cache := newValkeyCache(valkeyutil.WrapClusterClient(testutil.SharedValkeyCluster(t)))
 	t.Cleanup(func() { testutil.FlushValkey(t) })
-	h := newHandler(newESStore(engine, testUserRoomIndex), nil, nil, cache, handlerConfig{
+	h := newHandler(newESStore(engine, testUserRoomIndex), nil, nil, cache, &handlerConfig{
+		SiteID:                  testSiteID,
 		DocCounts:               25,
 		MaxDocCounts:            100,
 		RestrictedRoomsCacheTTL: 5 * time.Minute,
@@ -126,7 +127,7 @@ func TestIntegration_SearchRooms_HappyPath(t *testing.T) {
 	reqBytes, err := json.Marshal(model.SearchRoomsRequest{Query: "engineering"})
 	require.NoError(t, err)
 
-	msg, err := f.clientNATS.Request(subject.SearchRooms(account), reqBytes, 10*time.Second)
+	msg, err := f.clientNATS.Request(subject.SearchRooms(account, testSiteID), reqBytes, 10*time.Second)
 	require.NoError(t, err)
 
 	var resp model.SearchRoomsResponse
@@ -169,7 +170,7 @@ func TestIntegration_SearchRooms_RoomTypeChannelFilter(t *testing.T) {
 	reqBytes, err := json.Marshal(model.SearchRoomsRequest{Query: "bob", RoomType: "channel"})
 	require.NoError(t, err)
 
-	msg, err := f.clientNATS.Request(subject.SearchRooms(account), reqBytes, 10*time.Second)
+	msg, err := f.clientNATS.Request(subject.SearchRooms(account, testSiteID), reqBytes, 10*time.Second)
 	require.NoError(t, err)
 
 	var resp model.SearchRoomsResponse
@@ -186,7 +187,7 @@ func TestIntegration_SearchRooms_EmptyQueryReturnsBadRequest(t *testing.T) {
 	reqBytes, err := json.Marshal(model.SearchRoomsRequest{Query: ""})
 	require.NoError(t, err)
 
-	msg, err := f.clientNATS.Request(subject.SearchRooms("alice"), reqBytes, 5*time.Second)
+	msg, err := f.clientNATS.Request(subject.SearchRooms("alice", testSiteID), reqBytes, 5*time.Second)
 	require.NoError(t, err)
 
 	var envelope model.ErrorResponse
@@ -201,7 +202,7 @@ func TestIntegration_SearchRooms_RoomTypeAppReturnsBadRequest(t *testing.T) {
 	reqBytes, err := json.Marshal(model.SearchRoomsRequest{Query: "x", RoomType: "app"})
 	require.NoError(t, err)
 
-	msg, err := f.clientNATS.Request(subject.SearchRooms("alice"), reqBytes, 5*time.Second)
+	msg, err := f.clientNATS.Request(subject.SearchRooms("alice", testSiteID), reqBytes, 5*time.Second)
 	require.NoError(t, err)
 
 	var envelope model.ErrorResponse

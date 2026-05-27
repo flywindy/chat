@@ -1531,10 +1531,10 @@ See [Error envelope](#6-error-envelope-reference).
 
 > **Breaking change (v2):** The response shape has changed from `{total, results}` to `{messages, total}`. The `results` field no longer exists. The per-hit type is now `SearchMessage` (an enriched projection) instead of the former `MessageSearchHit`. Update all clients before deploying this version.
 
-**Subject:** `chat.user.{account}.request.search.messages`
+**Subject:** `chat.user.{account}.request.search.{siteID}.messages`
 **Reply subject:** auto-generated `_INBOX.>` (NATS request/reply)
 
-**Auth:** the `{account}` in the subject is the authenticated identity. The search is automatically scoped to rooms the user is a member of — results never include messages from rooms the user cannot access.
+**Auth:** the `{account}` in the subject is the authenticated identity. `{siteID}` is the requester's home site — the supercluster routes the request to the search-service running on that site. The search is automatically scoped to rooms the user is a member of — results never include messages from rooms the user cannot access.
 
 **Cross-site results:** results may include messages from rooms hosted on remote sites (the index is searched across the local and remote clusters). The `siteId` on each `SearchMessage` identifies the originating site; there is no client opt-in/opt-out.
 
@@ -1625,10 +1625,10 @@ See [Error envelope](#6-error-envelope-reference).
 
 #### Search Rooms
 
-**Subject:** `chat.user.{account}.request.search.rooms`
+**Subject:** `chat.user.{account}.request.search.{siteID}.rooms`
 **Reply subject:** auto-generated `_INBOX.>` (NATS request/reply)
 
-Full-text search across rooms the requester is subscribed to. Results are served directly from the spotlight ES index (one document per `(account, room)` pair), in ES relevance order.
+`{siteID}` is the requester's home site; the supercluster routes the request to that site's search-service. Full-text search across rooms the requester is subscribed to. Results are served directly from the spotlight ES index (one document per `(account, room)` pair), in ES relevance order.
 
 ##### Request body
 
@@ -1696,9 +1696,9 @@ See [Error envelope](#6-error-envelope-reference).
 
 #### Search Apps
 
-**Subject:** `chat.user.{account}.request.search.apps`
+**Subject:** `chat.user.{account}.request.search.{siteID}.apps`
 
-**Auth:** the `{account}` in the subject is the authenticated identity (enforced by the NATS auth callout).
+**Auth:** the `{account}` in the subject is the authenticated identity (enforced by the NATS auth callout). `{siteID}` is the requester's home site; the supercluster routes the request to that site's search-service.
 
 **Current behavior (prototype):** results are matched by `query` (and optional `assistantEnabled`) only. The response is **not** yet subscription-scoped — every app whose name matches the query is returned.
 
@@ -1749,10 +1749,10 @@ These are documentation categories. The wire error envelope is `{ "error": "<hum
 
 #### Search Users
 
-**Subject:** `chat.user.{account}.request.search.users`
+**Subject:** `chat.user.{account}.request.search.{siteID}.users`
 **Reply subject:** auto-generated `_INBOX.>` (NATS request/reply)
 
-Proxy search for users via the third-party HR endpoint. The `{account}` in the subject is the authenticated identity (enforced by the NATS auth callout) and is used for logging/metrics only — company-scoping is enforced by the third-party endpoint.
+`{siteID}` is the requester's home site; the supercluster routes the request to that site's search-service. Proxy search for users via the third-party HR endpoint. The `{account}` in the subject is the authenticated identity (enforced by the NATS auth callout) and is used for logging/metrics only — company-scoping is enforced by the third-party endpoint.
 
 **Request body:**
 ```json

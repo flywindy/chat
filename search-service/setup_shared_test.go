@@ -23,7 +23,10 @@ import (
 	"github.com/hmchangw/chat/pkg/testutil"
 )
 
-const testUserRoomIndex = "user-room"
+const (
+	testUserRoomIndex = "user-room"
+	testSiteID        = "site-a"
+)
 
 // NATS queue groups. Each search-service router gets its own so a slow
 // drain after one test can't deliver to a sibling test's handler.
