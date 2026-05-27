@@ -1,4 +1,4 @@
-.PHONY: lint fmt test test-integration generate build deps-up deps-down up down \
+.PHONY: lint fmt test test-integration generate build deps-up deps-down up down dev \
         obs-up obs-down tools sast sast-gosec sast-vuln sast-semgrep
 
 DEPS_COMPOSE     := docker-local/compose.deps.yaml
@@ -121,6 +121,15 @@ else
 	docker compose -f $(SERVICES_COMPOSE) up --build
 endif
 
+# Hot-reload a single service against the shared deps stack. Requires
+# `make deps-up` first. Uses air; install via `make tools`.
+dev:
+ifndef SERVICE
+	$(error SERVICE is required. Usage: make dev SERVICE=<name>)
+endif
+	@chmod +x tools/dev/dev.sh
+	./tools/dev/dev.sh $(SERVICE)
+
 # Stop microservices. SERVICE=<name> stops one; otherwise stops every service.
 down:
 ifdef SERVICE
@@ -152,6 +161,7 @@ tools:
 	GOTOOLCHAIN=$(TOOLS_GO_TOOLCHAIN) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 	GOTOOLCHAIN=$(TOOLS_GO_TOOLCHAIN) go install github.com/securego/gosec/v2/cmd/gosec@$(GOSEC_VERSION)
 	GOTOOLCHAIN=$(TOOLS_GO_TOOLCHAIN) go install golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION)
+	GOTOOLCHAIN=$(TOOLS_GO_TOOLCHAIN) go install github.com/air-verse/air@v1.62.0
 	@if command -v pipx >/dev/null 2>&1; then \
 	  pipx install --force semgrep==$(SEMGREP_VERSION) \
 	    && pipx inject semgrep setuptools; \

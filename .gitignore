@@ -56,3 +56,10 @@ chat-frontend/.vite/
 
 # Vitest junit reporter output (CI artifact, not source)
 chat-frontend/junit.xml
+
+# Local-only verification cache (tools/buildcache).
+.cache/
+
+# air live-reload tmp artifacts.
+tmp/
+.air.*.toml
