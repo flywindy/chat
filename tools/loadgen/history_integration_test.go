@@ -167,17 +167,17 @@ func provisionHistorySchema(t *testing.T, session *gocql.Session, keyspace strin
 			pinned_at TIMESTAMP, pinned_by FROZEN<"Participant">,
 			PRIMARY KEY (message_id, created_at)
 		) WITH CLUSTERING ORDER BY (created_at DESC)`),
-		cql(`CREATE TABLE IF NOT EXISTS %s.thread_messages_by_room (
-			room_id TEXT, bucket BIGINT, thread_room_id TEXT, created_at TIMESTAMP,
-			message_id TEXT, sender FROZEN<"Participant">, msg TEXT,
+		cql(`CREATE TABLE IF NOT EXISTS %s.thread_messages_by_thread (
+			thread_room_id TEXT, created_at TIMESTAMP, message_id TEXT, room_id TEXT,
+			sender FROZEN<"Participant">, msg TEXT,
 			mentions SET<FROZEN<"Participant">>, attachments LIST<BLOB>,
 			file FROZEN<"File">, card FROZEN<"Card">, card_action FROZEN<"CardAction">,
 			thread_parent_id TEXT, quoted_parent_message FROZEN<"QuotedParentMessage">,
 			visible_to TEXT, reactions MAP<TEXT, FROZEN<SET<FROZEN<"Participant">>>>,
 			deleted BOOLEAN, type TEXT, sys_msg_data BLOB, site_id TEXT,
 			edited_at TIMESTAMP, updated_at TIMESTAMP,
-			PRIMARY KEY ((room_id, bucket), thread_room_id, created_at, message_id)
-		) WITH CLUSTERING ORDER BY (thread_room_id DESC, created_at DESC, message_id DESC)`),
+			PRIMARY KEY ((thread_room_id), created_at, message_id)
+		) WITH CLUSTERING ORDER BY (created_at DESC, message_id DESC)`),
 	}
 	for _, stmt := range tables {
 		require.NoError(t, session.Query(stmt).Exec())

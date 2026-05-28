@@ -67,7 +67,7 @@ type QuotedParentMessage struct {
 }
 
 // Message represents a message row in the Cassandra message tables
-// (messages_by_room, messages_by_id, thread_messages_by_room).
+// (messages_by_room, messages_by_id, thread_messages_by_thread).
 //
 // cql tags are consumed by the structScan helper in history-service/internal/cassrepo
 // to map returned Cassandra columns to struct fields by name, eliminating

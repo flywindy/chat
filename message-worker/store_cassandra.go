@@ -95,12 +95,11 @@ func (s *CassandraStore) SaveMessage(ctx context.Context, msg *model.Message, se
 }
 
 // SaveThreadMessage batches the two regular inserts (messages_by_id and
-// thread_messages_by_room) into one round-trip via UnloggedBatch — same
+// thread_messages_by_thread) into one round-trip via UnloggedBatch — same
 // rationale as SaveMessage. incrementParentTcount stays separate because
 // it uses Lightweight Transactions (CAS), which cannot be combined with
 // non-LWT statements in a single batch.
 func (s *CassandraStore) SaveThreadMessage(ctx context.Context, msg *model.Message, sender *cassParticipant, siteID string, threadRoomID string) error {
-	b := s.bucket.Of(msg.CreatedAt)
 	mentions := toMentionSet(msg.Mentions)
 
 	batch := s.cassSession.NewBatch(gocql.UnloggedBatch).WithContext(ctx)
@@ -113,11 +112,11 @@ func (s *CassandraStore) SaveThreadMessage(ctx context.Context, msg *model.Messa
 		threadRoomID, msg.ThreadParentMessageID, msg.ThreadParentMessageCreatedAt, msg.Type, msg.SysMsgData, msg.TShow, msg.QuotedParentMessage,
 	)
 	batch.Query(
-		`INSERT INTO thread_messages_by_room
-		 (room_id, bucket, thread_room_id, created_at, message_id, thread_parent_id, sender, msg,
+		`INSERT INTO thread_messages_by_thread
+		 (thread_room_id, created_at, message_id, room_id, thread_parent_id, sender, msg,
 		  site_id, updated_at, mentions, type, sys_msg_data, quoted_parent_message)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		msg.RoomID, b, threadRoomID, msg.CreatedAt, msg.ID, msg.ThreadParentMessageID,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		threadRoomID, msg.CreatedAt, msg.ID, msg.RoomID, msg.ThreadParentMessageID,
 		sender, msg.Content, siteID, msg.CreatedAt, mentions,
 		msg.Type, msg.SysMsgData, msg.QuotedParentMessage,
 	)

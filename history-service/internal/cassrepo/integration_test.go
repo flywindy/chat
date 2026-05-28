@@ -86,12 +86,11 @@ func setupCassandra(t *testing.T) *gocql.Session {
 		PRIMARY KEY (message_id, created_at)
 	) WITH CLUSTERING ORDER BY (created_at DESC)`)).Exec())
 
-	require.NoError(t, adminSession.Query(cql(`CREATE TABLE IF NOT EXISTS %s.thread_messages_by_room (
-		room_id TEXT,
-		bucket BIGINT,
+	require.NoError(t, adminSession.Query(cql(`CREATE TABLE IF NOT EXISTS %s.thread_messages_by_thread (
 		thread_room_id TEXT,
 		created_at TIMESTAMP,
 		message_id TEXT,
+		room_id TEXT,
 		sender FROZEN<"Participant">,
 		msg TEXT,
 		mentions SET<FROZEN<"Participant">>,
@@ -109,8 +108,8 @@ func setupCassandra(t *testing.T) *gocql.Session {
 		site_id TEXT,
 		edited_at TIMESTAMP,
 		updated_at TIMESTAMP,
-		PRIMARY KEY ((room_id, bucket), thread_room_id, created_at, message_id)
-	) WITH CLUSTERING ORDER BY (thread_room_id DESC, created_at DESC, message_id DESC)`)).Exec())
+		PRIMARY KEY ((thread_room_id), created_at, message_id)
+	) WITH CLUSTERING ORDER BY (created_at DESC, message_id DESC)`)).Exec())
 
 	require.NoError(t, adminSession.Query(cql(`CREATE TABLE IF NOT EXISTS %s.pinned_messages_by_room (
 		room_id TEXT,

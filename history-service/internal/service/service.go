@@ -21,7 +21,7 @@ type MessageReader interface {
 	GetMessagesAfter(ctx context.Context, roomID string, after time.Time, ceiling time.Time, pageReq cassrepo.PageRequest) (cassrepo.Page[models.Message], error)
 	GetAllMessagesAsc(ctx context.Context, roomID string, floor, ceiling time.Time, pageReq cassrepo.PageRequest) (cassrepo.Page[models.Message], error)
 	GetMessageByID(ctx context.Context, messageID string) (*models.Message, error)
-	GetThreadMessages(ctx context.Context, roomID, threadRoomID string, before, floor time.Time, pageReq cassrepo.PageRequest) (cassrepo.Page[models.Message], error)
+	GetThreadMessages(ctx context.Context, threadRoomID string, before, floor time.Time, pageReq cassrepo.PageRequest) (cassrepo.Page[models.Message], error)
 	GetMessagesByIDs(ctx context.Context, messageIDs []string) ([]models.Message, error)
 }
 

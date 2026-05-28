@@ -61,11 +61,16 @@ CREATE TYPE IF NOT EXISTS "QuotedParentMessage"(
 
 ### Partition Bucketing
 
-`messages_by_room` and `thread_messages_by_room` use a composite partition key
-`(room_id, bucket)`. `bucket` is the start-of-window in unix milliseconds derived
-deterministically from `created_at` via `pkg/msgbucket.Sizer`. The window size
-is configured per service via `MESSAGE_BUCKET_HOURS` (default 24); all services
-that read or write these tables MUST be configured with the same window.
+`messages_by_room` uses a composite partition key `(room_id, bucket)`. `bucket`
+is the start-of-window in unix milliseconds derived deterministically from
+`created_at` via `pkg/msgbucket.Sizer`. The window size is configured per
+service via `MESSAGE_BUCKET_HOURS` (default 24); all services that read or
+write this table MUST be configured with the same window.
+
+`thread_messages_by_thread` is partitioned by `thread_room_id` alone — one
+partition per thread. Reads slice the partition by `created_at`; no bucket
+walk is needed. This shape keeps the worst-case fetch latency bounded by
+partition size rather than by the thread's lifespan.
 
 #### messages_by_room
 ```cql
@@ -98,14 +103,13 @@ CREATE TABLE IF NOT EXISTS messages_by_room(
   PRIMARY KEY((room_id, bucket),created_at,message_id)
 )WITH CLUSTERING ORDER BY (created_at DESC, message_id DESC);
 ```
-#### thread_messages_by_room
+#### thread_messages_by_thread
 ```cql
-CREATE TABLE IF NOT EXISTS thread_messages_by_room(
-  room_id TEXT,
-  bucket BIGINT,
+CREATE TABLE IF NOT EXISTS thread_messages_by_thread(
   thread_room_id TEXT,
   created_at TIMESTAMP,
   message_id TEXT,
+  room_id TEXT,
   thread_parent_id TEXT,
   sender FROZEN<"Participant">,
   msg TEXT,
@@ -123,8 +127,8 @@ CREATE TABLE IF NOT EXISTS thread_messages_by_room(
   site_id TEXT,
   edited_at TIMESTAMP,
   updated_at TIMESTAMP,
-  PRIMARY KEY((room_id, bucket),thread_room_id,created_at,message_id)
-)WITH CLUSTERING ORDER BY (thread_room_id DESC,created_at DESC, message_id DESC);
+  PRIMARY KEY((thread_room_id),created_at,message_id)
+)WITH CLUSTERING ORDER BY (created_at DESC, message_id DESC);
 ```
 #### pinned_messages_by_room
 ```cql

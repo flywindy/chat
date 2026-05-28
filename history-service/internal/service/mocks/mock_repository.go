@@ -15,8 +15,8 @@ import (
 	time "time"
 
 	cassrepo "github.com/hmchangw/chat/history-service/internal/cassrepo"
+	models "github.com/hmchangw/chat/history-service/internal/models"
 	model "github.com/hmchangw/chat/pkg/model"
-	cassandra "github.com/hmchangw/chat/pkg/model/cassandra"
 	mongoutil "github.com/hmchangw/chat/pkg/mongoutil"
 	gomock "go.uber.org/mock/gomock"
 )
@@ -46,10 +46,10 @@ func (m *MockMessageReader) EXPECT() *MockMessageReaderMockRecorder {
 }
 
 // GetAllMessagesAsc mocks base method.
-func (m *MockMessageReader) GetAllMessagesAsc(ctx context.Context, roomID string, floor, ceiling time.Time, pageReq cassrepo.PageRequest) (cassrepo.Page[cassandra.Message], error) {
+func (m *MockMessageReader) GetAllMessagesAsc(ctx context.Context, roomID string, floor, ceiling time.Time, pageReq cassrepo.PageRequest) (cassrepo.Page[models.Message], error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetAllMessagesAsc", ctx, roomID, floor, ceiling, pageReq)
-	ret0, _ := ret[0].(cassrepo.Page[cassandra.Message])
+	ret0, _ := ret[0].(cassrepo.Page[models.Message])
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -61,10 +61,10 @@ func (mr *MockMessageReaderMockRecorder) GetAllMessagesAsc(ctx, roomID, floor, c
 }
 
 // GetMessageByID mocks base method.
-func (m *MockMessageReader) GetMessageByID(ctx context.Context, messageID string) (*cassandra.Message, error) {
+func (m *MockMessageReader) GetMessageByID(ctx context.Context, messageID string) (*models.Message, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetMessageByID", ctx, messageID)
-	ret0, _ := ret[0].(*cassandra.Message)
+	ret0, _ := ret[0].(*models.Message)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -76,10 +76,10 @@ func (mr *MockMessageReaderMockRecorder) GetMessageByID(ctx, messageID any) *gom
 }
 
 // GetMessagesAfter mocks base method.
-func (m *MockMessageReader) GetMessagesAfter(ctx context.Context, roomID string, after, ceiling time.Time, pageReq cassrepo.PageRequest) (cassrepo.Page[cassandra.Message], error) {
+func (m *MockMessageReader) GetMessagesAfter(ctx context.Context, roomID string, after, ceiling time.Time, pageReq cassrepo.PageRequest) (cassrepo.Page[models.Message], error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetMessagesAfter", ctx, roomID, after, ceiling, pageReq)
-	ret0, _ := ret[0].(cassrepo.Page[cassandra.Message])
+	ret0, _ := ret[0].(cassrepo.Page[models.Message])
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -91,10 +91,10 @@ func (mr *MockMessageReaderMockRecorder) GetMessagesAfter(ctx, roomID, after, ce
 }
 
 // GetMessagesBefore mocks base method.
-func (m *MockMessageReader) GetMessagesBefore(ctx context.Context, roomID string, before, floor time.Time, pageReq cassrepo.PageRequest) (cassrepo.Page[cassandra.Message], error) {
+func (m *MockMessageReader) GetMessagesBefore(ctx context.Context, roomID string, before, floor time.Time, pageReq cassrepo.PageRequest) (cassrepo.Page[models.Message], error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetMessagesBefore", ctx, roomID, before, floor, pageReq)
-	ret0, _ := ret[0].(cassrepo.Page[cassandra.Message])
+	ret0, _ := ret[0].(cassrepo.Page[models.Message])
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -106,10 +106,10 @@ func (mr *MockMessageReaderMockRecorder) GetMessagesBefore(ctx, roomID, before, 
 }
 
 // GetMessagesBetweenDesc mocks base method.
-func (m *MockMessageReader) GetMessagesBetweenDesc(ctx context.Context, roomID string, since, before time.Time, pageReq cassrepo.PageRequest) (cassrepo.Page[cassandra.Message], error) {
+func (m *MockMessageReader) GetMessagesBetweenDesc(ctx context.Context, roomID string, since, before time.Time, pageReq cassrepo.PageRequest) (cassrepo.Page[models.Message], error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetMessagesBetweenDesc", ctx, roomID, since, before, pageReq)
-	ret0, _ := ret[0].(cassrepo.Page[cassandra.Message])
+	ret0, _ := ret[0].(cassrepo.Page[models.Message])
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -121,10 +121,10 @@ func (mr *MockMessageReaderMockRecorder) GetMessagesBetweenDesc(ctx, roomID, sin
 }
 
 // GetMessagesByIDs mocks base method.
-func (m *MockMessageReader) GetMessagesByIDs(ctx context.Context, messageIDs []string) ([]cassandra.Message, error) {
+func (m *MockMessageReader) GetMessagesByIDs(ctx context.Context, messageIDs []string) ([]models.Message, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetMessagesByIDs", ctx, messageIDs)
-	ret0, _ := ret[0].([]cassandra.Message)
+	ret0, _ := ret[0].([]models.Message)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -136,18 +136,18 @@ func (mr *MockMessageReaderMockRecorder) GetMessagesByIDs(ctx, messageIDs any) *
 }
 
 // GetThreadMessages mocks base method.
-func (m *MockMessageReader) GetThreadMessages(ctx context.Context, roomID, threadRoomID string, before, floor time.Time, pageReq cassrepo.PageRequest) (cassrepo.Page[cassandra.Message], error) {
+func (m *MockMessageReader) GetThreadMessages(ctx context.Context, threadRoomID string, before, floor time.Time, pageReq cassrepo.PageRequest) (cassrepo.Page[models.Message], error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetThreadMessages", ctx, roomID, threadRoomID, before, floor, pageReq)
-	ret0, _ := ret[0].(cassrepo.Page[cassandra.Message])
+	ret := m.ctrl.Call(m, "GetThreadMessages", ctx, threadRoomID, before, floor, pageReq)
+	ret0, _ := ret[0].(cassrepo.Page[models.Message])
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // GetThreadMessages indicates an expected call of GetThreadMessages.
-func (mr *MockMessageReaderMockRecorder) GetThreadMessages(ctx, roomID, threadRoomID, before, floor, pageReq any) *gomock.Call {
+func (mr *MockMessageReaderMockRecorder) GetThreadMessages(ctx, threadRoomID, before, floor, pageReq any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetThreadMessages", reflect.TypeOf((*MockMessageReader)(nil).GetThreadMessages), ctx, roomID, threadRoomID, before, floor, pageReq)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetThreadMessages", reflect.TypeOf((*MockMessageReader)(nil).GetThreadMessages), ctx, threadRoomID, before, floor, pageReq)
 }
 
 // MockMessageWriter is a mock of MessageWriter interface.
@@ -175,7 +175,7 @@ func (m *MockMessageWriter) EXPECT() *MockMessageWriterMockRecorder {
 }
 
 // SoftDeleteMessage mocks base method.
-func (m *MockMessageWriter) SoftDeleteMessage(ctx context.Context, msg *cassandra.Message, deletedAt time.Time) (time.Time, bool, error) {
+func (m *MockMessageWriter) SoftDeleteMessage(ctx context.Context, msg *models.Message, deletedAt time.Time) (time.Time, bool, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "SoftDeleteMessage", ctx, msg, deletedAt)
 	ret0, _ := ret[0].(time.Time)
@@ -191,7 +191,7 @@ func (mr *MockMessageWriterMockRecorder) SoftDeleteMessage(ctx, msg, deletedAt a
 }
 
 // UpdateMessageContent mocks base method.
-func (m *MockMessageWriter) UpdateMessageContent(ctx context.Context, msg *cassandra.Message, newMsg string, editedAt time.Time) error {
+func (m *MockMessageWriter) UpdateMessageContent(ctx context.Context, msg *models.Message, newMsg string, editedAt time.Time) error {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "UpdateMessageContent", ctx, msg, newMsg, editedAt)
 	ret0, _ := ret[0].(error)
@@ -229,10 +229,10 @@ func (m *MockMessageRepository) EXPECT() *MockMessageRepositoryMockRecorder {
 }
 
 // GetAllMessagesAsc mocks base method.
-func (m *MockMessageRepository) GetAllMessagesAsc(ctx context.Context, roomID string, floor, ceiling time.Time, pageReq cassrepo.PageRequest) (cassrepo.Page[cassandra.Message], error) {
+func (m *MockMessageRepository) GetAllMessagesAsc(ctx context.Context, roomID string, floor, ceiling time.Time, pageReq cassrepo.PageRequest) (cassrepo.Page[models.Message], error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetAllMessagesAsc", ctx, roomID, floor, ceiling, pageReq)
-	ret0, _ := ret[0].(cassrepo.Page[cassandra.Message])
+	ret0, _ := ret[0].(cassrepo.Page[models.Message])
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -244,10 +244,10 @@ func (mr *MockMessageRepositoryMockRecorder) GetAllMessagesAsc(ctx, roomID, floo
 }
 
 // GetMessageByID mocks base method.
-func (m *MockMessageRepository) GetMessageByID(ctx context.Context, messageID string) (*cassandra.Message, error) {
+func (m *MockMessageRepository) GetMessageByID(ctx context.Context, messageID string) (*models.Message, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetMessageByID", ctx, messageID)
-	ret0, _ := ret[0].(*cassandra.Message)
+	ret0, _ := ret[0].(*models.Message)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -259,10 +259,10 @@ func (mr *MockMessageRepositoryMockRecorder) GetMessageByID(ctx, messageID any) 
 }
 
 // GetMessagesAfter mocks base method.
-func (m *MockMessageRepository) GetMessagesAfter(ctx context.Context, roomID string, after, ceiling time.Time, pageReq cassrepo.PageRequest) (cassrepo.Page[cassandra.Message], error) {
+func (m *MockMessageRepository) GetMessagesAfter(ctx context.Context, roomID string, after, ceiling time.Time, pageReq cassrepo.PageRequest) (cassrepo.Page[models.Message], error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetMessagesAfter", ctx, roomID, after, ceiling, pageReq)
-	ret0, _ := ret[0].(cassrepo.Page[cassandra.Message])
+	ret0, _ := ret[0].(cassrepo.Page[models.Message])
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -274,10 +274,10 @@ func (mr *MockMessageRepositoryMockRecorder) GetMessagesAfter(ctx, roomID, after
 }
 
 // GetMessagesBefore mocks base method.
-func (m *MockMessageRepository) GetMessagesBefore(ctx context.Context, roomID string, before, floor time.Time, pageReq cassrepo.PageRequest) (cassrepo.Page[cassandra.Message], error) {
+func (m *MockMessageRepository) GetMessagesBefore(ctx context.Context, roomID string, before, floor time.Time, pageReq cassrepo.PageRequest) (cassrepo.Page[models.Message], error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetMessagesBefore", ctx, roomID, before, floor, pageReq)
-	ret0, _ := ret[0].(cassrepo.Page[cassandra.Message])
+	ret0, _ := ret[0].(cassrepo.Page[models.Message])
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -289,10 +289,10 @@ func (mr *MockMessageRepositoryMockRecorder) GetMessagesBefore(ctx, roomID, befo
 }
 
 // GetMessagesBetweenDesc mocks base method.
-func (m *MockMessageRepository) GetMessagesBetweenDesc(ctx context.Context, roomID string, since, before time.Time, pageReq cassrepo.PageRequest) (cassrepo.Page[cassandra.Message], error) {
+func (m *MockMessageRepository) GetMessagesBetweenDesc(ctx context.Context, roomID string, since, before time.Time, pageReq cassrepo.PageRequest) (cassrepo.Page[models.Message], error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetMessagesBetweenDesc", ctx, roomID, since, before, pageReq)
-	ret0, _ := ret[0].(cassrepo.Page[cassandra.Message])
+	ret0, _ := ret[0].(cassrepo.Page[models.Message])
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -304,10 +304,10 @@ func (mr *MockMessageRepositoryMockRecorder) GetMessagesBetweenDesc(ctx, roomID,
 }
 
 // GetMessagesByIDs mocks base method.
-func (m *MockMessageRepository) GetMessagesByIDs(ctx context.Context, messageIDs []string) ([]cassandra.Message, error) {
+func (m *MockMessageRepository) GetMessagesByIDs(ctx context.Context, messageIDs []string) ([]models.Message, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetMessagesByIDs", ctx, messageIDs)
-	ret0, _ := ret[0].([]cassandra.Message)
+	ret0, _ := ret[0].([]models.Message)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -319,22 +319,22 @@ func (mr *MockMessageRepositoryMockRecorder) GetMessagesByIDs(ctx, messageIDs an
 }
 
 // GetThreadMessages mocks base method.
-func (m *MockMessageRepository) GetThreadMessages(ctx context.Context, roomID, threadRoomID string, before, floor time.Time, pageReq cassrepo.PageRequest) (cassrepo.Page[cassandra.Message], error) {
+func (m *MockMessageRepository) GetThreadMessages(ctx context.Context, threadRoomID string, before, floor time.Time, pageReq cassrepo.PageRequest) (cassrepo.Page[models.Message], error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetThreadMessages", ctx, roomID, threadRoomID, before, floor, pageReq)
-	ret0, _ := ret[0].(cassrepo.Page[cassandra.Message])
+	ret := m.ctrl.Call(m, "GetThreadMessages", ctx, threadRoomID, before, floor, pageReq)
+	ret0, _ := ret[0].(cassrepo.Page[models.Message])
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // GetThreadMessages indicates an expected call of GetThreadMessages.
-func (mr *MockMessageRepositoryMockRecorder) GetThreadMessages(ctx, roomID, threadRoomID, before, floor, pageReq any) *gomock.Call {
+func (mr *MockMessageRepositoryMockRecorder) GetThreadMessages(ctx, threadRoomID, before, floor, pageReq any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetThreadMessages", reflect.TypeOf((*MockMessageRepository)(nil).GetThreadMessages), ctx, roomID, threadRoomID, before, floor, pageReq)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetThreadMessages", reflect.TypeOf((*MockMessageRepository)(nil).GetThreadMessages), ctx, threadRoomID, before, floor, pageReq)
 }
 
 // SoftDeleteMessage mocks base method.
-func (m *MockMessageRepository) SoftDeleteMessage(ctx context.Context, msg *cassandra.Message, deletedAt time.Time) (time.Time, bool, error) {
+func (m *MockMessageRepository) SoftDeleteMessage(ctx context.Context, msg *models.Message, deletedAt time.Time) (time.Time, bool, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "SoftDeleteMessage", ctx, msg, deletedAt)
 	ret0, _ := ret[0].(time.Time)
@@ -350,7 +350,7 @@ func (mr *MockMessageRepositoryMockRecorder) SoftDeleteMessage(ctx, msg, deleted
 }
 
 // UpdateMessageContent mocks base method.
-func (m *MockMessageRepository) UpdateMessageContent(ctx context.Context, msg *cassandra.Message, newMsg string, editedAt time.Time) error {
+func (m *MockMessageRepository) UpdateMessageContent(ctx context.Context, msg *models.Message, newMsg string, editedAt time.Time) error {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "UpdateMessageContent", ctx, msg, newMsg, editedAt)
 	ret0, _ := ret[0].(error)

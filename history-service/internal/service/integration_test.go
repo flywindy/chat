@@ -67,9 +67,9 @@ func setupCassandra(t *testing.T) *gocql.Session {
 		PRIMARY KEY (message_id, created_at)
 	) WITH CLUSTERING ORDER BY (created_at DESC)`)).Exec())
 
-	// thread_messages_by_room — needed by TestDeleteMessage_ParentWithReplies_NoCascade
-	require.NoError(t, adminSession.Query(cql(`CREATE TABLE IF NOT EXISTS %s.thread_messages_by_room (
-		room_id TEXT, bucket BIGINT, thread_room_id TEXT, created_at TIMESTAMP, message_id TEXT,
+	// thread_messages_by_thread — needed by TestDeleteMessage_ParentWithReplies_NoCascade
+	require.NoError(t, adminSession.Query(cql(`CREATE TABLE IF NOT EXISTS %s.thread_messages_by_thread (
+		thread_room_id TEXT, created_at TIMESTAMP, message_id TEXT, room_id TEXT,
 		sender FROZEN<"Participant">, msg TEXT,
 		mentions SET<FROZEN<"Participant">>, attachments LIST<BLOB>,
 		file FROZEN<"File">, card FROZEN<"Card">, card_action FROZEN<"CardAction">,
@@ -77,8 +77,8 @@ func setupCassandra(t *testing.T) *gocql.Session {
 		quoted_parent_message FROZEN<"QuotedParentMessage">, visible_to TEXT,
 		reactions MAP<TEXT, FROZEN<SET<FROZEN<"Participant">>>>, deleted BOOLEAN,
 		type TEXT, sys_msg_data BLOB, site_id TEXT, edited_at TIMESTAMP, updated_at TIMESTAMP,
-		PRIMARY KEY ((room_id, bucket), thread_room_id, created_at, message_id)
-	) WITH CLUSTERING ORDER BY (thread_room_id DESC, created_at DESC, message_id DESC)`)).Exec())
+		PRIMARY KEY ((thread_room_id), created_at, message_id)
+	) WITH CLUSTERING ORDER BY (created_at DESC, message_id DESC)`)).Exec())
 
 	// pinned_messages_by_room isn't needed for the flows exercised here; the
 	// cassrepo integration tests cover that branch directly. Keeping the setup
@@ -290,8 +290,8 @@ func TestDeleteMessage_ParentWithReplies_NoCascade(t *testing.T) {
 		replyID, roomID, replyCreatedAt, otherSender, "bob's reply", parentID, parentCreatedAt, threadRoomID, false,
 	).Exec())
 	require.NoError(t, session.Query(
-		`INSERT INTO thread_messages_by_room (room_id, bucket, thread_room_id, created_at, message_id, sender, msg, thread_parent_id, deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		roomID, msgbucket.New(24*time.Hour).Of(replyCreatedAt), threadRoomID, replyCreatedAt, replyID, otherSender, "bob's reply", parentID, false,
+		`INSERT INTO thread_messages_by_thread (thread_room_id, created_at, message_id, room_id, sender, msg, thread_parent_id, deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		threadRoomID, replyCreatedAt, replyID, roomID, otherSender, "bob's reply", parentID, false,
 	).Exec())
 
 	// Alice (the parent's sender) deletes the parent.
@@ -315,10 +315,10 @@ func TestDeleteMessage_ParentWithReplies_NoCascade(t *testing.T) {
 	assert.False(t, gotDeleted, "thread reply must survive parent deletion (no cascade)")
 
 	require.NoError(t, session.Query(
-		`SELECT deleted FROM thread_messages_by_room WHERE room_id = ? AND bucket = ? AND thread_room_id = ? AND created_at = ? AND message_id = ?`,
-		roomID, msgbucket.New(24*time.Hour).Of(replyCreatedAt), threadRoomID, replyCreatedAt, replyID,
+		`SELECT deleted FROM thread_messages_by_thread WHERE thread_room_id = ? AND created_at = ? AND message_id = ?`,
+		threadRoomID, replyCreatedAt, replyID,
 	).Scan(&gotDeleted))
-	assert.False(t, gotDeleted, "thread_messages_by_room reply must survive parent deletion")
+	assert.False(t, gotDeleted, "thread_messages_by_thread reply must survive parent deletion")
 
 	// Parent's tcount is preserved (no decrement on parent-delete; the parent
 	// doesn't have its own parent to decrement).

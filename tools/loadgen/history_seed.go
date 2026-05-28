@@ -20,7 +20,7 @@ import (
 var historyCassandraTables = []string{
 	"messages_by_room",
 	"messages_by_id",
-	"thread_messages_by_room",
+	"thread_messages_by_thread",
 }
 
 // historySeedConcurrency caps the number of in-flight INSERT goroutines during
@@ -107,7 +107,7 @@ func SeedHistoryCassandra(ctx context.Context, session *gocql.Session, sizer msg
 
 // writePlannedMessage issues the per-row INSERTs for one message. For top-level
 // messages (and thread parents) it writes to messages_by_room + messages_by_id;
-// for thread replies it writes to messages_by_id + thread_messages_by_room.
+// for thread replies it writes to messages_by_id + thread_messages_by_thread.
 // Thread parents additionally stamp thread_room_id and tcount on the parent
 // rows so history-service's GetThreadMessages can resolve the threadRoomID
 // from messages_by_id without a separate update step.
@@ -151,7 +151,7 @@ func writePlannedMessage(
 	}
 
 	// Thread reply. messages_by_id captures the reply for lookups by ID;
-	// thread_messages_by_room captures it for the per-thread page walker.
+	// thread_messages_by_thread captures it for the per-thread partition read.
 	// Look up the parent's CreatedAt so the stamp matches production where
 	// the parent row already exists when the reply is written.
 	parentCreatedAt := parentCreatedAtByID[msg.ThreadParentID]
@@ -164,12 +164,12 @@ func writePlannedMessage(
 		return fmt.Errorf("insert reply messages_by_id %s: %w", msg.MessageID, err)
 	}
 	if err := session.Query(
-		`INSERT INTO thread_messages_by_room
-		   (room_id, bucket, thread_room_id, created_at, message_id, thread_parent_id, sender, msg, site_id, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		msg.RoomID, bucket, msg.ThreadRoomID, msg.CreatedAt, msg.MessageID, msg.ThreadParentID, sender, msg.Content, siteID, msg.CreatedAt,
+		`INSERT INTO thread_messages_by_thread
+		   (thread_room_id, created_at, message_id, room_id, thread_parent_id, sender, msg, site_id, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		msg.ThreadRoomID, msg.CreatedAt, msg.MessageID, msg.RoomID, msg.ThreadParentID, sender, msg.Content, siteID, msg.CreatedAt,
 	).WithContext(ctx).Exec(); err != nil {
-		return fmt.Errorf("insert thread_messages_by_room %s: %w", msg.MessageID, err)
+		return fmt.Errorf("insert thread_messages_by_thread %s: %w", msg.MessageID, err)
 	}
 	return nil
 }

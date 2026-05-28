@@ -157,7 +157,7 @@ for the rationale and the v2 plan.
 Benchmarks the synchronous read path:
 `history-service.LoadHistory` (Cassandra bucket walk on
 `messages_by_room`) and `history-service.GetThreadMessages`
-(`thread_messages_by_room`).
+(single-partition slice on `thread_messages_by_thread`).
 
 ### Quick start
 

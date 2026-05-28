@@ -1,9 +1,8 @@
-CREATE TABLE IF NOT EXISTS chat.thread_messages_by_room (
-  room_id               TEXT,
-  bucket                BIGINT,
+CREATE TABLE IF NOT EXISTS chat.thread_messages_by_thread (
   thread_room_id        TEXT,
   created_at            TIMESTAMP,
   message_id            TEXT,
+  room_id               TEXT,
   thread_parent_id      TEXT,
   sender                FROZEN<"Participant">,
   msg                   TEXT,
@@ -21,5 +20,5 @@ CREATE TABLE IF NOT EXISTS chat.thread_messages_by_room (
   site_id               TEXT,
   edited_at             TIMESTAMP,
   updated_at            TIMESTAMP,
-  PRIMARY KEY ((room_id, bucket), thread_room_id, created_at, message_id)
-) WITH CLUSTERING ORDER BY (thread_room_id DESC, created_at DESC, message_id DESC);
+  PRIMARY KEY ((thread_room_id), created_at, message_id)
+) WITH CLUSTERING ORDER BY (created_at DESC, message_id DESC);
