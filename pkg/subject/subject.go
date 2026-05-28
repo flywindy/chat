@@ -310,6 +310,24 @@ func MsgThreadPattern(siteID string) string {
 	return fmt.Sprintf("chat.user.{account}.request.room.{roomID}.%s.msg.thread", siteID)
 }
 
+// MsgHistory is the concrete-subject form clients publish on to invoke
+// LoadHistory. Pair with MsgHistoryPattern for the server-side registration.
+func MsgHistory(account, roomID, siteID string) string {
+	if !isValidAccountToken(account) {
+		panic("invalid account token: contains NATS wildcard characters")
+	}
+	return fmt.Sprintf("chat.user.%s.request.room.%s.%s.msg.history", account, roomID, siteID)
+}
+
+// MsgThread is the concrete-subject form clients publish on to invoke
+// GetThreadMessages. Pair with MsgThreadPattern for the server-side registration.
+func MsgThread(account, roomID, siteID string) string {
+	if !isValidAccountToken(account) {
+		panic("invalid account token: contains NATS wildcard characters")
+	}
+	return fmt.Sprintf("chat.user.%s.request.room.%s.%s.msg.thread", account, roomID, siteID)
+}
+
 func MemberAdd(account, roomID, siteID string) string {
 	return fmt.Sprintf("chat.user.%s.request.room.%s.%s.member.add", account, roomID, siteID)
 }

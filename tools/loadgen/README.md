@@ -151,3 +151,64 @@ for the rationale and the v2 plan.
   size ranges; the `final sizes` block confirms each room hit
   `--target-size`. A row with `count > 0` whose `e2_p99` is much larger
   than smaller-size buckets indicates a per-room-size degradation.
+
+## History workload (LoadHistory / GetThreadMessages benchmark)
+
+Benchmarks the synchronous read path:
+`history-service.LoadHistory` (Cassandra bucket walk on
+`messages_by_room`) and `history-service.GetThreadMessages`
+(`thread_messages_by_room`).
+
+### Quick start
+
+```bash
+make -C tools/loadgen/deploy up
+loadgen seed --workload=history --preset=history-medium
+loadgen history-sustained --preset=history-medium --rate=200 --duration=60s
+```
+
+The history workload requires `CASSANDRA_HOSTS` (e.g. `cassandra:9042`)
+in addition to the standard Mongo/Valkey/NATS env. `MESSAGE_BUCKET_HOURS`
+(default 72) must match what `history-service` is configured with so
+seed-time and read-time bucket math agree.
+
+### Presets
+
+| preset           | rooms | msgs/room | span    | thread rate | use case             |
+|------------------|-------|-----------|---------|-------------|----------------------|
+| `history-small`  | 5     | 100       | 1 day   | 0           | smoke / dev          |
+| `history-medium` | 100   | 5 000     | 7 days  | 5%          | sustained-throughput |
+| `history-large`  | 1 000 | 50 000    | 30 days | 10%         | partition fan-out    |
+
+Top-level messages are placed uniformly across the span with ±50% jitter
+on the gap so they don't align to bucket boundaries. Thread replies land
+1–10 min after their parent and share a bucket with it. Rooms are picked
+via `rand.Zipf(s=1.1, v=1.0)` over the room list — a few hot rooms absorb
+most reads.
+
+### Subcommands
+
+- `loadgen seed --workload=history --preset=<name>` — populate Mongo
+  (users/rooms/subscriptions/thread\_rooms), Valkey (room keys, harmless
+  for read workload), and Cassandra (messages\_by\_room,
+  messages\_by\_id, thread\_messages\_by\_room).
+- `loadgen teardown --workload=history --preset=<name>` — drop the
+  seeded data.
+- `loadgen history-sustained --preset=<name> [flags]` — open-loop
+  request at `--rate` req/sec for `--duration`. Flags:
+  `--mix=history:80,thread:20` (endpoint weighting),
+  `--before-mode=open:70,scrollback:30` (cursor strategy),
+  `--scrollback-pages=5` (pages per chain before reset),
+  `--page-limit=20`, `--request-timeout=5s`, `--warmup`, `--csv`.
+
+### Reading the summary
+
+- Per-endpoint p50/p95/p99 + payload sizes split LoadHistory vs
+  GetThreadMessages so a slow thread path doesn't get hidden by faster
+  history reads. The `bucket-walk depth` block reports how many
+  LoadHistory replies stayed within a single Cassandra bucket vs spanned
+  multiple — climbing multi-bucket counts under `--before-mode=scrollback`
+  indicate the walker is paying coordinator round-trips per page.
+- Errors broken out by class (`timeout`, `reply`, `bad`); the
+  `no-thread-parents` counter is informational (thread requests that
+  landed on a room with no seeded parents and fell back to history).

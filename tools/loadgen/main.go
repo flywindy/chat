@@ -43,6 +43,14 @@ type config struct {
 	PProfAddr      string   `env:"PPROF_ADDR"      envDefault:""`
 	ValkeyAddrs    []string `env:"VALKEY_ADDRS,required" envSeparator:","`
 	ValkeyPassword string   `env:"VALKEY_PASSWORD"       envDefault:""`
+	// Cassandra is optional at startup so the existing messages/members
+	// workloads keep working with no extra env. The history-* subcommands
+	// fail-fast if CASSANDRA_HOSTS is empty.
+	CassandraHosts     string `env:"CASSANDRA_HOSTS"        envDefault:""`
+	CassandraKeyspace  string `env:"CASSANDRA_KEYSPACE"     envDefault:"chat"`
+	CassandraUsername  string `env:"CASSANDRA_USERNAME"     envDefault:""`
+	CassandraPassword  string `env:"CASSANDRA_PASSWORD"     envDefault:""`
+	MessageBucketHours int    `env:"MESSAGE_BUCKET_HOURS"   envDefault:"72"`
 }
 
 func main() {
@@ -83,6 +91,8 @@ func dispatch(ctx context.Context, cfg *config) int {
 		return runMembersSustained(ctx, cfg, os.Args[2:])
 	case "members-capacity":
 		return runMembersCapacity(ctx, cfg, os.Args[2:])
+	case "history-sustained":
+		return runHistorySustained(ctx, cfg, os.Args[2:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown subcommand: %s\n", os.Args[1])
 		return 2
@@ -91,7 +101,7 @@ func dispatch(ctx context.Context, cfg *config) int {
 
 func runSeed(ctx context.Context, cfg *config, args []string) int {
 	fs := flag.NewFlagSet("seed", flag.ExitOnError)
-	workload := fs.String("workload", "messages", "messages|members")
+	workload := fs.String("workload", "messages", "messages|members|history")
 	preset := fs.String("preset", "", "preset name")
 	seed := fs.Int64("seed", 42, "RNG seed")
 	_ = fs.Parse(args)
@@ -104,6 +114,8 @@ func runSeed(ctx context.Context, cfg *config, args []string) int {
 		return runSeedMessages(ctx, cfg, *preset, *seed)
 	case "members":
 		return runSeedMembers(ctx, cfg, *preset, *seed)
+	case "history":
+		return runSeedHistory(ctx, cfg, *preset, *seed)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown workload: %s\n", *workload)
 		return 2
@@ -175,7 +187,7 @@ func runSeedMembers(ctx context.Context, cfg *config, preset string, seed int64)
 
 func runTeardown(ctx context.Context, cfg *config, args []string) int {
 	fs := flag.NewFlagSet("teardown", flag.ExitOnError)
-	workload := fs.String("workload", "messages", "messages|members")
+	workload := fs.String("workload", "messages", "messages|members|history")
 	preset := fs.String("preset", "", "preset name (required to identify which room keys to delete)")
 	seed := fs.Int64("seed", 42, "RNG seed (must match the seed used at seed time)")
 	_ = fs.Parse(args)
@@ -188,6 +200,8 @@ func runTeardown(ctx context.Context, cfg *config, args []string) int {
 		return runTeardownMessages(ctx, cfg, *preset, *seed)
 	case "members":
 		return runTeardownMembers(ctx, cfg, *preset, *seed)
+	case "history":
+		return runTeardownHistory(ctx, cfg, *preset, *seed)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown workload: %s\n", *workload)
 		return 2
