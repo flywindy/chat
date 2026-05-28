@@ -81,13 +81,36 @@ CREATE TYPE IF NOT EXISTS chat.reactor_info (
 `messages_by_room` uses a composite partition key `(room_id, bucket)`. `bucket`
 is the start-of-window in unix milliseconds derived deterministically from
 `created_at` via `pkg/msgbucket.Sizer`. The window size is configured per
-service via `MESSAGE_BUCKET_HOURS` (default 24); all services that read or
-write this table MUST be configured with the same window.
+service via `MESSAGE_BUCKET_HOURS` (envDefault 72 in both `message-worker` and
+`history-service`); all services that read or write this table MUST be
+configured with the same window.
 
 `thread_messages_by_thread` is partitioned by `thread_room_id` alone — one
 partition per thread. Reads slice the partition by `created_at`; no bucket
 walk is needed. This shape keeps the worst-case fetch latency bounded by
 partition size rather than by the thread's lifespan.
+
+### Compaction
+
+`messages_by_room` uses `TimeWindowCompactionStrategy` with
+`compaction_window_size` matching `MESSAGE_BUCKET_HOURS`, so each Cassandra
+compaction window corresponds to exactly one logical bucket: a sealed bucket's
+SSTables are compacted once and then left alone, keeping compaction cost
+proportional to recent write volume rather than total table size.
+
+`thread_messages_by_thread` keeps the default compaction strategy — it is
+partitioned per thread (not time-bucketed), so the window-alignment rationale
+does not apply.
+
+Operational notes:
+- Federation replays (`inbox-worker`) that lag more than one window write
+  late-arriving rows into the current window's SSTable; tolerable in small
+  volume but worth monitoring if sustained federation lag is expected.
+- Prefer sub-range / incremental `nodetool repair`; a full-cluster repair
+  rewrites old SSTables into the current TWCS window and defeats the point.
+- Local dev: the `docker-local/cassandra/init/*.cql` scripts already create
+  fresh keyspaces with TWCS. Production clusters apply the migration in
+  `docker-local/cassandra/migrations/2026-05-twcs-message-tables.cql`.
 
 #### messages_by_room
 ```cql
@@ -118,7 +141,13 @@ CREATE TABLE IF NOT EXISTS messages_by_room(
   edited_at TIMESTAMP,
   updated_at TIMESTAMP,
   PRIMARY KEY((room_id, bucket),created_at,message_id)
-)WITH CLUSTERING ORDER BY (created_at DESC, message_id DESC);
+)WITH CLUSTERING ORDER BY (created_at DESC, message_id DESC)
+  // compaction_window_size MUST match MESSAGE_BUCKET_HOURS.
+  AND compaction = {
+    'class': 'TimeWindowCompactionStrategy',
+    'compaction_window_unit': 'HOURS',
+    'compaction_window_size': '72'
+  };
 ```
 #### thread_messages_by_thread
 ```cql

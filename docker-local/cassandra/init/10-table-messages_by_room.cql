@@ -25,4 +25,18 @@ CREATE TABLE IF NOT EXISTS chat.messages_by_room (
   edited_at                TIMESTAMP,
   updated_at               TIMESTAMP,
   PRIMARY KEY ((room_id, bucket), created_at, message_id)
-) WITH CLUSTERING ORDER BY (created_at DESC, message_id DESC);
+) WITH CLUSTERING ORDER BY (created_at DESC, message_id DESC)
+  // TimeWindowCompactionStrategy: messages arrive in roughly chronological
+  // order and are rarely updated, so SSTables for sealed time windows can be
+  // compacted once and then left alone. STCS would otherwise rewrite cold
+  // historical data on every tier rebalance, scaling compaction CPU with
+  // total table size rather than recent write volume.
+  //
+  // compaction_window_size MUST match MESSAGE_BUCKET_HOURS so each Cassandra
+  // compaction window aligns with exactly one logical bucket; misalignment
+  // produces SSTable fragmentation or cross-bucket compaction work.
+  AND compaction = {
+    'class': 'TimeWindowCompactionStrategy',
+    'compaction_window_unit': 'HOURS',
+    'compaction_window_size': '72'
+  };
