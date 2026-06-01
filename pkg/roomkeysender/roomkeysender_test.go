@@ -110,3 +110,48 @@ func TestSender_Send(t *testing.T) {
 		})
 	}
 }
+
+// TestSender_Marshal verifies Marshal stamps a timestamp and serializes the
+// event once into reusable bytes, without mutating the caller's struct.
+func TestSender_Marshal(t *testing.T) {
+	evt := model.RoomKeyEvent{RoomID: "room-1", Version: 7, PrivateKey: []byte{0x01, 0x02}}
+	before := evt
+	before.PrivateKey = append([]byte(nil), evt.PrivateKey...)
+
+	sender := roomkeysender.NewSender(&mockPublisher{})
+	data, err := sender.Marshal(evt)
+	require.NoError(t, err)
+
+	// Non-mutation contract: Marshal takes the event by value.
+	assert.Equal(t, before, evt, "Marshal must not mutate the caller's RoomKeyEvent")
+
+	var got model.RoomKeyEvent
+	require.NoError(t, json.Unmarshal(data, &got))
+	assert.Equal(t, evt.RoomID, got.RoomID)
+	assert.Equal(t, evt.Version, got.Version)
+	assert.Equal(t, evt.PrivateKey, got.PrivateKey)
+	assert.Greater(t, got.Timestamp, int64(0), "Marshal must stamp a timestamp")
+}
+
+// TestSender_SendData publishes pre-marshaled bytes verbatim to the account's
+// room-key subject — the marshal-once fan-out building block.
+func TestSender_SendData(t *testing.T) {
+	t.Run("publishes bytes to the account subject", func(t *testing.T) {
+		pub := &mockPublisher{}
+		sender := roomkeysender.NewSender(pub)
+		payload := []byte(`{"roomId":"r","version":3}`)
+
+		require.NoError(t, sender.SendData("alice", payload))
+		assert.Equal(t, "chat.user.alice.event.room.key", pub.subject)
+		assert.Equal(t, payload, pub.data, "SendData must publish the bytes verbatim")
+	})
+
+	t.Run("wraps publish errors", func(t *testing.T) {
+		sentinel := errors.New("connection lost")
+		sender := roomkeysender.NewSender(&mockPublisher{err: sentinel})
+		err := sender.SendData("bob", []byte("{}"))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "publish room key event")
+		assert.ErrorIs(t, err, sentinel)
+	})
+}

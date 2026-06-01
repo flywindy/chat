@@ -31,6 +31,10 @@ func NewMongoStore(db *mongo.Database) *MongoStore {
 	}
 }
 
+// ListByRoom returns all subscriptions for roomID across every site. Not part
+// of SubscriptionStore — the handler's hot paths only need accounts (see
+// GetSubscriptionAccounts); this full-document read is retained for integration
+// test verification.
 func (s *MongoStore) ListByRoom(ctx context.Context, roomID string) ([]model.Subscription, error) {
 	cursor, err := s.subscriptions.Find(ctx, bson.M{"roomId": roomID})
 	if err != nil {
