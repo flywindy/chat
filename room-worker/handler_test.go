@@ -2769,15 +2769,110 @@ func TestHandleSyncCreateDM_EmptyAccounts(t *testing.T) {
 }
 
 func TestHandleSyncCreateDM_SelfDM(t *testing.T) {
+	h, store, capture := newSyncDMTestHandler(t)
+
+	alice := model.User{ID: "u-alice", Account: "alice", SiteID: "site-a", EngName: "Alice", ChineseName: "愛麗絲"}
+	// Self-DM looks up a single account.
+	store.EXPECT().FindUsersByAccounts(gomock.Any(), gomock.Any()).Return([]model.User{alice}, nil)
+
+	var insertedRoom *model.Room
+	store.EXPECT().CreateRoom(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, r *model.Room) error {
+			insertedRoom = r
+			return nil
+		})
+
+	var captured []*model.Subscription
+	store.EXPECT().BulkCreateSubscriptions(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, subs []*model.Subscription) error {
+			captured = subs
+			return nil
+		})
+
+	req := model.SyncCreateDMRequest{RoomType: model.RoomTypeDM, RequesterAccount: "alice", OtherAccount: "alice"}
+	data := marshalReq(t, req)
+	reply, err := h.handleSyncCreateDM(newRequestCtx(), data)
+	require.NoError(t, err)
+	require.NotNil(t, reply)
+	assert.True(t, reply.Success)
+	assert.True(t, reply.Subscription.Favorite)
+
+	// Single-member room, channel-style id, type dm. No read-back:
+	// GetSubscription / FindDMSubscriptionPair are never called.
+	require.NotNil(t, insertedRoom)
+	assert.Len(t, insertedRoom.ID, 17, "channel-style room id")
+	assert.Equal(t, model.RoomTypeDM, insertedRoom.Type)
+	assert.Equal(t, "site-a", insertedRoom.SiteID)
+	assert.Equal(t, 1, insertedRoom.UserCount)
+	assert.Equal(t, 0, insertedRoom.AppCount)
+	assert.Equal(t, []string{"u-alice"}, insertedRoom.UIDs)
+	assert.Equal(t, []string{"alice"}, insertedRoom.Accounts)
+
+	// Exactly one sub: favorited, subscribed, self-named, type dm.
+	require.Len(t, captured, 1)
+	assert.Equal(t, "u-alice", captured[0].User.ID)
+	assert.Equal(t, insertedRoom.ID, captured[0].RoomID)
+	assert.Equal(t, "alice", captured[0].Name)
+	assert.Equal(t, model.RoomTypeDM, captured[0].RoomType)
+	assert.True(t, captured[0].IsSubscribed)
+	assert.True(t, captured[0].Favorite)
+
+	// Reply returns the in-memory sub directly (no read-back round-trip).
+	assert.Equal(t, *captured[0], reply.Subscription)
+
+	// One subscription.update; no outbox (same-site by definition).
+	require.Len(t, capture.captured, 1)
+	assert.Equal(t, subject.SubscriptionUpdate("alice"), capture.captured[0].subject)
+}
+
+func TestHandleSyncCreateDM_SelfBotDMRejected(t *testing.T) {
 	h := &Handler{siteID: "site-a"}
 	req := model.SyncCreateDMRequest{
-		RoomType:         model.RoomTypeDM,
+		RoomType:         model.RoomTypeBotDM,
 		RequesterAccount: "alice",
 		OtherAccount:     "alice",
 	}
 	data := marshalReq(t, req)
 	_, err := h.handleSyncCreateDM(newRequestCtx(), data)
 	assert.ErrorIs(t, err, errInvalidSyncDMRequest)
+}
+
+func TestHandleSyncCreateDM_SelfDM_StoreErrors(t *testing.T) {
+	cases := []struct {
+		name      string
+		setup     func(store *MockSubscriptionStore)
+		wantErrIn string
+	}{
+		{
+			name: "CreateRoom fails",
+			setup: func(store *MockSubscriptionStore) {
+				store.EXPECT().CreateRoom(gomock.Any(), gomock.Any()).Return(errors.New("mongo down"))
+			},
+			wantErrIn: "create self-DM room",
+		},
+		{
+			name: "BulkCreateSubscriptions fails",
+			setup: func(store *MockSubscriptionStore) {
+				store.EXPECT().CreateRoom(gomock.Any(), gomock.Any()).Return(nil)
+				store.EXPECT().BulkCreateSubscriptions(gomock.Any(), gomock.Any()).Return(errors.New("write failed"))
+			},
+			wantErrIn: "create self-DM subscription",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h, store, capture := newSyncDMTestHandler(t)
+			alice := model.User{ID: "u-alice", Account: "alice", SiteID: "site-a"}
+			store.EXPECT().FindUsersByAccounts(gomock.Any(), gomock.Any()).Return([]model.User{alice}, nil)
+			tc.setup(store)
+
+			data := marshalReq(t, model.SyncCreateDMRequest{RoomType: model.RoomTypeDM, RequesterAccount: "alice", OtherAccount: "alice"})
+			_, err := h.handleSyncCreateDM(newRequestCtx(), data)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wantErrIn)
+			assert.Empty(t, capture.captured, "no publish on store error")
+		})
+	}
 }
 
 func TestHandleSyncCreateDM_RequesterNotFound(t *testing.T) {

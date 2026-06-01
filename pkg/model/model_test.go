@@ -478,6 +478,7 @@ func TestSubscriptionJSON(t *testing.T) {
 			ThreadUnread:       []string{"parent-1", "parent-2"},
 			Alert:              true,
 			Muted:              true,
+			Favorite:           true,
 		}
 		roundTrip(t, &s, &model.Subscription{})
 	})
@@ -500,6 +501,33 @@ func TestSubscriptionJSON(t *testing.T) {
 		require.NoError(t, json.Unmarshal(data, &raw))
 		_, present := raw["lastSeenAt"]
 		assert.False(t, present, "lastSeenAt should be omitted when nil")
+
+		roundTrip(t, &s, &model.Subscription{})
+	})
+
+	t.Run("favorite omitted when false", func(t *testing.T) {
+		s := model.Subscription{
+			ID:       "s1",
+			User:     model.SubscriptionUser{ID: "u1", Account: "alice"},
+			RoomID:   "r1",
+			RoomType: model.RoomTypeDM,
+			SiteID:   "site-a",
+			JoinedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		}
+		data, err := json.Marshal(&s)
+		require.NoError(t, err)
+
+		var raw map[string]any
+		require.NoError(t, json.Unmarshal(data, &raw))
+		_, present := raw["favorite"]
+		assert.False(t, present, "favorite should be omitted when false")
+
+		bdata, err := bson.Marshal(&s)
+		require.NoError(t, err)
+		var braw bson.M
+		require.NoError(t, bson.Unmarshal(bdata, &braw))
+		_, bpresent := braw["favorite"]
+		assert.False(t, bpresent, "favorite should be omitted from BSON when false")
 
 		roundTrip(t, &s, &model.Subscription{})
 	})

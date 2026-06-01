@@ -1176,6 +1176,13 @@ func buildBotDMSubs(requester, bot *model.User, room *model.Room, acceptedAt tim
 	}
 }
 
+// buildSelfDMSub builds the sole self-DM subscription: subscribed, self-named, favorited.
+func buildSelfDMSub(user *model.User, room *model.Room, joinedAt time.Time) *model.Subscription {
+	sub := newSub(idgen.GenerateUUIDv7(), user, room, nil, user.Account, true, joinedAt)
+	sub.Favorite = true
+	return sub
+}
+
 // newSub constructs a Subscription from its constituent parts.
 func newSub(id string, user *model.User, room *model.Room, roles []model.Role,
 	name string, isSubscribed bool, joinedAt time.Time) *model.Subscription {
@@ -1602,7 +1609,7 @@ func sanitizeSyncDMError(err error) string {
 	}
 }
 
-// handleSyncCreateDM creates a DM/botDM room + 2 subs and returns the requester's sub.
+// handleSyncCreateDM creates a DM, self-DM, or botDM room and returns the requester's subscription.
 func (h *Handler) handleSyncCreateDM(ctx context.Context, data []byte) (*model.SyncCreateDMReply, error) {
 	requestID := natsutil.RequestIDFromContext(ctx)
 	if requestID == "" {
@@ -1620,7 +1627,12 @@ func (h *Handler) handleSyncCreateDM(ctx context.Context, data []byte) (*model.S
 		return nil, err
 	}
 
-	users, err := h.store.FindUsersByAccounts(ctx, []string{req.RequesterAccount, req.OtherAccount})
+	// Self-DM sends the same account twice; dedup so the lookup queries one account.
+	accounts := []string{req.RequesterAccount}
+	if req.OtherAccount != req.RequesterAccount {
+		accounts = append(accounts, req.OtherAccount)
+	}
+	users, err := h.store.FindUsersByAccounts(ctx, accounts)
 	if err != nil {
 		return nil, fmt.Errorf("find dm users: %w", err)
 	}
@@ -1635,6 +1647,12 @@ func (h *Handler) handleSyncCreateDM(ctx context.Context, data []byte) (*model.S
 	if requester.SiteID != h.siteID {
 		return nil, errCrossSiteRequester
 	}
+
+	// Self-DM (requester == counterpart): a single-member room.
+	if req.RequesterAccount == req.OtherAccount {
+		return h.createSelfDM(ctx, requester, requestID)
+	}
+
 	other, ok := byAccount[req.OtherAccount]
 	if !ok {
 		return nil, errUserLookupFailed
@@ -1720,6 +1738,34 @@ func (h *Handler) handleSyncCreateDM(ctx context.Context, data []byte) (*model.S
 	return &model.SyncCreateDMReply{Success: true, Subscription: *requesterSub}, nil
 }
 
+// createSelfDM creates a single-member self-DM: one favorited subscription in a
+// channel-id dm room, no outbox. "One per user" is enforced by the caller.
+func (h *Handler) createSelfDM(ctx context.Context, requester *model.User, requestID string) (*model.SyncCreateDMReply, error) {
+	now := time.Now().UTC() // one stamp for room + sub; random id means no retry-idempotency concern.
+	room := &model.Room{
+		ID:        idgen.GenerateID(),
+		Type:      model.RoomTypeDM,
+		SiteID:    h.siteID,
+		UserCount: 1,
+		UIDs:      []string{requester.ID},
+		Accounts:  []string{requester.Account},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := h.store.CreateRoom(ctx, room); err != nil {
+		return nil, fmt.Errorf("create self-DM room %s for %s: %w", room.ID, requester.Account, err)
+	}
+
+	sub := buildSelfDMSub(requester, room, now)
+	if err := h.store.BulkCreateSubscriptions(ctx, []*model.Subscription{sub}); err != nil {
+		return nil, fmt.Errorf("create self-DM subscription: %w", err)
+	}
+
+	// No read-back: a fresh room id means a pure insert, so sub is what persisted.
+	h.publishSubscriptionUpdates(ctx, []*model.Subscription{sub}, requestID)
+	return &model.SyncCreateDMReply{Success: true, Subscription: *sub}, nil
+}
+
 func validateSyncCreateDMShape(req *model.SyncCreateDMRequest) error {
 	switch req.RoomType {
 	case model.RoomTypeDM, model.RoomTypeBotDM:
@@ -1729,7 +1775,8 @@ func validateSyncCreateDMShape(req *model.SyncCreateDMRequest) error {
 	if req.RequesterAccount == "" || req.OtherAccount == "" {
 		return errInvalidSyncDMRequest
 	}
-	if req.RequesterAccount == req.OtherAccount {
+	// A bot can't DM itself: reject a self-botDM.
+	if req.RequesterAccount == req.OtherAccount && req.RoomType == model.RoomTypeBotDM {
 		return errInvalidSyncDMRequest
 	}
 	return nil

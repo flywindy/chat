@@ -1076,6 +1076,63 @@ func TestSyncCreateDM_DM_PersistsRoomAndSubs(t *testing.T) {
 	assert.Equal(t, 1, subjects[subject.SubscriptionUpdate("bob")])
 }
 
+func TestSyncCreateDM_SelfDM_PersistsSingleFavoritedSub(t *testing.T) {
+	ctx := newIntegSyncDMCtx()
+	db := setupMongo(t)
+	store := NewMongoStore(db)
+	siteID := "site-A"
+
+	mustInsertUser(t, db, &model.User{ID: "u-alice", Account: "alice", SiteID: siteID, EngName: "Alice", ChineseName: "愛麗絲"})
+
+	cap := &publishCapture{}
+	handler := NewHandler(store, siteID, cap.fn(), testKeyStore, testKeySender)
+
+	req := model.SyncCreateDMRequest{RoomType: model.RoomTypeDM, RequesterAccount: "alice", OtherAccount: "alice"}
+	data, err := json.Marshal(req)
+	require.NoError(t, err)
+	got, err := handler.handleSyncCreateDM(ctx, data)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.True(t, got.Success)
+	assert.Equal(t, "alice", got.Subscription.User.Account)
+	assert.True(t, got.Subscription.Favorite)
+	assert.True(t, got.Subscription.IsSubscribed)
+	assert.Equal(t, model.RoomTypeDM, got.Subscription.RoomType)
+
+	roomID := got.Subscription.RoomID
+	require.NotEmpty(t, roomID)
+
+	room, err := store.GetRoom(ctx, roomID)
+	require.NoError(t, err)
+	assert.Equal(t, model.RoomTypeDM, room.Type)
+	assert.Equal(t, siteID, room.SiteID)
+	assert.Equal(t, 1, room.UserCount)
+	assert.Equal(t, 0, room.AppCount)
+	assert.Equal(t, []string{"u-alice"}, room.UIDs)
+	assert.Equal(t, []string{"alice"}, room.Accounts)
+
+	subCount, err := db.Collection("subscriptions").CountDocuments(ctx, bson.M{"roomId": roomID})
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), subCount, "self-DM is exactly one subscription")
+
+	persisted, err := store.GetSubscription(ctx, "alice", roomID)
+	require.NoError(t, err)
+	assert.True(t, persisted.Favorite)
+	assert.True(t, persisted.IsSubscribed)
+	assert.Equal(t, "alice", persisted.Name)
+	assert.Equal(t, model.RoomTypeDM, persisted.RoomType)
+
+	subjects := map[string]int{}
+	cap.mu.Lock()
+	total := len(cap.captured)
+	for _, p := range cap.captured {
+		subjects[p.subject]++
+	}
+	cap.mu.Unlock()
+	assert.Equal(t, 1, subjects[subject.SubscriptionUpdate("alice")])
+	assert.Equal(t, 1, total, "only the subscription.update; no outbox")
+}
+
 func TestSyncCreateDM_BotDM_CrossSiteOutbox(t *testing.T) {
 	db := setupMongo(t)
 	store := NewMongoStore(db)
