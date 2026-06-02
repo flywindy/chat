@@ -10,8 +10,17 @@ import { BUFFER_MODE } from './reducer'
 // don't need a real RoomKeysProvider (which would try to connect to NATS and
 // fetch key material). The no-op decrypt matches the default used in
 // useRoomSubscriptions when no key is available.
+//
+// The factory reads from `currentRoomKeysMock` so individual test blocks can
+// assign custom spies (e.g. the missing-key path tests) without affecting the
+// default no-op used everywhere else.
+let currentRoomKeysMock = {
+  decrypt: async () => null,
+  hasKey: () => false,
+  ensureKey: async () => false,
+}
 vi.mock('@/context/RoomKeysContext', () => ({
-  useRoomKeys: () => ({ decrypt: async () => null, hasKey: () => false }),
+  useRoomKeys: () => currentRoomKeysMock,
 }))
 
 /** Turn an inline "room-shaped" fixture into a subscription record that
@@ -1288,5 +1297,144 @@ describe('useSubscription', () => {
     }
     render(wrap(<Probe />, nats))
     expect(screen.getByText('absent')).toBeInTheDocument()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Missing-key path: ensureKey + decrypt retry
+// ---------------------------------------------------------------------------
+describe('RoomEventsProvider missing-key path', () => {
+  // Encrypted event fixture for a channel room message.
+  const encEvent = {
+    type: 'new_message',
+    roomId: 'r1',
+    siteId: 'site-A',
+    encryptedMessage: { version: 2, nonce: 'AA==', ciphertext: 'BB==' },
+    lastMsgId: 'm1',
+    lastMsgAt: '2026-06-02T00:00:00Z',
+    timestamp: Date.now(),
+  }
+  const decryptedPayload = JSON.stringify({
+    id: 'm1',
+    roomId: 'r1',
+    content: 'hi',
+    createdAt: '2026-06-02T00:00:00Z',
+    sender: { account: 'bob' },
+  })
+
+  function setupEncryptedChannel(roomKeysMock) {
+    // Prime the mock factory so RoomEventsContext reads the test's spies.
+    currentRoomKeysMock = roomKeysMock
+
+    const request = vi.fn().mockImplementation((subject) => {
+      if (subject.endsWith('.subscription.getRooms'))
+        return Promise.resolve({
+          subscriptions: [
+            {
+              id: 'sub-r1',
+              u: { id: 'u-r1', account: 'alice' },
+              roomId: 'r1',
+              siteId: 'site-A',
+              roles: ['member'],
+              name: 'r1',
+              roomType: 'channel',
+              joinedAt: '2026-01-01T00:00:00Z',
+              hasMention: false,
+              alert: false,
+              userCount: 2,
+              lastMsgAt: null,
+              lastMsgId: null,
+            },
+          ],
+        })
+      if (subject.includes('.subscription.get')) return Promise.resolve({ subscriptions: [] })
+      throw new Error('unexpected request: ' + subject)
+    })
+    const handlers = new Map()
+    const subscribe = vi.fn().mockImplementation((subject, cb) => {
+      handlers.set(subject, cb)
+      return { unsubscribe: vi.fn() }
+    })
+    const nats = mockNats({ request, subscribe })
+    return { nats, handlers }
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    // Reset to the harmless default after each test so the rest of the
+    // suite is unaffected.
+    currentRoomKeysMock = {
+      decrypt: async () => null,
+      hasKey: () => false,
+      ensureKey: async () => false,
+    }
+  })
+
+  it('calls ensureKey and retries decrypt once when the first decrypt returns null but ensureKey succeeds', async () => {
+    let callCount = 0
+    const decrypt = vi.fn().mockImplementation(async () => {
+      callCount += 1
+      if (callCount === 1) return null          // first call: key missing
+      return decryptedPayload                   // second call: key present after ensureKey
+    })
+    const ensureKey = vi.fn().mockResolvedValue(true)
+    const { nats, handlers } = setupEncryptedChannel({ decrypt, ensureKey, hasKey: () => false })
+
+    render(wrap(<EventsProbe roomId="r1" />, nats))
+    await waitFor(() => expect(handlers.has('chat.room.r1.event')).toBe(true))
+
+    act(() => {
+      handlers.get('chat.room.r1.event')(encEvent)
+    })
+
+    await waitFor(() =>
+      expect(screen.getByTestId('messages').textContent).toContain('m1')
+    )
+
+    expect(ensureKey).toHaveBeenCalledTimes(1)
+    expect(ensureKey).toHaveBeenCalledWith('r1', 2, 'site-A')
+    expect(decrypt).toHaveBeenCalledTimes(2)
+  })
+
+  it('does NOT retry decrypt and falls through to placeholder when ensureKey resolves false', async () => {
+    const decrypt = vi.fn().mockResolvedValue(null)    // always null
+    const ensureKey = vi.fn().mockResolvedValue(false) // key fetch failed
+    const { nats, handlers } = setupEncryptedChannel({ decrypt, ensureKey, hasKey: () => false })
+
+    render(wrap(<EventsProbe roomId="r1" />, nats))
+    await waitFor(() => expect(handlers.has('chat.room.r1.event')).toBe(true))
+
+    act(() => {
+      handlers.get('chat.room.r1.event')(encEvent)
+    })
+
+    // The event falls through to the placeholder branch, which uses lastMsgId as the id.
+    await waitFor(() =>
+      expect(screen.getByTestId('messages').textContent).toContain('m1')
+    )
+
+    expect(ensureKey).toHaveBeenCalledTimes(1)
+    // decrypt is NOT retried — only the initial attempt.
+    expect(decrypt).toHaveBeenCalledTimes(1)
+  })
+
+  it('does NOT call ensureKey when the first decrypt succeeds', async () => {
+    const decrypt = vi.fn().mockResolvedValue(decryptedPayload) // always succeeds
+    const ensureKey = vi.fn()
+    const { nats, handlers } = setupEncryptedChannel({ decrypt, ensureKey, hasKey: () => true })
+
+    render(wrap(<EventsProbe roomId="r1" />, nats))
+    await waitFor(() => expect(handlers.has('chat.room.r1.event')).toBe(true))
+
+    act(() => {
+      handlers.get('chat.room.r1.event')(encEvent)
+    })
+
+    await waitFor(() =>
+      expect(screen.getByTestId('messages').textContent).toContain('m1')
+    )
+
+    expect(ensureKey).not.toHaveBeenCalled()
+    expect(decrypt).toHaveBeenCalledTimes(1)
   })
 })

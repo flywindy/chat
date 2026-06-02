@@ -253,6 +253,23 @@ type RoomKeyEnsureResponse struct {
 	Version int    `json:"version"`
 }
 
+// RoomKeyGetRequest is the payload for the client-callable room key get RPC.
+// Version is optional: when nil the server returns the current key; when set
+// the server returns the historical key at that version (subject to the
+// roomkeystore previous-key grace window).
+type RoomKeyGetRequest struct {
+	Version *int `json:"version,omitempty"`
+}
+
+// RoomKeyGetResponse is the reply from the room key get RPC. PrivateKey is
+// the 32-byte room secret used directly as the AES-256-GCM key by clients.
+// []byte marshals to standard base64 in JSON (same shape as RoomKeyEvent).
+type RoomKeyGetResponse struct {
+	RoomID     string `json:"roomId"`
+	Version    int    `json:"version"`
+	PrivateKey []byte `json:"privateKey"`
+}
+
 // MuteToggleResponse is the sync reply for the mute.toggle RPC.
 type MuteToggleResponse struct {
 	Status string `json:"status"`

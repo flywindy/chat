@@ -1,9 +1,10 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, waitFor, act } from '@testing-library/react'
 import { RoomKeysProvider, useRoomKeys } from './RoomKeysContext'
 
 vi.mock('@/api', () => ({
   subscribeToRoomKeyEvents: vi.fn(),
+  requestRoomKey: vi.fn(),
 }))
 
 vi.mock('@/context/NatsContext', () => ({
@@ -18,7 +19,7 @@ vi.mock('@/context/NatsContext', () => ({
   }),
 }))
 
-import { subscribeToRoomKeyEvents } from '@/api'
+import { subscribeToRoomKeyEvents, requestRoomKey } from '@/api'
 
 let lastDecryptHook = null
 
@@ -71,5 +72,104 @@ describe('RoomKeysProvider', () => {
     )
     unmount()
     expect(unsub.unsubscribe).toHaveBeenCalled()
+  })
+})
+
+describe('RoomKeysProvider.ensureKey', () => {
+  beforeEach(() => {
+    lastDecryptHook = null
+    vi.mocked(subscribeToRoomKeyEvents).mockReset()
+    vi.mocked(requestRoomKey).mockReset()
+    // The KEY_RECEIVED path doesn't need live events for these tests,
+    // but the provider's effect calls subscribeToRoomKeyEvents — give it
+    // a no-op subscription handle so the effect doesn't blow up.
+    vi.mocked(subscribeToRoomKeyEvents).mockReturnValue({ unsubscribe: vi.fn() })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('dedupes concurrent calls for the same (roomId, version)', async () => {
+    let resolveFetch
+    vi.mocked(requestRoomKey).mockImplementationOnce(
+      () => new Promise((r) => { resolveFetch = r }),
+    )
+
+    render(
+      <RoomKeysProvider>
+        <Probe />
+      </RoomKeysProvider>,
+    )
+    await waitFor(() => expect(lastDecryptHook).not.toBeNull())
+
+    // Two concurrent callers for the same (roomId, version) share one RPC.
+    const p1 = lastDecryptHook.ensureKey('r1', 0, 'site-a')
+    const p2 = lastDecryptHook.ensureKey('r1', 0, 'site-a')
+
+    // 32 bytes of 0x01 → base64.
+    const privateKeyB64 = btoa(String.fromCharCode(...new Array(32).fill(1)))
+    resolveFetch({ roomId: 'r1', version: 0, privateKey: privateKeyB64 })
+
+    await expect(p1).resolves.toBe(true)
+    await expect(p2).resolves.toBe(true)
+    expect(requestRoomKey).toHaveBeenCalledTimes(1)
+    // hasKey reflects reducer state after re-render, not the synchronous ref
+    await waitFor(() => expect(lastDecryptHook.hasKey('r1', 0)).toBe(true))
+  })
+
+  it('records failure and backs off for 60s, then retries', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+
+    vi.mocked(requestRoomKey).mockRejectedValueOnce(new Error('not_room_member'))
+
+    render(
+      <RoomKeysProvider>
+        <Probe />
+      </RoomKeysProvider>,
+    )
+    await waitFor(() => expect(lastDecryptHook).not.toBeNull())
+
+    await expect(lastDecryptHook.ensureKey('r1', 0, 'site-a')).resolves.toBe(false)
+    expect(requestRoomKey).toHaveBeenCalledTimes(1)
+
+    // Within the backoff window: no new RPC.
+    await expect(lastDecryptHook.ensureKey('r1', 0, 'site-a')).resolves.toBe(false)
+    expect(requestRoomKey).toHaveBeenCalledTimes(1)
+
+    // After 60s, a retry is allowed and the next call succeeds.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_001)
+    })
+    const privateKeyB64 = btoa(String.fromCharCode(...new Array(32).fill(1)))
+    vi.mocked(requestRoomKey).mockResolvedValueOnce({
+      roomId: 'r1', version: 0, privateKey: privateKeyB64,
+    })
+    await expect(lastDecryptHook.ensureKey('r1', 0, 'site-a')).resolves.toBe(true)
+    expect(requestRoomKey).toHaveBeenCalledTimes(2)
+  })
+
+  it('short-circuits to true when the (roomId, version) is already cached', async () => {
+    render(
+      <RoomKeysProvider>
+        <Probe />
+      </RoomKeysProvider>,
+    )
+    await waitFor(() => expect(lastDecryptHook).not.toBeNull())
+
+    // Seed the cache via the existing KEY_RECEIVED path.
+    // The subscription cb captured by the provider can be reused; reset the
+    // mock to a capturing impl and re-render is overkill — instead, seed by
+    // calling ensureKey once with a success mock, then call again and confirm
+    // no RPC.
+    const privateKeyB64 = btoa(String.fromCharCode(...new Array(32).fill(1)))
+    vi.mocked(requestRoomKey).mockResolvedValueOnce({
+      roomId: 'r1', version: 0, privateKey: privateKeyB64,
+    })
+    await expect(lastDecryptHook.ensureKey('r1', 0, 'site-a')).resolves.toBe(true)
+    expect(requestRoomKey).toHaveBeenCalledTimes(1)
+
+    await expect(lastDecryptHook.ensureKey('r1', 0, 'site-a')).resolves.toBe(true)
+    expect(requestRoomKey).toHaveBeenCalledTimes(1) // no second RPC
   })
 })

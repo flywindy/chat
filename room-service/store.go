@@ -126,6 +126,10 @@ type RoomKeyStore interface {
 	GetMany(ctx context.Context, roomIDs []string) (map[string]*roomkeystore.VersionedKeyPair, error)
 	// Get returns the current key for roomID, or (nil, nil) when absent.
 	Get(ctx context.Context, roomID string) (*roomkeystore.VersionedKeyPair, error)
+	// GetByVersion returns the key pair for the given (roomID, version). Returns
+	// (nil, nil) when the version isn't held (rolled past the previous-key
+	// grace window or never existed).
+	GetByVersion(ctx context.Context, roomID string, version int) (*roomkeystore.RoomKeyPair, error)
 	// Set writes a fresh keypair as the room's current key (version 0).
 	Set(ctx context.Context, roomID string, pair roomkeystore.RoomKeyPair) (int, error)
 }

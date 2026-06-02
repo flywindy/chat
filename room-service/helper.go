@@ -60,6 +60,11 @@ var (
 	// Sentinels for list-members pagination validation.
 	errListLimitInvalid  = errors.New("limit must be > 0")
 	errListOffsetInvalid = errors.New("offset must be >= 0")
+
+	// errRoomKeyAbsent is returned when the requested key version is not held
+	// by the key store (either the current key is missing or the historical
+	// version has aged out of the grace window).
+	errRoomKeyAbsent = errors.New("room key not available")
 )
 
 var botPattern = regexp.MustCompile(`\.bot$|^p_`)
@@ -235,6 +240,7 @@ func sanitizeError(err error) string {
 		errors.Is(err, errRemoveChannelOnly),
 		errors.Is(err, errListLimitInvalid),
 		errors.Is(err, errListOffsetInvalid),
+		errors.Is(err, errRoomKeyAbsent),
 		errors.Is(err, &dmExistsError{}),
 		errors.Is(err, &channelExpandTimeoutError{}):
 		return err.Error()

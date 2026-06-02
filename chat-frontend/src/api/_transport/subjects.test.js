@@ -7,6 +7,7 @@ import {
   memberRemove,
   memberRoleUpdate,
   memberList,
+  roomKeyGet,
   searchRooms,
   searchMessages,
   msgSurrounding,
@@ -102,6 +103,12 @@ describe('subjects', () => {
   it('memberList builds the list-members request subject', () => {
     expect(memberList('alice', 'r1', 'site-A')).toBe(
       'chat.user.alice.request.room.r1.site-A.member.list'
+    )
+  })
+
+  it('roomKeyGet builds the per-room key-get request subject', () => {
+    expect(roomKeyGet('alice', 'r1', 'site-A')).toBe(
+      'chat.user.alice.request.room.r1.site-A.key.get'
     )
   })
 

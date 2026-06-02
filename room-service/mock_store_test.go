@@ -423,6 +423,21 @@ func (mr *MockRoomKeyStoreMockRecorder) Get(ctx, roomID any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Get", reflect.TypeOf((*MockRoomKeyStore)(nil).Get), ctx, roomID)
 }
 
+// GetByVersion mocks base method.
+func (m *MockRoomKeyStore) GetByVersion(ctx context.Context, roomID string, version int) (*roomkeystore.RoomKeyPair, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetByVersion", ctx, roomID, version)
+	ret0, _ := ret[0].(*roomkeystore.RoomKeyPair)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetByVersion indicates an expected call of GetByVersion.
+func (mr *MockRoomKeyStoreMockRecorder) GetByVersion(ctx, roomID, version any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetByVersion", reflect.TypeOf((*MockRoomKeyStore)(nil).GetByVersion), ctx, roomID, version)
+}
+
 // GetMany mocks base method.
 func (m *MockRoomKeyStore) GetMany(ctx context.Context, roomIDs []string) (map[string]*roomkeystore.VersionedKeyPair, error) {
 	m.ctrl.T.Helper()

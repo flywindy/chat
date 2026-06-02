@@ -55,6 +55,10 @@ const MARK_READ_DEBOUNCE_MS = 500
  *   Room-message decryption function from RoomKeysContext. Defaults to a
  *   no-op that always returns null (pass-through: encrypted events reach
  *   the reducer's placeholder branch unchanged).
+ * @param {(roomId: string, version: number, siteId: string) => Promise<boolean>} [ensureKey]
+ *   On-demand key fetch from RoomKeysContext. Called once when the initial
+ *   decrypt returns null; if it resolves true, decrypt is retried once.
+ *   Defaults to a no-op that always returns false (no retry).
  */
 export function useRoomSubscriptions(
   nats,
@@ -63,6 +67,7 @@ export function useRoomSubscriptions(
   threadReplyHandlerRef,
   threadMessageMutationHandlerRef,
   decrypt = async () => null,
+  ensureKey = async () => false,
 ) {
   const { user } = nats
   // Keep a live ref to `nats` so long-lived subscription callbacks see the
@@ -74,6 +79,10 @@ export function useRoomSubscriptions(
   // the latest version without restarting the effect.
   const decryptRef = useRef(decrypt)
   decryptRef.current = decrypt
+
+  // Keep a live ref to `ensureKey` for the same reason.
+  const ensureKeyRef = useRef(ensureKey)
+  ensureKeyRef.current = ensureKey
 
   // Bumped on every login (re)cycle so the provider's async fetch
   // callbacks can detect stale-generation dispatches.
@@ -234,9 +243,9 @@ export function useRoomSubscriptions(
     // Handles two cases:
     //   1. encryptedMessage (new_message with no plaintext body yet)
     //   2. encryptedNewContent (edit events in encrypted rooms)
-    // Returns null on the key-not-yet-available path — the caller passes
-    // the event through unchanged and the reducer's placeholder branch
-    // handles the missing body gracefully.
+    // When the initial decrypt returns null, ensureKey is called once; if it
+    // resolves true, decrypt is retried. On persistent null the event falls
+    // through unchanged and the reducer's placeholder branch handles it.
     const decryptAndDispatch = async (evt, finalize) => {
       let decoded = evt
       try {
@@ -244,12 +253,26 @@ export function useRoomSubscriptions(
         if (decoded.encryptedMessage && !decoded.message) {
           const enc = decoded.encryptedMessage
           if (typeof enc.version === 'number' && enc.nonce && enc.ciphertext) {
-            const plaintext = await decryptRef.current({
+            let plaintext = await decryptRef.current({
               roomId: decoded.roomId,
               version: enc.version,
               nonceB64: enc.nonce,
               ciphertextB64: enc.ciphertext,
             })
+            if (plaintext == null && decoded.roomId) {
+              const siteId = decoded.siteId ?? natsRef.current.user?.siteId
+              if (siteId) {
+                const ok = await ensureKeyRef.current(decoded.roomId, enc.version, siteId)
+                if (ok) {
+                  plaintext = await decryptRef.current({
+                    roomId: decoded.roomId,
+                    version: enc.version,
+                    nonceB64: enc.nonce,
+                    ciphertextB64: enc.ciphertext,
+                  })
+                }
+              }
+            }
             if (plaintext != null) {
               const msg = JSON.parse(plaintext)
               decoded = { ...decoded, message: msg, encryptedMessage: undefined }
@@ -260,12 +283,26 @@ export function useRoomSubscriptions(
         if (decoded.type === 'message_edited' && decoded.encryptedNewContent && !decoded.newContent) {
           const enc = decoded.encryptedNewContent
           if (typeof enc.version === 'number' && enc.nonce && enc.ciphertext) {
-            const plaintext = await decryptRef.current({
+            let plaintext = await decryptRef.current({
               roomId: decoded.roomId,
               version: enc.version,
               nonceB64: enc.nonce,
               ciphertextB64: enc.ciphertext,
             })
+            if (plaintext == null && decoded.roomId) {
+              const siteId = decoded.siteId ?? natsRef.current.user?.siteId
+              if (siteId) {
+                const ok = await ensureKeyRef.current(decoded.roomId, enc.version, siteId)
+                if (ok) {
+                  plaintext = await decryptRef.current({
+                    roomId: decoded.roomId,
+                    version: enc.version,
+                    nonceB64: enc.nonce,
+                    ciphertextB64: enc.ciphertext,
+                  })
+                }
+              }
+            }
             if (plaintext != null) {
               decoded = { ...decoded, newContent: plaintext, encryptedNewContent: undefined }
             }

@@ -2055,6 +2055,64 @@ Removed members keep prior keys for decrypting historical messages but cannot de
 
 **Initial key bootstrap on (re)connect:** live `RoomKeyEvent`s fire only when keys change. The initial set of keys for rooms the client is already subscribed to will be delivered as part of the `subscription.get*` RPC family (see user-service — to be documented). Until that extension lands, clients receive keys only via live events.
 
+### Requesting a missing key
+
+If a client receives an `encryptedMessage` whose `(roomId, version)` it
+doesn't hold — e.g. it reconnected after the original `RoomKeyEvent` was
+delivered, or the message references an older version it never stored —
+it can fetch the key on demand from `room-service`.
+
+#### Subject
+
+```text
+chat.user.{account}.request.room.{roomID}.{siteID}.key.get
+```
+
+`{siteID}` is the room's origin siteID (the same value carried on the
+inbound message event). Clients are already authorized for
+`chat.user.{theirAccount}.>` and need no additional grant.
+
+#### Request payload (`RoomKeyGetRequest`)
+
+```json
+{ "version": 3 }
+```
+
+`version` is optional. When omitted (or `null`), the server returns the
+**current** key for the room.
+
+#### Success reply (`RoomKeyGetResponse`)
+
+```json
+{
+  "roomId": "<room id>",
+  "version": 3,
+  "privateKey": "<base64-encoded 32-byte room secret>"
+}
+```
+
+Same shape as `RoomKeyEvent` minus `Timestamp`, so a client can feed the
+reply through the same caching path it uses for live events.
+
+#### Errors
+
+| Condition | Error envelope `error` text | Notes |
+| --- | --- | --- |
+| Requester is not a member of the room | `only room members can list members` | Surfaces the existing `errNotRoomMember` sentinel. |
+| Key not held (rolled past grace window, or never existed) | `room key not available` | Includes "explicit version not in the previous-key slot". |
+| Malformed request body | `invalid request: …` | |
+| Internal failure | `internal error` | |
+
+#### Use as complement to live events
+
+This RPC complements — it does not replace — live `RoomKeyEvent`s on
+`chat.user.{account}.event.room.key`. Live events remain the primary
+delivery channel at room create / add-member / rotation. Clients
+should call `key.get` only when a received message cannot be decrypted
+with the keys they already hold, and back off after a failure so a
+chatty channel does not stampede the server for a key that is
+permanently gone.
+
 ---
 
 ## 6. Error envelope reference

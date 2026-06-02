@@ -113,7 +113,7 @@ export function RoomEventsProvider({ children }: { children: ReactNode }) {
   // where the NATS handshake has populated user/request/etc.
   const nats = useNats() as unknown as Nats
   const { user } = nats
-  const { decrypt } = useRoomKeys()
+  const { decrypt, ensureKey } = useRoomKeys()
   const [state, dispatch] = useReducer(roomEventsReducer, initialState) as unknown as [
     RoomEventsState,
     Dispatch<{ type: string; [k: string]: unknown }>,
@@ -150,6 +150,7 @@ export function RoomEventsProvider({ children }: { children: ReactNode }) {
     threadReplyHandlerRef,
     threadMessageMutationHandlerRef,
     decrypt,
+    ensureKey,
   )
 
   const loadHistory = useCallback(

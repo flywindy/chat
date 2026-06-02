@@ -79,6 +79,13 @@ export function memberList(account: string, roomId: string, siteId: string): str
   return `chat.user.${account}.request.room.${roomId}.${siteId}.member.list`
 }
 
+// roomKeyGet requests the room key bytes for (roomId, version?) from
+// room-service. Pair with src/api/requestRoomKey/. Mirrors
+// pkg/subject/subject.go::RoomKeyGet.
+export function roomKeyGet(account: string, roomId: string, siteId: string): string {
+  return `chat.user.${account}.request.room.${roomId}.${siteId}.key.get`
+}
+
 // userResponse is where room-worker publishes AsyncJobResult after finishing
 // a deferred operation. The client subscribes here before publishing the
 // request and X-Request-ID header so it can match the result back.

@@ -4043,6 +4043,128 @@ func TestHandler_MuteToggle_CrossSiteOutboxPublishFailure(t *testing.T) {
 	assert.Contains(t, err.Error(), "publish mute-toggled outbox")
 }
 
+func TestHandler_natsGetRoomKey(t *testing.T) {
+	const (
+		siteID  = "site-a"
+		account = "alice"
+		roomID  = "room-1"
+	)
+	subj := subject.RoomKeyGet(account, roomID, siteID)
+
+	sampleKey := roomkeystore.RoomKeyPair{PrivateKey: bytes.Repeat([]byte{0x42}, 32)}
+	sampleVersioned := &roomkeystore.VersionedKeyPair{Version: 7, KeyPair: sampleKey}
+
+	type want struct {
+		replyJSON string // expected JSON of the success reply (empty when err)
+		errSubstr string // expected substring in sanitizeError(err) (empty when ok)
+	}
+
+	cases := []struct {
+		name  string
+		body  []byte
+		setup func(t *testing.T, store *MockRoomStore, ks *MockRoomKeyStore)
+		want  want
+	}{
+		{
+			name: "current version, happy path",
+			body: []byte(`{}`),
+			setup: func(t *testing.T, store *MockRoomStore, ks *MockRoomKeyStore) {
+				store.EXPECT().GetSubscription(gomock.Any(), account, roomID).
+					Return(&model.Subscription{}, nil)
+				ks.EXPECT().Get(gomock.Any(), roomID).Return(sampleVersioned, nil)
+			},
+			want: want{replyJSON: `{"roomId":"room-1","version":7,"privateKey":"QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI="}`},
+		},
+		{
+			name: "explicit version, happy path",
+			body: []byte(`{"version":3}`),
+			setup: func(t *testing.T, store *MockRoomStore, ks *MockRoomKeyStore) {
+				store.EXPECT().GetSubscription(gomock.Any(), account, roomID).
+					Return(&model.Subscription{}, nil)
+				ks.EXPECT().GetByVersion(gomock.Any(), roomID, 3).Return(&sampleKey, nil)
+			},
+			want: want{replyJSON: `{"roomId":"room-1","version":3,"privateKey":"QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI="}`},
+		},
+		{
+			name: "not a member",
+			body: []byte(`{}`),
+			setup: func(t *testing.T, store *MockRoomStore, ks *MockRoomKeyStore) {
+				store.EXPECT().GetSubscription(gomock.Any(), account, roomID).
+					Return(nil, model.ErrSubscriptionNotFound)
+			},
+			want: want{errSubstr: "only room members"},
+		},
+		{
+			name: "current key absent",
+			body: []byte(`{}`),
+			setup: func(t *testing.T, store *MockRoomStore, ks *MockRoomKeyStore) {
+				store.EXPECT().GetSubscription(gomock.Any(), account, roomID).
+					Return(&model.Subscription{}, nil)
+				ks.EXPECT().Get(gomock.Any(), roomID).Return(nil, nil)
+			},
+			want: want{errSubstr: "room key not available"},
+		},
+		{
+			name: "historical version absent",
+			body: []byte(`{"version":1}`),
+			setup: func(t *testing.T, store *MockRoomStore, ks *MockRoomKeyStore) {
+				store.EXPECT().GetSubscription(gomock.Any(), account, roomID).
+					Return(&model.Subscription{}, nil)
+				ks.EXPECT().GetByVersion(gomock.Any(), roomID, 1).Return(nil, nil)
+			},
+			want: want{errSubstr: "room key not available"},
+		},
+		{
+			name: "store error",
+			body: []byte(`{}`),
+			setup: func(t *testing.T, store *MockRoomStore, ks *MockRoomKeyStore) {
+				store.EXPECT().GetSubscription(gomock.Any(), account, roomID).
+					Return(&model.Subscription{}, nil)
+				ks.EXPECT().Get(gomock.Any(), roomID).Return(nil, errors.New("valkey down"))
+			},
+			want: want{errSubstr: "internal error"},
+		},
+		{
+			name: "store error on explicit version",
+			body: []byte(`{"version":5}`),
+			setup: func(t *testing.T, store *MockRoomStore, ks *MockRoomKeyStore) {
+				store.EXPECT().GetSubscription(gomock.Any(), account, roomID).
+					Return(&model.Subscription{}, nil)
+				ks.EXPECT().GetByVersion(gomock.Any(), roomID, 5).Return(nil, errors.New("valkey down"))
+			},
+			want: want{errSubstr: "internal error"},
+		},
+		{
+			name: "malformed body",
+			body: []byte(`not-json`),
+			setup: func(t *testing.T, store *MockRoomStore, ks *MockRoomKeyStore) {
+				store.EXPECT().GetSubscription(gomock.Any(), account, roomID).
+					Return(&model.Subscription{}, nil)
+			},
+			want: want{errSubstr: "invalid request"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			store := NewMockRoomStore(ctrl)
+			ks := NewMockRoomKeyStore(ctrl)
+			tc.setup(t, store, ks)
+
+			h := NewHandler(store, ks, nil, nil, siteID, 1000, 500, 5*time.Second, nil, nil)
+			resp, err := h.handleGetRoomKey(t.Context(), subj, tc.body)
+			if tc.want.errSubstr != "" {
+				require.Error(t, err)
+				require.Contains(t, sanitizeError(err), tc.want.errSubstr)
+				return
+			}
+			require.NoError(t, err)
+			require.JSONEq(t, tc.want.replyJSON, string(resp))
+		})
+	}
+}
+
 // publishCore failure is intentionally non-fatal: the DB write is the source
 // of truth and other client sessions reconcile on their next subscription
 // refetch. The handler must still reply ok.

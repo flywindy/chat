@@ -1467,6 +1467,72 @@ func TestIntegration_CreateRoom_PersistsKeyInValkey(t *testing.T) {
 	assert.Equal(t, 0, pair.Version, "freshly created room key must have version 0")
 }
 
+// TestIntegration_HandleGetRoomKey verifies the client-callable room key get
+// RPC end-to-end against real Mongo + Valkey: a member fetches both the current
+// and an explicit version of the key; a non-member is rejected via the
+// errNotRoomMember sentinel.
+func TestIntegration_HandleGetRoomKey(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	ctx := context.Background()
+	db := setupMongo(t)
+	store := NewMongoStore(db)
+	require.NoError(t, store.EnsureIndexes(ctx))
+
+	keyStore := setupValkey(t)
+	h, _ := newRoomServiceHandler(t, store, keyStore, "site-A")
+
+	const roomID = "room-int"
+	// alice is a member; bob is not.
+	mustInsertSub(t, db, &model.Subscription{
+		ID:     idgen.GenerateUUIDv7(),
+		RoomID: roomID,
+		SiteID: "site-A",
+		User:   model.SubscriptionUser{ID: "u_alice", Account: "alice"},
+		Name:   "alice",
+	})
+
+	pair := roomkeystore.RoomKeyPair{PrivateKey: bytes.Repeat([]byte{0xAA}, 32)}
+	ver, err := keyStore.Set(ctx, roomID, pair)
+	require.NoError(t, err)
+
+	// 1. Member fetches current key.
+	{
+		body, _ := json.Marshal(model.RoomKeyGetRequest{})
+		resp, err := h.handleGetRoomKey(ctx, subject.RoomKeyGet("alice", roomID, "site-A"), body)
+		require.NoError(t, err)
+		var got model.RoomKeyGetResponse
+		require.NoError(t, json.Unmarshal(resp, &got))
+		assert.Equal(t, roomID, got.RoomID)
+		assert.Equal(t, ver, got.Version)
+		assert.Equal(t, pair.PrivateKey, got.PrivateKey)
+	}
+
+	// 2. Member fetches by explicit version.
+	{
+		v := ver
+		body, _ := json.Marshal(model.RoomKeyGetRequest{Version: &v})
+		resp, err := h.handleGetRoomKey(ctx, subject.RoomKeyGet("alice", roomID, "site-A"), body)
+		require.NoError(t, err)
+		var got model.RoomKeyGetResponse
+		require.NoError(t, json.Unmarshal(resp, &got))
+		assert.Equal(t, ver, got.Version)
+		assert.Equal(t, pair.PrivateKey, got.PrivateKey)
+	}
+
+	// 3. Non-member rejected.
+	{
+		body, _ := json.Marshal(model.RoomKeyGetRequest{})
+		_, err := h.handleGetRoomKey(ctx, subject.RoomKeyGet("bob", roomID, "site-A"), body)
+		require.Error(t, err)
+		// sanitizeError(err) should contain the "only room members" text,
+		// confirming errNotRoomMember was returned and surfaced for clients.
+		assert.Contains(t, sanitizeError(err), "only room members")
+	}
+}
+
 // mustInsertUser inserts a user document directly into the users collection.
 func mustInsertUser(t *testing.T, db *mongo.Database, u *model.User) {
 	t.Helper()
