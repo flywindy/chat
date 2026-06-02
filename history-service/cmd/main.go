@@ -12,6 +12,7 @@ import (
 	"github.com/hmchangw/chat/history-service/internal/config"
 	"github.com/hmchangw/chat/history-service/internal/mongorepo"
 	"github.com/hmchangw/chat/history-service/internal/publisher"
+	"github.com/hmchangw/chat/history-service/internal/readcache"
 	"github.com/hmchangw/chat/history-service/internal/service"
 	"github.com/hmchangw/chat/pkg/cassutil"
 	"github.com/hmchangw/chat/pkg/mongoutil"
@@ -101,8 +102,31 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Front the per-request Mongo reads with process-local LRU+TTL caches.
+	var subSource service.SubscriptionRepository = subRepo
+	if cfg.SubCacheSize > 0 && cfg.SubCacheTTL > 0 {
+		sc, err := readcache.NewSubscriptionCache(subRepo, cfg.SubCacheSize, cfg.SubCacheTTL)
+		if err != nil {
+			slog.Error("init subscription cache failed", "error", err)
+			os.Exit(1)
+		}
+		subSource = sc
+		slog.Info("subscription cache enabled", "size", cfg.SubCacheSize, "ttl", cfg.SubCacheTTL)
+	}
+
+	var roomSource service.RoomRepository = roomRepo
+	if cfg.RoomCacheSize > 0 && cfg.RoomCacheTTL > 0 {
+		rc, err := readcache.NewRoomCache(roomRepo, cfg.RoomCacheSize, cfg.RoomCacheTTL)
+		if err != nil {
+			slog.Error("init room cache failed", "error", err)
+			os.Exit(1)
+		}
+		roomSource = rc
+		slog.Info("room cache enabled", "size", cfg.RoomCacheSize, "ttl", cfg.RoomCacheTTL)
+	}
+
 	pub := publisher.New(js)
-	svc := service.New(cassRepo, subRepo, roomRepo, pub, threadRoomRepo, historyFloor)
+	svc := service.New(cassRepo, subSource, roomSource, pub, threadRoomRepo, historyFloor)
 	router := natsrouter.New(nc, "history-service")
 	router.Use(natsrouter.Recovery())
 	router.Use(natsrouter.Logging())
