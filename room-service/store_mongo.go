@@ -864,48 +864,40 @@ func (s *MongoStore) GetUserSiteID(ctx context.Context, account string) (string,
 // reads) therefore always resolves to nil. The caller $unsets
 // rooms.minUserLastSeenAt on a nil result.
 func (s *MongoStore) MinSubscriptionLastSeenByRoomID(ctx context.Context, roomID string) (*time.Time, error) {
-	zeroTime := time.Time{}
-	pipeline := mongo.Pipeline{
-		{{Key: "$match", Value: bson.M{"roomId": roomID}}},
-		// total counts every subscription in the room. readCount counts those
-		// with a usable lastSeenAt — $gt:zeroTime is false for missing/null
-		// (BSON null sorts before dates) and for the legacy zero date, so it
-		// matches our definition of "has read". min is only consumed when
-		// readCount == total, where every doc has lastSeenAt > zero, so $min
-		// (which ignores missing/null) yields the true minimum.
-		{{Key: "$group", Value: bson.M{
-			"_id":   nil,
-			"total": bson.M{"$sum": 1},
-			"readCount": bson.M{"$sum": bson.M{"$cond": bson.A{
-				bson.M{"$gt": bson.A{"$lastSeenAt", zeroTime}}, 1, 0,
-			}}},
-			"min": bson.M{"$min": "$lastSeenAt"},
-		}}},
+	// The whole result is determined by a single document: the room's
+	// subscription with the smallest lastSeenAt. The (roomId, lastSeenAt) index
+	// (non-sparse, so missing fields are indexed as null) returns the room's
+	// subscriptions in ascending lastSeenAt order, and BSON sorts missing/null
+	// before the legacy zero date before real dates. So the first document by
+	// ascending lastSeenAt answers both questions at once:
+	//   - smallest value is missing/null/zero → at least one member has never
+	//     read → strict floor is nil ("not everyone has read yet");
+	//   - smallest value is a real post-zero date → every member has read and
+	//     that value IS the minimum → the floor.
+	// This replaces the prior full-room $group scan with a single (covered)
+	// index seek, which matters because this runs on the message-read hot path.
+	var doc struct {
+		LastSeenAt time.Time `bson:"lastSeenAt"`
 	}
-	cursor, err := s.subscriptions.Aggregate(ctx, pipeline)
-	if err != nil {
-		return nil, fmt.Errorf("aggregate min lastSeenAt for room %q: %w", roomID, err)
-	}
-	defer cursor.Close(ctx)
-	if !cursor.Next(ctx) {
-		if err := cursor.Err(); err != nil {
-			return nil, fmt.Errorf("iterate min lastSeenAt for room %q: %w", roomID, err)
-		}
+	err := s.subscriptions.FindOne(ctx,
+		bson.M{"roomId": roomID},
+		options.FindOne().
+			SetSort(bson.D{{Key: "lastSeenAt", Value: 1}}).
+			SetProjection(bson.M{"lastSeenAt": 1, "_id": 0}),
+	).Decode(&doc)
+	if errors.Is(err, mongo.ErrNoDocuments) {
 		return nil, nil // no subscriptions in the room
 	}
-	var result struct {
-		Total     int       `bson:"total"`
-		ReadCount int       `bson:"readCount"`
-		Min       time.Time `bson:"min"`
+	if err != nil {
+		return nil, fmt.Errorf("find min lastSeenAt for room %q: %w", roomID, err)
 	}
-	if err := cursor.Decode(&result); err != nil {
-		return nil, fmt.Errorf("decode min lastSeenAt for room %q: %w", roomID, err)
-	}
-	// Strict floor: only return the MIN when every subscription has read.
-	if result.Total == 0 || result.ReadCount != result.Total {
+	// $gt-zeroTime equivalent: missing/null/zero decodes to the zero time and
+	// counts as "never read", matching the previous aggregation's definition.
+	if !doc.LastSeenAt.After(time.Time{}) {
 		return nil, nil
 	}
-	return &result.Min, nil
+	minTime := doc.LastSeenAt
+	return &minTime, nil
 }
 
 // UpdateRoomMinUserLastSeenAt sets or clears rooms.minUserLastSeenAt for roomID.
