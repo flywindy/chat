@@ -7,22 +7,32 @@ fi
 
 cd "${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}"
 
-# Add superpowers marketplace (if not already added)
-claude plugin marketplace add obra/superpowers-marketplace 2>/dev/null || true
+# --- Synchronous: plugin install + PATH persist (seconds) ---
+# Blocks the session start so superpowers skills are available immediately
+# and so $CLAUDE_ENV_FILE is written before the session snapshots its env.
 
-# Install superpowers plugin
+claude plugin marketplace add obra/superpowers-marketplace 2>/dev/null || true
 claude plugin install superpowers@superpowers-marketplace --scope project
 
-# Ensure ~/go/bin is on PATH for go install'd tools
-export PATH="${HOME}/go/bin:${PATH}"
+GOBIN_DIR="$(go env GOPATH)/bin"
+export PATH="${GOBIN_DIR}:${PATH}"
+if [ -n "${CLAUDE_ENV_FILE:-}" ]; then
+  echo "export PATH=\"${GOBIN_DIR}:\${PATH}\"" >> "$CLAUDE_ENV_FILE"
+fi
 
-# Install Go tools (golangci-lint v2 is pre-installed at /usr/local/bin)
-go install go.uber.org/mock/mockgen@latest
-
-# Download Go module dependencies and pre-populate source cache
-# go mod download fetches .mod/.info but not full source zips
-# go vet forces download of all source needed by golangci-lint typecheck
-# klauspost/compress often fails via the Go module proxy — download directly first
-GOPROXY=direct go mod download github.com/klauspost/compress || true
-GOPROXY=https://proxy.golang.org,direct go mod download
-GOPROXY=https://proxy.golang.org,direct go vet ./... || true
+# --- Background: Go tool compilation + module download (minutes) ---
+# Detached so the session is live the moment the synchronous block above
+# finishes. Output goes to a log file since the parent's stdout/stderr
+# close on hook exit. tail -f the log to watch progress.
+LOG="/tmp/claude-session-start-bg.log"
+nohup bash -c '
+  set -euo pipefail
+  command -v pipx >/dev/null 2>&1 || uv tool install pipx
+  make tools
+  go install go.uber.org/mock/mockgen@v0.6.0
+  GOPROXY=direct go mod download github.com/klauspost/compress || true
+  GOPROXY=https://proxy.golang.org,direct go mod download
+  GOPROXY=https://proxy.golang.org,direct go vet ./... || true
+  echo "=== session-start background install complete ==="
+' >"$LOG" 2>&1 </dev/null &
+disown
