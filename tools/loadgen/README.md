@@ -280,3 +280,213 @@ healthy — i.e. the load generator itself, not the service under test, was
 the limiting factor, so the step's result can't be trusted. An
 INCONCLUSIVE step does **not** count as a pass and does **not** stop the
 ramp, even with `--stop-on-trip`; only a hard TRIP stops the ramp.
+
+## Daily-IM scenario (find N) — Operator Guide
+
+Simulates N users using the chat system as their primary IM throughout
+a workday, ramps N geometrically through a configured step list, holds
+steady at each step while watching SLO signals, and reports the largest
+N at which everything held. The output answers:
+
+> *How many concurrent daily-IM users can a single-site deployment
+> sustain before a real signal breaks, and what breaks first?*
+
+Single-site only. Not a CI gate — invoked manually for capacity work.
+
+### Table of contents
+
+1. [Quick start](#quick-start)
+2. [Prerequisites](#prerequisites)
+3. [Presets](#presets)
+4. [CLI flags](#cli-flags)
+5. [Environment variables](#environment-variables)
+6. [SLO signals and verdicts](#slo-signals-and-verdicts)
+7. [Reading the output](#reading-the-output)
+8. [Troubleshooting](#troubleshooting)
+9. [Known limitations](#known-limitations)
+10. [Design references](#design-references)
+
+### Quick start
+
+```bash
+# 1. Bring up the docker-local stack (NATS, Mongo, Valkey, Cassandra, all services).
+make -C tools/loadgen/deploy up
+
+# 2. Seed Mongo + Valkey with users/rooms/subscriptions/room-keys for your preset.
+#    Must be re-run when you change preset (the fixture IDs differ per preset).
+make -C tools/loadgen/deploy seed PRESET=daily-heavy
+
+# 3. Ramp.
+make -C tools/loadgen/deploy run-daily PRESET=daily-heavy
+```
+
+### Prerequisites
+
+Before `loadgen daily` will produce a meaningful verdict, you need:
+
+| Requirement | Why | How to get it |
+|---|---|---|
+| Docker-local stack running | Daily talks to message-gatekeeper, room-service, broadcast-worker, etc. | `make -C tools/loadgen/deploy up` |
+| Mongo `users`/`rooms`/`subscriptions` seeded for the preset | Gatekeeper rejects every send with "user not subscribed" otherwise | `loadgen seed --workload=messages --preset=<your daily preset>` |
+| Valkey per-room AES-256-GCM keys | broadcast-worker decrypts with these when `ENCRYPTION_ENABLED=true` (default) | Written by the same `loadgen seed` step |
+| JetStream streams (`MESSAGES`, `MESSAGES_CANONICAL`, `ROOMS`, `OUTBOX`, `INBOX`) | The whole pipeline | Auto-created by services at startup when `BOOTSTRAP_STREAMS=true` (docker-local default) |
+| Cassandra tables | message-worker writes here; history-service reads here | Created by `docker-local/cassandra/init/*.cql` at first stack boot |
+| `NATS_CREDS_FILE` pointing at credentials with `pub/sub` on `chat.>` | Loadgen otherwise dials anonymously and gets permission violations | docker-local writes `backend.creds` with full perms via `docker-local/setup.sh` |
+
+A preflight runs at `runDaily` startup: it opens a short Mongo connection,
+counts subscriptions for `cfg.SiteID`, and bails with an actionable error
+if zero. So forgetting step 2 fails fast in seconds rather than burning
+the whole ramp.
+
+### Presets
+
+All three daily presets seed 10000 users. They differ in the rooms-per-user
+distribution (the "what a typical IM user's room list looks like" shape).
+
+| preset       | DMs | small (5–20) | medium (50–200) | large (500–2000) | rooms/user | use case |
+|--------------|-----|--------------|-----------------|------------------|------------|----------|
+| daily-light  | 15  | 10           | 5               | 2                | ~32        | light daily-IM user |
+| daily-heavy  | 25  | 20           | 8               | 3                | ~56        | heavy daily-IM user (default) |
+| daily-power  | 40  | 30           | 10              | 3                | ~83        | power user (eng / manager) |
+
+Room sizes within each band are drawn via Zipf-like sampling so the
+long tail is realistic. Subscriptions are generated via stub-pairing
+for the DM band and a slot-bag picker for the others — both
+O(N × perUser), so fixture build at N=10000 finishes in ~1s.
+
+### CLI flags
+
+`loadgen daily -h` prints the same:
+
+| Flag | Default | Notes |
+|---|---|---|
+| `--preset` | `daily-heavy` | `daily-light` \| `daily-heavy` \| `daily-power` |
+| `--steps` | `1000,2000,5000,10000,20000,50000,100000` | Comma-separated N values per ramp step. `k` suffix = ×1000. Max cannot exceed the preset's `Users` (10000); excess is capped and the step INCONCLUSIVEs with `only X/Y users activated`. |
+| `--warmup` | `60s` | Per-step warm-up before SLO measurement begins. Latency samples from this window are discarded by `Collector.Reset` at the start of hold. |
+| `--hold` | `180s` | Steady-state window where SLO signals are evaluated. |
+| `--cooldown` | `30s` | Drain time between steps to let consumers catch up. |
+| `--stop-on-trip` | `true` | Stop the ramp on the first TRIP. Set `false` to keep ramping past the first failure (useful for understanding the slope of degradation). |
+| `--max-direct-users` | `20000` | Cap on the direct-pool size (one `nats.Conn` per user). Above this, additional users are placed in the multiplex pool. |
+| `--multiplex-pool-size` | `200` | Number of shared `nats.Conn` instances in the multiplex pool. Set `0` to disable multiplex (any user past `--max-direct-users` is then silently skipped). |
+| `--max-conns-per-process` | `25000` | Safety ceiling on the total nats.Conn count to this process. Combined `direct + multiplex` must not exceed this. |
+| `--csv` | `""` | Optional CSV output path (one row per step). |
+
+Example:
+
+```bash
+loadgen daily \
+  --preset=daily-heavy \
+  --steps=1k,2k,5k,10k \
+  --warmup=15s --hold=45s --cooldown=10s \
+  --max-direct-users=2000 --multiplex-pool-size=200 \
+  --csv=results.csv
+```
+
+### Environment variables
+
+Read by the base loadgen `config` struct (env vars, not flags):
+
+| Var | Default | Notes |
+|---|---|---|
+| `NATS_URL` | (required) | `nats://...` |
+| `NATS_CREDS_FILE` | `""` | Path to NATS creds (mandatory against operator-mode NATS — otherwise loadgen dials anonymous and gets "permissions violation"). |
+| `NATS_MONITORING_URL` | `http://nats:8222/jsz` | Where the JetStream-pending poller queries. Override to `http://127.0.0.1:8222/jsz` if you're running loadgen on the host instead of inside the compose network. |
+| `MONGO_URI`, `MONGO_DB`, `MONGO_USERNAME`, `MONGO_PASSWORD` | (uri required; db default `chat`) | Used by the seed step and the daily preflight. |
+| `VALKEY_ADDRS`, `VALKEY_PASSWORD` | (addrs required) | Used by the seed step for per-room keys. |
+| `SITE_ID` | `site-local` | Must match the gatekeeper's configured site or every send is rejected with `siteID mismatch`. Also used as the partition key for seeded fixtures. |
+
+### SLO signals and verdicts
+
+A step's verdict is one of `PASS`, `TRIP`, or `INCONCLUSIVE`.
+
+**TRIP** if any of:
+
+- `p95_latency_ms` > 500 — publish→broadcast latency, measured by correlating `RoomEvent.LastMsgID` with `RecordPublish` timestamps
+- `p99_latency_ms` > 1000 — same source
+- `error_rate` > 0.001 (0.1%) — failed publishes, request timeouts, gatekeeper 4xx/5xx; counted by the action emitter
+- any JetStream consumer's `num_pending` grew by more than 1000 over the hold — polled via `/jsz?consumers=true` at hold start and end
+- any service's `slog_errors_total` counter increased over the hold — currently a no-op since backend services don't expose `/metrics` HTTP endpoints; see known limitations
+- any durable that existed at hold-start was *missing* at hold-end (consumer crashed or was deleted)
+
+**INCONCLUSIVE** (overrides PASS/TRIP — means "verdict signals can't be trusted") when:
+
+- Loadgen GC pause p99 > 50ms — the load box is under pressure, latency measurements may reflect loadgen-side GC rather than the system under test
+- `AttemptedOps == 0` — publisher conn failed at startup, or no users were activated, or hold window was zero; a PASS here would be a silent lie
+- `EffectiveN < 95% of N` — fewer than 95% of the nominal N users actually came online (pool caps too low, or `--steps` exceeded `preset.Users`)
+- `pollPending` poll failed at start or end of hold even after retries — only when caused by ctx cancel; transient flakes are tolerated by dropping the pending-growth signal for that step alone
+- `ctx.Done()` fires during warmup or hold — the run was interrupted
+
+**PASS** otherwise.
+
+The final ANSWER is the largest N where the verdict is PASS. If a step
+TRIPped before any PASS, the answer is `no step passed`. INCONCLUSIVE steps
+don't count as PASS and don't stop the ramp.
+
+### Reading the output
+
+Console table at end of run:
+
+```
+N        p50    p95    p99    err%    worst-pending-delta             verdict
+1000     12     45     89     0.00%   broadcast-worker +12             PASS
+2000     14     58     112    0.00%   broadcast-worker +34             PASS
+5000     22     94     180    0.01%   broadcast-worker +180            PASS
+10000    38     210    430    0.02%   broadcast-worker +890            PASS
+20000(10000) 71  480  980    0.04%   broadcast-worker +1240           INCONCLUSIVE
+    reasons: inconclusive: only 10000/20000 users activated (pool caps too low)
+
+ANSWER: N = 10000 (last passing step)
+        Next limit: broadcast-worker pending +1240 > +1000
+```
+
+The `N` column shows `N(EffectiveN)` when they differ — at `N=20000` above
+only 10000 users came online (preset cap), so the step is marked
+INCONCLUSIVE rather than overstating capacity. The `reasons:` line below
+a TRIP/INCONCLUSIVE row says which signal fired.
+
+CSV columns (`--csv=results.csv`):
+
+```
+n,effective_n,started_at,p50_ms,p95_ms,p99_ms,error_rate,attempted_ops,failed_ops,
+worst_durable,worst_pending_delta,tripped,inconclusive,tripped_reasons
+```
+
+One row per step, sorted ascending by N. Use this for post-hoc plotting
+or regression comparison across runs.
+
+### Troubleshooting
+
+Symptom → fix matrix for the failure modes that actually happen in real
+runs:
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Preflight errors with `no subscriptions found in mongo for siteID=...` | Mongo isn't seeded for the preset you're running, or `SITE_ID` differs between seed time and run time. | Run `loadgen seed --workload=messages --preset=<your preset>`. If `SITE_ID` changed, also re-seed (it's a per-site fixture). |
+| Gatekeeper logs `user X is not subscribed to room Y` for every send | Preset mismatch between seed and run (fixture IDs differ per preset). | Teardown old preset + seed the new one: `loadgen teardown --workload=messages --preset=<old>` then seed the new one. |
+| Gatekeeper logs `siteID mismatch: got X, want Y` | `SITE_ID` env differs between loadgen and gatekeeper. | Set both to the same value. Default is `site-local`. |
+| Gatekeeper logs `posting is restricted to owners and admins` | Daily-band rooms have `UserCount` in [500, 2000]; gatekeeper rejects non-thread sends from member-role users when `UserCount > LargeRoomThreshold` (default 500). Documented known limitation. | Either raise `LARGE_ROOM_THRESHOLD` on the gatekeeper (operator-side, no re-seed), or wait for the planned admin-role fixture fix (loadgen-side, needs re-seed). |
+| `nats: message does not have a reply` in room-service | Loadgen action handler used `Publish` instead of `Request` for a subject room-service responds on. | Use the latest loadgen — `markRead` was fixed in commit `0bde680` to use `Request`. |
+| NATS `permissions violation` on subscribe | Loadgen's `NATS_CREDS_FILE` lacks subscribe rights on `chat.room.>` / `chat.user.>`. | Local dev: `./docker-local/setup.sh` regenerates `backend.creds` with full perms. Production-shaped: extend the chatapp account's `backend` user perms (`nsc edit user --account chatapp --name backend --allow-sub 'chat.room.>' --allow-sub 'chat.user.>'`). |
+| All latency columns are 0 even though publishes succeed | No receivers configured (`--max-direct-users=0 --multiplex-pool-size=0`), or the broadcast subscriptions didn't survive the server registration race, or `RoomEvent.LastMsgID` isn't matching. | Set at least one of `--max-direct-users` or `--multiplex-pool-size` > 0. If still empty, check for `broadcast decode failed` warnings in the loadgen log — model drift between loadgen and broadcast-worker can break unmarshaling. |
+| Step says `INCONCLUSIVE: only 10000/20000 users activated (pool caps too low)` | `max(--steps)` exceeded `preset.Users` (10000). | Trim `--steps` so its max is ≤ 10000, or change `preset.Users` in `preset.go` for that preset (and re-seed). |
+| Loadgen process sits at 100% CPU for many minutes after startup, no output | Fixture build for very large `preset.Users`. Look for `INFO building fixtures preset=X users=Y` followed by `INFO fixtures built ... elapsed=Zs`. | At the default `preset.Users=10000` this is ~1s. If you've bumped it much higher, expect proportional time. |
+| `start-of-hold pending poll failed` logged but the run continues | NATS `/jsz` endpoint is flaky. The step proceeds without the pending-growth signal; the other four signals still produce a verdict. | If persistent, set `NATS_MONITORING_URL` to a stable URL. |
+
+### Known limitations
+
+These are documented intentional shortcomings, not bugs to fix in a normal
+run:
+
+- **Large-band rooms are gatekeeper-blocked.** Daily fixtures have ~3 large rooms per user with `UserCount` in [500, 2000]; the gatekeeper rejects non-thread sends from member-role users to these. Roughly 3/56 = 5% of `sendMessage` calls land on a large room and fail. Workarounds: raise `LARGE_ROOM_THRESHOLD` (operator side) or change fixtures to seed users as RoleAdmin in large rooms (loadgen side, requires re-seed).
+- **Auth-service JWT minting is a no-op stub.** `mintJWT` exists in `prodEnvFactory.Build` but doesn't call auth-service. All loadgen connections use the shared `backend.creds`. To exercise per-user auth, implement `mintJWT` and have `directPool.Add` open the user's conn with the minted JWT.
+- **Service-error signal is dormant.** The verdict's `service_errors > 0 → trip` arm is wired but the URL map is empty because backend services don't expose `/metrics`. To enable: add a Prometheus endpoint per service and populate `svcURLs` in `prodEnvFactory.Build`.
+- **CPU% in self-metrics is disabled.** The earlier goroutine-count-as-CPU proxy made the tool unusable at scale (every step INCONCLUSIVE above ~4000 users). Real CPU measurement (gopsutil) is a follow-up. The GC pause p99 signal still fires the loadgen-saturation INCONCLUSIVE branch.
+- **Reconnect / presence storms are out of scope.** That's a separate scenario PR.
+- **Cross-site federation (OUTBOX / INBOX) is out of scope.** Single-site only.
+- **Not a CI gate.** Invoked manually for capacity work; the deploy harness produces a CSV the operator interprets.
+
+### Design references
+
+- `docs/superpowers/specs/2026-05-27-daily-im-load-scenario-design.md` — full spec (goal, scope, behavior model, fixture topology, receiver architecture, ramp protocol, SLO definitions, risks).
+- `docs/superpowers/plans/2026-05-27-daily-im-load-scenario.md` — implementation plan (file structure, task decomposition).
+- `tools/loadgen/daily.go`, `daily_pool.go`, `daily_actions.go`, `daily_verdict.go`, `daily_report.go`, `preset.go` — implementation.

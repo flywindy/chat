@@ -30,6 +30,12 @@ var historyCassandraTables = []string{
 // the gocql per-host connection pool default.
 const historySeedConcurrency = 50
 
+// threadRoomInsertBatch caps how many ThreadRoom docs we accumulate before
+// flushing to Mongo. Each room can contribute up to MessagesPerRoom × ThreadRate
+// parents (~5k on history-large), so we flush at room boundaries plus this cap
+// to keep memory bounded even on pathological presets.
+const threadRoomInsertBatch = 1024
+
 func buildCassParticipant(userID, account, engName string) cassandra.Participant {
 	return cassandra.Participant{
 		ID:      userID,
@@ -45,20 +51,40 @@ func bucketOf(s msgbucket.Sizer, t time.Time) int64 {
 }
 
 // SeedHistoryCassandra truncates the three message tables and writes every
-// row from plan. Idempotent: safe to rerun. siteID is stamped into every row.
-func SeedHistoryCassandra(ctx context.Context, session *gocql.Session, sizer msgbucket.Sizer, plan *MessagePlan, siteID string) error {
+// row from fixtures' per-room iterator. Idempotent: safe to rerun. siteID is
+// stamped into every row. Returns the total number of message rows written.
+//
+// Per-room streaming keeps peak memory bounded by a single room's plan size
+// (~50 MB on history-large) rather than the full plan (~50 GB).
+func SeedHistoryCassandra(ctx context.Context, session *gocql.Session, sizer msgbucket.Sizer, fixtures *HistoryFixtures, siteID string) (int, error) {
 	for _, tbl := range historyCassandraTables {
 		if err := session.Query("TRUNCATE " + tbl).WithContext(ctx).Exec(); err != nil {
-			return fmt.Errorf("truncate %s: %w", tbl, err)
+			return 0, fmt.Errorf("truncate %s: %w", tbl, err)
 		}
 	}
 
-	// Build a parent-createdAt lookup so thread replies stamp the parent's
-	// real timestamp in messages_by_id.thread_parent_created_at instead of
-	// the zero time.
-	parentCreatedAtByID := make(map[string]time.Time, len(plan.Messages))
-	for i := range plan.Messages {
-		m := &plan.Messages[i]
+	total := 0
+	iterErr := fixtures.IterateRoomMessages(func(msgs []plannedMessage) error {
+		if err := writeRoomCassandra(ctx, session, sizer, msgs, siteID); err != nil {
+			return err
+		}
+		total += len(msgs)
+		return nil
+	})
+	if iterErr != nil {
+		return total, iterErr
+	}
+	return total, nil
+}
+
+// writeRoomCassandra writes one room's plan (top-levels + replies) using a
+// bounded fan-out of INSERTs. Builds a room-local parent-CreatedAt lookup so
+// thread replies stamp the parent's real timestamp without scanning the global
+// plan.
+func writeRoomCassandra(ctx context.Context, session *gocql.Session, sizer msgbucket.Sizer, msgs []plannedMessage, siteID string) error {
+	parentCreatedAtByID := make(map[string]time.Time, len(msgs))
+	for i := range msgs {
+		m := &msgs[i]
 		if m.ThreadParentID == "" {
 			parentCreatedAtByID[m.MessageID] = m.CreatedAt
 		}
@@ -68,12 +94,9 @@ func SeedHistoryCassandra(ctx context.Context, session *gocql.Session, sizer msg
 	errCh := make(chan error, 1)
 	var wg sync.WaitGroup
 
-	// On ctx cancellation we stop accepting new work but must wait for the
-	// in-flight goroutines to finish — otherwise they outlive the caller's
-	// session and may race with session teardown.
 	cancelled := false
-	for i := range plan.Messages {
-		msg := &plan.Messages[i]
+	for i := range msgs {
+		msg := &msgs[i]
 		select {
 		case <-ctx.Done():
 			cancelled = true
@@ -185,12 +208,16 @@ func TeardownHistoryCassandra(ctx context.Context, session *gocql.Session) error
 	return nil
 }
 
-// buildThreadRoomsFromPlan synthesizes the ThreadRoom Mongo docs that pair
-// with the thread parents in plan. Each ThreadRoom's LastMsgAt is set to the
-// latest reply's CreatedAt and ReplyAccounts is the unique set of reply
-// senders, so the doc looks consistent with what room-worker would produce in
-// production after the replies were published.
-func buildThreadRoomsFromPlan(plan *MessagePlan, siteID string) []model.ThreadRoom {
+// buildRoomThreadRooms synthesizes the ThreadRoom Mongo docs for one room's
+// plan. Each ThreadRoom's LastMsgAt is set to the latest reply's CreatedAt and
+// ReplyAccounts is the unique set of reply senders, so the doc looks
+// consistent with what room-worker would produce in production after the
+// replies were published.
+//
+// All thread parents and their replies live in the same room (buildRoomMessages
+// emits replies inline after each parent), so per-room aggregation captures
+// every reply for every parent it owns.
+func buildRoomThreadRooms(msgs []plannedMessage, siteID string) []model.ThreadRoom {
 	type aggregate struct {
 		parentID  string
 		parentAt  time.Time
@@ -201,9 +228,8 @@ func buildThreadRoomsFromPlan(plan *MessagePlan, siteID string) []model.ThreadRo
 		createdAt time.Time
 	}
 	byThreadRoom := map[string]*aggregate{}
-	// Pass 1: capture parent metadata.
-	for i := range plan.Messages {
-		m := &plan.Messages[i]
+	for i := range msgs {
+		m := &msgs[i]
 		if m.ThreadParentID != "" || m.ThreadRoomID == "" {
 			continue
 		}
@@ -215,9 +241,8 @@ func buildThreadRoomsFromPlan(plan *MessagePlan, siteID string) []model.ThreadRo
 			accounts:  map[string]struct{}{},
 		}
 	}
-	// Pass 2: fold reply metadata into each thread's aggregate.
-	for i := range plan.Messages {
-		m := &plan.Messages[i]
+	for i := range msgs {
+		m := &msgs[i]
 		if m.ThreadParentID == "" {
 			continue
 		}
@@ -254,19 +279,43 @@ func buildThreadRoomsFromPlan(plan *MessagePlan, siteID string) []model.ThreadRo
 	return out
 }
 
-// SeedThreadRooms drops and repopulates the thread_rooms collection with one
-// document per thread parent in plan. Indexes the (roomId, lastMsgAt) and
-// (roomId, parentMessageId) tuples, mirroring history-service's mongorepo
-// indexes so query plans match production.
-func SeedThreadRooms(ctx context.Context, db *mongo.Database, plan *MessagePlan, siteID string) error {
+// SeedThreadRooms drops and repopulates the thread_rooms collection by
+// streaming per-room plans and inserting in batches of threadRoomInsertBatch.
+// Indexes the (roomId, lastMsgAt) and (roomId, parentMessageId) tuples,
+// mirroring history-service's mongorepo indexes so query plans match
+// production.
+func SeedThreadRooms(ctx context.Context, db *mongo.Database, fixtures *HistoryFixtures, siteID string) error {
 	coll := db.Collection("thread_rooms")
 	if err := coll.Drop(ctx); err != nil {
 		return fmt.Errorf("drop thread_rooms: %w", err)
 	}
-	rooms := buildThreadRoomsFromPlan(plan, siteID)
-	if err := insertDocs(ctx, coll, rooms); err != nil {
+
+	pending := make([]model.ThreadRoom, 0, threadRoomInsertBatch)
+	flush := func() error {
+		if len(pending) == 0 {
+			return nil
+		}
+		if err := insertDocs(ctx, coll, pending); err != nil {
+			return err
+		}
+		pending = pending[:0]
+		return nil
+	}
+
+	iterErr := fixtures.IterateRoomMessages(func(msgs []plannedMessage) error {
+		pending = append(pending, buildRoomThreadRooms(msgs, siteID)...)
+		if len(pending) >= threadRoomInsertBatch {
+			return flush()
+		}
+		return nil
+	})
+	if iterErr != nil {
+		return iterErr
+	}
+	if err := flush(); err != nil {
 		return err
 	}
+
 	if _, err := coll.Indexes().CreateMany(ctx, []mongo.IndexModel{
 		{Keys: bson.D{{Key: "roomId", Value: 1}, {Key: "lastMsgAt", Value: -1}}},
 		{Keys: bson.D{{Key: "roomId", Value: 1}, {Key: "parentMessageId", Value: 1}}},

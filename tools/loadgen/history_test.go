@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -38,10 +39,12 @@ func TestBuildHistoryFixtures_Deterministic(t *testing.T) {
 	assert.Equal(t, a.Fixtures.Rooms, b.Fixtures.Rooms)
 	assert.Equal(t, a.Fixtures.Subscriptions, b.Fixtures.Subscriptions)
 	assert.Equal(t, a.ThreadParents, b.ThreadParents)
-	require.Equal(t, len(a.Plan.Messages), len(b.Plan.Messages))
-	for i := range a.Plan.Messages {
-		assert.Equal(t, a.Plan.Messages[i].MessageID, b.Plan.Messages[i].MessageID, "msg[%d]", i)
-		assert.Equal(t, a.Plan.Messages[i].CreatedAt, b.Plan.Messages[i].CreatedAt, "msg[%d]", i)
+	aPlan := a.FullPlan()
+	bPlan := b.FullPlan()
+	require.Equal(t, len(aPlan.Messages), len(bPlan.Messages))
+	for i := range aPlan.Messages {
+		assert.Equal(t, aPlan.Messages[i].MessageID, bPlan.Messages[i].MessageID, "msg[%d]", i)
+		assert.Equal(t, aPlan.Messages[i].CreatedAt, bPlan.Messages[i].CreatedAt, "msg[%d]", i)
 	}
 }
 
@@ -50,10 +53,11 @@ func TestBuildHistoryFixtures_MessageCountPerRoom(t *testing.T) {
 	require.True(t, ok)
 	now := time.Date(2026, 5, 26, 12, 0, 0, 0, time.UTC)
 	res := BuildHistoryFixtures(&p, 42, "site-a", now)
+	plan := res.FullPlan()
 
 	counts := map[string]int{}
-	for i := range res.Plan.Messages {
-		counts[res.Plan.Messages[i].RoomID]++
+	for i := range plan.Messages {
+		counts[plan.Messages[i].RoomID]++
 	}
 	// Plan includes top-level + thread replies. Per-room top-level = MessagesPerRoom.
 	// Per-room total = MessagesPerRoom + thread replies.
@@ -62,9 +66,9 @@ func TestBuildHistoryFixtures_MessageCountPerRoom(t *testing.T) {
 	// using ThreadRoomID=="" here would silently break if ThreadRate were
 	// raised on this preset.
 	topLevelByRoom := map[string]int{}
-	for i := range res.Plan.Messages {
-		if res.Plan.Messages[i].ThreadParentID == "" {
-			topLevelByRoom[res.Plan.Messages[i].RoomID]++
+	for i := range plan.Messages {
+		if plan.Messages[i].ThreadParentID == "" {
+			topLevelByRoom[plan.Messages[i].RoomID]++
 		}
 	}
 	require.Equal(t, p.Rooms, len(topLevelByRoom))
@@ -78,10 +82,11 @@ func TestBuildHistoryFixtures_MessageTimestampsInSpan(t *testing.T) {
 	require.True(t, ok)
 	now := time.Date(2026, 5, 26, 12, 0, 0, 0, time.UTC)
 	res := BuildHistoryFixtures(&p, 1, "site-a", now)
+	plan := res.FullPlan()
 	spanStart := now.Add(-time.Duration(p.MessageSpanDays) * 24 * time.Hour)
 
-	for i := range res.Plan.Messages {
-		msg := &res.Plan.Messages[i]
+	for i := range plan.Messages {
+		msg := &plan.Messages[i]
 		assert.False(t, msg.CreatedAt.Before(spanStart), "msg[%d] %s predates span start", i, msg.CreatedAt)
 		assert.False(t, msg.CreatedAt.After(now), "msg[%d] %s postdates now", i, msg.CreatedAt)
 	}
@@ -92,19 +97,20 @@ func TestBuildHistoryFixtures_ThreadParents(t *testing.T) {
 	require.True(t, ok)
 	now := time.Date(2026, 5, 26, 12, 0, 0, 0, time.UTC)
 	res := BuildHistoryFixtures(&p, 1, "site-a", now)
+	plan := res.FullPlan()
 
 	// Every thread reply must reference a known parent and ThreadRoomID; every
 	// parent recorded in ThreadParents must exist as a top-level message
 	// (top-level = ThreadParentID == ""; thread parents themselves are
 	// top-level and carry a ThreadRoomID for downstream queries).
 	topLevelByID := map[string]*plannedMessage{}
-	for i := range res.Plan.Messages {
-		if res.Plan.Messages[i].ThreadParentID == "" {
-			topLevelByID[res.Plan.Messages[i].MessageID] = &res.Plan.Messages[i]
+	for i := range plan.Messages {
+		if plan.Messages[i].ThreadParentID == "" {
+			topLevelByID[plan.Messages[i].MessageID] = &plan.Messages[i]
 		}
 	}
-	for i := range res.Plan.Messages {
-		msg := &res.Plan.Messages[i]
+	for i := range plan.Messages {
+		msg := &plan.Messages[i]
 		if msg.ThreadParentID == "" {
 			continue
 		}
@@ -130,16 +136,17 @@ func TestBuildHistoryFixtures_ThreadReplyTimestampNearParent(t *testing.T) {
 	require.True(t, ok)
 	now := time.Date(2026, 5, 26, 12, 0, 0, 0, time.UTC)
 	res := BuildHistoryFixtures(&p, 1, "site-a", now)
+	plan := res.FullPlan()
 
 	parentByID := map[string]time.Time{}
-	for i := range res.Plan.Messages {
-		m := &res.Plan.Messages[i]
+	for i := range plan.Messages {
+		m := &plan.Messages[i]
 		if m.ThreadRoomID != "" && m.ThreadParentID == "" {
 			parentByID[m.MessageID] = m.CreatedAt
 		}
 	}
-	for i := range res.Plan.Messages {
-		msg := &res.Plan.Messages[i]
+	for i := range plan.Messages {
+		msg := &plan.Messages[i]
 		if msg.ThreadParentID == "" {
 			continue
 		}
@@ -159,10 +166,11 @@ func TestBuildHistoryFixtures_RoomLastMsgAtMatchesLatest(t *testing.T) {
 	require.True(t, ok)
 	now := time.Date(2026, 5, 26, 12, 0, 0, 0, time.UTC)
 	res := BuildHistoryFixtures(&p, 7, "site-a", now)
+	plan := res.FullPlan()
 
 	latest := map[string]time.Time{}
-	for i := range res.Plan.Messages {
-		msg := &res.Plan.Messages[i]
+	for i := range plan.Messages {
+		msg := &plan.Messages[i]
 		if msg.ThreadParentID != "" {
 			continue
 		}
@@ -184,6 +192,7 @@ func TestBuildHistoryFixtures_SenderIsRoomMember(t *testing.T) {
 	require.True(t, ok)
 	now := time.Date(2026, 5, 26, 12, 0, 0, 0, time.UTC)
 	res := BuildHistoryFixtures(&p, 11, "site-a", now)
+	plan := res.FullPlan()
 
 	membersByRoom := map[string]map[string]bool{}
 	for i := range res.Fixtures.Subscriptions {
@@ -193,9 +202,101 @@ func TestBuildHistoryFixtures_SenderIsRoomMember(t *testing.T) {
 		}
 		membersByRoom[s.RoomID][s.User.Account] = true
 	}
-	for i := range res.Plan.Messages {
-		msg := &res.Plan.Messages[i]
+	for i := range plan.Messages {
+		msg := &plan.Messages[i]
 		assert.True(t, membersByRoom[msg.RoomID][msg.SenderAccount],
 			"sender %s not a member of room %s", msg.SenderAccount, msg.RoomID)
+	}
+}
+
+func TestIterateRoomMessages_OneBatchPerRoomMatchesFullPlan(t *testing.T) {
+	// IterateRoomMessages must yield exactly one batch per room, each batch
+	// containing only that room's messages, in the same order FullPlan
+	// produces by concatenation. Streaming + materialization must agree
+	// row-for-row or the seed path diverges from what tests assert.
+	p, ok := BuiltinHistoryPreset("history-medium")
+	require.True(t, ok)
+	now := time.Date(2026, 5, 26, 12, 0, 0, 0, time.UTC)
+	res := BuildHistoryFixtures(&p, 3, "site-a", now)
+
+	var batches [][]plannedMessage
+	require.NoError(t, res.IterateRoomMessages(func(msgs []plannedMessage) error {
+		batches = append(batches, append([]plannedMessage(nil), msgs...))
+		return nil
+	}))
+	require.Equal(t, p.Rooms, len(batches))
+	for i, b := range batches {
+		require.NotEmpty(t, b, "batch %d empty", i)
+		want := res.Fixtures.Rooms[i].ID
+		for j := range b {
+			require.Equal(t, want, b[j].RoomID, "batch %d msg %d wrong room", i, j)
+		}
+	}
+	full := res.FullPlan()
+	concat := make([]plannedMessage, 0, len(full.Messages))
+	for _, b := range batches {
+		concat = append(concat, b...)
+	}
+	require.Equal(t, len(full.Messages), len(concat))
+	for i := range full.Messages {
+		assert.Equal(t, full.Messages[i].MessageID, concat[i].MessageID, "msg[%d]", i)
+		assert.Equal(t, full.Messages[i].CreatedAt, concat[i].CreatedAt, "msg[%d]", i)
+	}
+}
+
+func TestIterateRoomMessages_PropagatesError(t *testing.T) {
+	p, ok := BuiltinHistoryPreset("history-small")
+	require.True(t, ok)
+	now := time.Date(2026, 5, 26, 12, 0, 0, 0, time.UTC)
+	res := BuildHistoryFixtures(&p, 5, "site-a", now)
+
+	calls := 0
+	sentinel := fmt.Errorf("stop")
+	err := res.IterateRoomMessages(func(_ []plannedMessage) error {
+		calls++
+		return sentinel
+	})
+	require.ErrorIs(t, err, sentinel)
+	assert.Equal(t, 1, calls, "iterator should stop after first error")
+}
+
+func TestSummarizeRoomPlan_MatchesFullBuild(t *testing.T) {
+	// The cheap metadata walk and the full per-room build share the same
+	// structural RNG sequence — their parent IDs and latest top-level
+	// CreatedAt must agree. If they diverge, BuildHistoryFixtures sets the
+	// wrong LastMsgAt / ThreadParents and the seed path silently corrupts
+	// downstream fixtures.
+	p, ok := BuiltinHistoryPreset("history-medium")
+	require.True(t, ok)
+	now := time.Date(2026, 5, 26, 12, 0, 0, 0, time.UTC)
+	res := BuildHistoryFixtures(&p, 9, "site-a", now)
+
+	for i, roomID := range res.roomIDs {
+		members := res.membersByRoom[i]
+		fullMsgs := buildRoomMessages(&p, roomID, members,
+			res.now, time.Duration(p.MessageSpanDays)*24*time.Hour, res.roomSeeds[i])
+
+		var latestFromFull time.Time
+		var parentsFromFull []ThreadParentRef
+		for j := range fullMsgs {
+			m := &fullMsgs[j]
+			if m.ThreadParentID != "" {
+				continue
+			}
+			if m.CreatedAt.After(latestFromFull) {
+				latestFromFull = m.CreatedAt
+			}
+			if m.ThreadRoomID != "" {
+				parentsFromFull = append(parentsFromFull, ThreadParentRef{
+					MessageID: m.MessageID, ThreadRoomID: m.ThreadRoomID,
+				})
+			}
+		}
+
+		latestFromSummary, parentsFromSummary := summarizeRoomPlan(&p, roomID, len(members),
+			res.now, time.Duration(p.MessageSpanDays)*24*time.Hour, res.roomSeeds[i].structural)
+
+		assert.Equal(t, latestFromFull, latestFromSummary, "room %s latest", roomID)
+		assert.Equal(t, parentsFromFull, parentsFromSummary, "room %s parents", roomID)
 	}
 }

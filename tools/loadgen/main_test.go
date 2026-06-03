@@ -256,3 +256,14 @@ func TestDispatch_MembersCapacity_RequiresTargetSize(t *testing.T) {
 	code := dispatch(context.Background(), cfg)
 	assert.Equal(t, 2, code)
 }
+
+func TestDispatch_DailySubcommand(t *testing.T) {
+	// dispatch should accept "daily" and return non-zero for unknown preset
+	// (so we don't actually run a daily session — just exercise routing).
+	old := os.Args
+	defer func() { os.Args = old }()
+	os.Args = []string{"loadgen", "daily", "--preset=nope"}
+	cfg := &config{NatsURL: "nats://x", MongoURI: "mongodb://x", ValkeyAddrs: []string{"x"}}
+	rc := dispatch(context.Background(), cfg)
+	require.Equal(t, 2, rc)
+}

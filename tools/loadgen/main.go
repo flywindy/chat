@@ -51,12 +51,18 @@ type config struct {
 	CassandraUsername  string `env:"CASSANDRA_USERNAME"     envDefault:""`
 	CassandraPassword  string `env:"CASSANDRA_PASSWORD"     envDefault:""`
 	MessageBucketHours int    `env:"MESSAGE_BUCKET_HOURS"   envDefault:"72"`
+
+	// NATS monitoring endpoint used by the `daily` subcommand to poll
+	// JetStream consumer pending counts. Defaults to the docker-compose
+	// service name. Override (e.g. `http://127.0.0.1:8222/jsz` on the host,
+	// or a custom monitoring port) when running against non-default infra.
+	NatsMonitoringURL string `env:"NATS_MONITORING_URL"    envDefault:"http://nats:8222/jsz"`
 }
 
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: loadgen <seed|run|teardown|members-sustained|members-capacity|history-sustained|max-rps> [flags]")
+		fmt.Fprintln(os.Stderr, "usage: loadgen <seed|run|teardown|members-sustained|members-capacity|history-sustained|max-rps|daily> [flags]")
 		os.Exit(2)
 	}
 	cfg, err := env.ParseAs[config]()
@@ -95,6 +101,8 @@ func dispatch(ctx context.Context, cfg *config) int {
 		return runHistorySustained(ctx, cfg, os.Args[2:])
 	case "max-rps":
 		return runMaxRPS(ctx, cfg, os.Args[2:])
+	case "daily":
+		return runDaily(ctx, cfg, os.Args[2:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown subcommand: %s\n", os.Args[1])
 		return 2
@@ -106,6 +114,12 @@ func runSeed(ctx context.Context, cfg *config, args []string) int {
 	workload := fs.String("workload", "messages", "messages|members|history")
 	preset := fs.String("preset", "", "preset name")
 	seed := fs.Int64("seed", 42, "RNG seed")
+	// --users overrides preset.Users for the messages workload (daily presets
+	// hard-code 10000; pass --users=50000 to seed and run at a larger scale).
+	// Must match between `loadgen seed` and `loadgen daily` invocations, or
+	// the generated room/subscription IDs differ and the gatekeeper rejects
+	// every send. Zero (default) means use the preset's built-in count.
+	users := fs.Int("users", 0, "override preset.Users for the messages workload (0 = use preset default; must match `loadgen daily --users` if you use both)")
 	_ = fs.Parse(args)
 	if *preset == "" {
 		fmt.Fprintln(os.Stderr, "--preset required")
@@ -113,7 +127,7 @@ func runSeed(ctx context.Context, cfg *config, args []string) int {
 	}
 	switch *workload {
 	case "messages":
-		return runSeedMessages(ctx, cfg, *preset, *seed)
+		return runSeedMessages(ctx, cfg, *preset, *seed, *users)
 	case "members":
 		return runSeedMembers(ctx, cfg, *preset, *seed)
 	case "history":
@@ -124,11 +138,14 @@ func runSeed(ctx context.Context, cfg *config, args []string) int {
 	}
 }
 
-func runSeedMessages(ctx context.Context, cfg *config, preset string, seed int64) int {
+func runSeedMessages(ctx context.Context, cfg *config, preset string, seed int64, usersOverride int) int {
 	p, ok := BuiltinPreset(preset)
 	if !ok {
 		fmt.Fprintf(os.Stderr, "unknown preset: %s\n", preset)
 		return 2
+	}
+	if usersOverride > 0 {
+		p.Users = usersOverride
 	}
 	db, keyStore, cleanup, err := connectStores(ctx, cfg)
 	if err != nil {

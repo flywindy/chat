@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/hmchangw/chat/pkg/model"
 	"github.com/hmchangw/chat/pkg/msgbucket"
 )
 
@@ -29,7 +30,13 @@ func TestBuildThreadRooms(t *testing.T) {
 	now := time.Date(2026, 5, 26, 12, 0, 0, 0, time.UTC)
 	res := BuildHistoryFixtures(&p, 1, "site-a", now)
 
-	rooms := buildThreadRoomsFromPlan(&res.Plan, "site-a")
+	// Mirror SeedThreadRooms' streaming aggregation by concatenating each
+	// room's ThreadRoom docs as the iterator yields per-room plans.
+	var rooms []model.ThreadRoom
+	require.NoError(t, res.IterateRoomMessages(func(msgs []plannedMessage) error {
+		rooms = append(rooms, buildRoomThreadRooms(msgs, "site-a")...)
+		return nil
+	}))
 	// One ThreadRoom per parent.
 	parentCount := 0
 	for _, ps := range res.ThreadParents {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"math/rand"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -159,4 +160,101 @@ func TestSampleWithoutReplacement_CapsAtUserCount(t *testing.T) {
 	users := []model.User{{ID: "u-0"}, {ID: "u-1"}}
 	out := sampleWithoutReplacement(r, users, 99)
 	assert.Len(t, out, 2)
+}
+
+func TestBuildFixtures_DailyBands(t *testing.T) {
+	p, _ := BuiltinPreset("daily-heavy")
+	p.Users = 200 // shrink for test speed; bands stay the same
+	f := BuildFixtures(&p, 42, "site-test")
+
+	require.Equal(t, 200, len(f.Users))
+
+	// Per-user subscription count must equal p.DailyBands.RoomsPerUser
+	want := p.DailyBands.RoomsPerUser()
+	perUser := map[string]int{}
+	for _, s := range f.Subscriptions {
+		perUser[s.User.ID]++
+	}
+	for _, u := range f.Users {
+		require.Equal(t, want, perUser[u.ID],
+			"user %s wrong subscription count", u.ID)
+	}
+
+	// Each band must yield at least one room with the band's size range.
+	sizes := map[string]int{}
+	for _, r := range f.Rooms {
+		sizes[r.ID] = r.UserCount
+	}
+	var nDM, nSmall, nMed, nLarge int
+	for _, sz := range sizes {
+		switch {
+		case sz == 2:
+			nDM++
+		case sz >= 5 && sz <= 20:
+			nSmall++
+		case sz >= 50 && sz <= 200:
+			nMed++
+		case sz >= 500 && sz <= 2000:
+			nLarge++
+		}
+	}
+	require.Greater(t, nDM, 0)
+	require.Greater(t, nSmall, 0)
+	require.Greater(t, nMed, 0)
+	require.Greater(t, nLarge, 0)
+
+	// Determinism: same seed yields identical fixtures.
+	f2 := BuildFixtures(&p, 42, "site-test")
+	require.Equal(t, f, f2)
+}
+
+func TestBuiltinPreset_Daily(t *testing.T) {
+	cases := []struct {
+		name  string
+		users int
+		bands DailyBands
+	}{
+		{"daily-light", 10000, DailyBands{DMs: 15, Small: 10, Medium: 5, Large: 2}},
+		{"daily-heavy", 10000, DailyBands{DMs: 25, Small: 20, Medium: 8, Large: 3}},
+		{"daily-power", 10000, DailyBands{DMs: 40, Small: 30, Medium: 10, Large: 3}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p, ok := BuiltinPreset(tc.name)
+			require.True(t, ok, "preset %s missing", tc.name)
+			require.Equal(t, tc.users, p.Users)
+			require.Equal(t, tc.bands, p.DailyBands)
+		})
+	}
+}
+
+// TestBuildFixtures_DailyHeavy_FastAtScale locks in the band-picker fixes.
+// Prior to them, both the DM-band picker (O(N²) without stub-pairing) and
+// the small/medium-band weighted-scan picker (O(N×perUser×R)) made fixture
+// build unusable at production scale — N=10000 would take ~10+ min, N=100k
+// hours. With stub-pairing for DM and the shuffled slot-bag picker for the
+// other bands, N=10000 completes in roughly a second. 30s is generous
+// ceiling for an occasionally-slow CI runner.
+func TestBuildFixtures_DailyHeavy_FastAtScale(t *testing.T) {
+	if testing.Short() {
+		t.Skip("scale test")
+	}
+	p, _ := BuiltinPreset("daily-heavy")
+	p.Users = 10000
+	start := time.Now()
+	f := BuildFixtures(&p, 42, "site-test")
+	elapsed := time.Since(start)
+	t.Logf("BuildFixtures(N=10000) elapsed=%s rooms=%d subs=%d",
+		elapsed, len(f.Rooms), len(f.Subscriptions))
+	require.Less(t, elapsed, 30*time.Second, "fixture build regressed; was %s", elapsed)
+
+	// Every user should have exactly RoomsPerUser subscriptions.
+	want := p.DailyBands.RoomsPerUser()
+	perUser := map[string]int{}
+	for _, s := range f.Subscriptions {
+		perUser[s.User.ID]++
+	}
+	for _, u := range f.Users {
+		require.Equal(t, want, perUser[u.ID], "user %s wrong subscription count", u.ID)
+	}
 }

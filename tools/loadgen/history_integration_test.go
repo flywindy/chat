@@ -49,17 +49,20 @@ func TestHistoryWorkload_EndToEnd(t *testing.T) {
 	res := BuildHistoryFixtures(&preset, 42, siteID, now)
 
 	require.NoError(t, Seed(ctx, db, &res.Fixtures))
-	require.NoError(t, SeedThreadRooms(ctx, db, &res.Plan, siteID))
+	require.NoError(t, SeedThreadRooms(ctx, db, &res, siteID))
 	sizer := msgbucket.New(72 * time.Hour)
-	require.NoError(t, SeedHistoryCassandra(ctx, session, sizer, &res.Plan, siteID))
+	totalRows, err := SeedHistoryCassandra(ctx, session, sizer, &res, siteID)
+	require.NoError(t, err)
 
-	// Cross-check row counts.
+	// Cross-check row counts. history-small fits in memory so FullPlan is OK.
+	plan := res.FullPlan()
 	expectedTopLevel := 0
-	for i := range res.Plan.Messages {
-		if res.Plan.Messages[i].ThreadParentID == "" {
+	for i := range plan.Messages {
+		if plan.Messages[i].ThreadParentID == "" {
 			expectedTopLevel++
 		}
 	}
+	require.Equal(t, len(plan.Messages), totalRows, "seed reported row count")
 	var byRoomCount int
 	require.NoError(t, session.Query(
 		fmt.Sprintf("SELECT count(*) FROM %s.messages_by_room", keyspace),
@@ -71,7 +74,7 @@ func TestHistoryWorkload_EndToEnd(t *testing.T) {
 		fmt.Sprintf("SELECT count(*) FROM %s.messages_by_id", keyspace),
 	).Scan(&byIDCount))
 	// messages_by_id receives every row (top-level + replies).
-	assert.Equal(t, len(res.Plan.Messages), byIDCount, "messages_by_id row count")
+	assert.Equal(t, len(plan.Messages), byIDCount, "messages_by_id row count")
 
 	// --- NATS: stub history-service that responds with empty pages.
 	nc, err := nats.Connect(testutil.NATS(t))

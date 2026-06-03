@@ -63,3 +63,4 @@ chat-frontend/junit.xml
 # air live-reload tmp artifacts.
 tmp/
 .air.*.toml
+/loadgen

@@ -11,7 +11,7 @@ STEPS            ?=
 # `ENCRYPTION_ENABLED=false make up` for a plaintext comparison run.
 export ENCRYPTION_ENABLED ?= true
 
-.PHONY: up stack-up overlay-up seed teardown run run-dashboards run-max-rps down logs seed-members teardown-members reset-members run-sustained run-capacity
+.PHONY: up stack-up overlay-up seed teardown run run-dashboards run-max-rps run-daily down logs seed-members teardown-members reset-members run-sustained run-capacity
 
 up: stack-up overlay-up
 
@@ -81,6 +81,15 @@ run-max-rps: ## Ramp RPS to find the max under SLO (WORKLOAD=messages|history PR
 	    --workload=$(WORKLOAD) \
 	    --preset=$(PRESET) \
 	    $(if $(STEPS),--steps=$(STEPS),)
+
+comma := ,
+run-daily:
+	@test -n "$(PRESET)" || (echo "PRESET=<daily-light|daily-heavy|daily-power> required" && exit 1)
+	$(COMPOSE) exec -T loadgen /loadgen daily \
+	    --preset=$(PRESET) \
+	    --steps=$(or $(STEPS),1000$(comma)2000$(comma)5000$(comma)10000$(comma)20000) \
+	    --hold=$(or $(HOLD),180s) \
+	    --csv=/results/daily-$(PRESET)-$$(date +%Y%m%d-%H%M%S).csv
 
 down:
 	$(COMPOSE) --profile dashboards down -v

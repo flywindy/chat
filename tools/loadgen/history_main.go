@@ -53,12 +53,13 @@ func runSeedHistory(ctx context.Context, cfg *config, preset string, seed int64)
 		slog.Error("seed room keys", "error", err)
 		return 1
 	}
-	if err := SeedThreadRooms(ctx, db, &res.Plan, cfg.SiteID); err != nil {
+	if err := SeedThreadRooms(ctx, db, &res, cfg.SiteID); err != nil {
 		slog.Error("seed thread rooms", "error", err)
 		return 1
 	}
 	sizer := msgbucket.New(time.Duration(cfg.MessageBucketHours) * time.Hour)
-	if err := SeedHistoryCassandra(ctx, session, sizer, &res.Plan, cfg.SiteID); err != nil {
+	msgCount, err := SeedHistoryCassandra(ctx, session, sizer, &res, cfg.SiteID)
+	if err != nil {
 		slog.Error("seed cassandra messages", "error", err)
 		return 1
 	}
@@ -68,7 +69,7 @@ func runSeedHistory(ctx context.Context, cfg *config, preset string, seed int64)
 		"users", len(res.Fixtures.Users),
 		"rooms", len(res.Fixtures.Rooms),
 		"subs", len(res.Fixtures.Subscriptions),
-		"messages", len(res.Plan.Messages),
+		"messages", msgCount,
 		"threadParents", countThreadParents(res.ThreadParents),
 		"bucketHours", cfg.MessageBucketHours)
 	return 0
