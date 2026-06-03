@@ -226,28 +226,22 @@ reactions MAP<FROZEN<reaction_key>, FROZEN<reactor_info>>,
 
 And gains a `WITH compaction = {'class': '<TWCS|LCS>'}` clause per §2.4 (TWCS for the bucketed tables, LCS for `messages_by_id` and `pinned_messages_by_room`).
 
-Add `90-migrate-reactions-to-v3.cql` for dev keyspaces still on v1 — **fully idempotent** via `IF NOT EXISTS` / `IF EXISTS`:
+**Do NOT add an in-place `DROP reactions` + `ADD reactions` migration to `init/`.** A prior
+revision shipped `90-migrate-reactions-to-v3.cql` as "fully idempotent"; it was neither, and
+it aborted every `make deps-up` (init runs under `set -e`). The DROP+ADD pattern fails because
+dropping a column records its type in `system_schema.dropped_columns` with UDTs expanded to
+frozen tuples, so re-`ADD`ing the same name with the named-UDT type is rejected as
+incompatible — regardless of whether the prior column was v1 or v3.
 
-```cql
-CREATE TYPE IF NOT EXISTS chat.reaction_key (emoji TEXT, user_account TEXT);
-CREATE TYPE IF NOT EXISTS chat.reactor_info (
-  user_id TEXT, eng_name TEXT, chn_name TEXT, account TEXT, reacted_at TIMESTAMP
-);
+Apply the v3 shape per environment instead:
 
-ALTER TABLE chat.messages_by_room        DROP IF EXISTS reactions;
-ALTER TABLE chat.messages_by_room        ADD IF NOT EXISTS reactions MAP<FROZEN<reaction_key>, FROZEN<reactor_info>>;
-
-ALTER TABLE chat.messages_by_id          DROP IF EXISTS reactions;
-ALTER TABLE chat.messages_by_id          ADD IF NOT EXISTS reactions MAP<FROZEN<reaction_key>, FROZEN<reactor_info>>;
-
-ALTER TABLE chat.thread_messages_by_thread DROP IF EXISTS reactions;
-ALTER TABLE chat.thread_messages_by_thread ADD IF NOT EXISTS reactions MAP<FROZEN<reaction_key>, FROZEN<reactor_info>>;
-
-ALTER TABLE chat.pinned_messages_by_room DROP IF EXISTS reactions;
-ALTER TABLE chat.pinned_messages_by_room ADD IF NOT EXISTS reactions MAP<FROZEN<reaction_key>, FROZEN<reactor_info>>;
-```
-
-`CREATE TYPE IF NOT EXISTS`, `DROP IF EXISTS column`, and `ADD IF NOT EXISTS column` are all idempotent in Cassandra 5 (the version pinned in `docker-local/compose.deps.yaml`). The script can re-run safely on every `make deps-up`. Compaction strategy on existing dev tables is NOT changed by the migration (you'd need to drop + recreate the table for that — devs who want it can wipe their keyspace).
+- **Fresh keyspace (dev/CI/new cluster):** none needed — the inline column in `10`–`13` is the
+  source of truth.
+- **Persistent dev keyspace on v1:** `docker compose -f docker-local/compose.deps.yaml down -v`
+  then `make deps-up`. The shape change can't be done in place, and dev data is disposable.
+- **Production:** not a DDL migration — needs an app-level read-translate-write backfill into a
+  new column, owned by an ops runbook. Hand-applied DDL lives in
+  `docker-local/cassandra/migrations/` (never globbed by `cassandra-init`).
 
 ## 5. Schema Docs — `docs/cassandra_message_model.md`
 
@@ -417,7 +411,7 @@ After Commit A: lint, build, and tests pass. Reactions are gone from the code en
 1. Add the gocql `map[UDT]UDT` smoke test (§8.0). **Verify it passes** before continuing.
 2. Add the two UDTs (`07-udt-reaction_key.cql`, `08-udt-reactor_info.cql`).
 3. Update the four message-table `CREATE TABLE` files: `reactions` column to v3 shape + explicit compaction strategy per §2.4.
-4. Add the migration script (`90-migrate-reactions-to-v3.cql`).
+4. (No in-place migration script — see §4. Fresh keyspaces get v3 from the inline column; persistent dev keyspaces reset via `down -v`.)
 5. Add the Go types (`ReactionKey`, `ReactorInfo`, named `Reactions` type with `MarshalJSON` / `UnmarshalJSON`).
 6. Change `Message.Reactions` field type to `Reactions`.
 7. Add round-trip tests per §3.4.
