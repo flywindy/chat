@@ -15,6 +15,7 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.uber.org/mock/gomock"
 
 	"github.com/hmchangw/chat/pkg/errcode"
@@ -53,7 +54,7 @@ func TestHandler_UpdateRole_Success(t *testing.T) {
 
 	var publishedData []byte
 	h := &Handler{store: store, siteID: "site-a", maxRoomSize: 1000,
-		publishToStream: func(_ context.Context, _ string, data []byte) error { publishedData = data; return nil },
+		publishToStream: func(_ context.Context, _ string, data []byte, _ string) error { publishedData = data; return nil },
 	}
 
 	req := model.UpdateRoleRequest{Account: "bob", NewRole: model.RoleOwner}
@@ -87,7 +88,7 @@ func TestHandler_UpdateRole_NonOwnerRejected(t *testing.T) {
 		Return(&model.Subscription{User: model.SubscriptionUser{ID: "u2", Account: "bob"}, RoomID: "r1", Roles: []model.Role{model.RoleMember}}, nil)
 
 	h := &Handler{store: store, siteID: "site-a", maxRoomSize: 1000,
-		publishToStream: func(_ context.Context, _ string, data []byte) error { return nil },
+		publishToStream: func(_ context.Context, _ string, data []byte, _ string) error { return nil },
 	}
 
 	req := model.UpdateRoleRequest{Account: "charlie", NewRole: model.RoleOwner}
@@ -107,7 +108,7 @@ func TestHandler_UpdateRole_DMRejected(t *testing.T) {
 		Return(&model.Room{ID: "r1", Name: "dm-room", Type: model.RoomTypeDM}, nil)
 
 	h := &Handler{store: store, siteID: "site-a", maxRoomSize: 1000,
-		publishToStream: func(_ context.Context, _ string, data []byte) error { return nil },
+		publishToStream: func(_ context.Context, _ string, data []byte, _ string) error { return nil },
 	}
 
 	req := model.UpdateRoleRequest{Account: "bob", NewRole: model.RoleOwner}
@@ -123,7 +124,7 @@ func TestHandler_UpdateRole_InvalidRole(t *testing.T) {
 	store := NewMockRoomStore(ctrl)
 
 	h := &Handler{store: store, siteID: "site-a", maxRoomSize: 1000,
-		publishToStream: func(_ context.Context, _ string, data []byte) error { return nil },
+		publishToStream: func(_ context.Context, _ string, data []byte, _ string) error { return nil },
 	}
 
 	req := model.UpdateRoleRequest{Account: "bob", NewRole: "admin"}
@@ -152,7 +153,7 @@ func TestHandler_UpdateRole_AlreadyHasRole(t *testing.T) {
 		}, nil)
 
 	h := &Handler{store: store, siteID: "site-a", maxRoomSize: 1000,
-		publishToStream: func(_ context.Context, _ string, data []byte) error { return nil },
+		publishToStream: func(_ context.Context, _ string, data []byte, _ string) error { return nil },
 	}
 
 	req := model.UpdateRoleRequest{Account: "bob", NewRole: model.RoleOwner}
@@ -190,7 +191,7 @@ func TestHandler_UpdateRole_PromoteOrgOnlyRejected(t *testing.T) {
 		}, nil)
 
 	h := &Handler{store: store, siteID: "site-a", maxRoomSize: 1000,
-		publishToStream: func(_ context.Context, _ string, _ []byte) error {
+		publishToStream: func(_ context.Context, _ string, _ []byte, _ string) error {
 			t.Fatal("must not publish when promotion rejected")
 			return nil
 		},
@@ -233,7 +234,7 @@ func TestHandler_UpdateRole_PromoteSubscriptionOnly_NoRoomMembers_Allowed(t *tes
 
 	var published []byte
 	h := &Handler{store: store, siteID: "site-a", maxRoomSize: 1000,
-		publishToStream: func(_ context.Context, _ string, data []byte) error {
+		publishToStream: func(_ context.Context, _ string, data []byte, _ string) error {
 			published = data
 			return nil
 		},
@@ -266,7 +267,7 @@ func TestHandler_UpdateRole_DemoteNonOwner(t *testing.T) {
 		}, nil)
 
 	h := &Handler{store: store, siteID: "site-a", maxRoomSize: 1000,
-		publishToStream: func(_ context.Context, _ string, data []byte) error { return nil },
+		publishToStream: func(_ context.Context, _ string, data []byte, _ string) error { return nil },
 	}
 
 	req := model.UpdateRoleRequest{Account: "bob", NewRole: model.RoleMember}
@@ -298,7 +299,7 @@ func TestHandler_UpdateRole_LastOwnerCannotDemote(t *testing.T) {
 		Return(1, nil)
 
 	h := &Handler{store: store, siteID: "site-a", maxRoomSize: 1000,
-		publishToStream: func(_ context.Context, _ string, data []byte) error { return nil },
+		publishToStream: func(_ context.Context, _ string, data []byte, _ string) error { return nil },
 	}
 
 	req := model.UpdateRoleRequest{Account: "alice", NewRole: model.RoleMember}
@@ -315,7 +316,7 @@ func TestHandler_UpdateRole_MalformedInput(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	store := NewMockRoomStore(ctrl)
 	h := &Handler{store: store, siteID: "site-a", maxRoomSize: 1000,
-		publishToStream: func(_ context.Context, _ string, _ []byte) error { return nil },
+		publishToStream: func(_ context.Context, _ string, _ []byte, _ string) error { return nil },
 	}
 	subj := subject.MemberRoleUpdate("alice", "r1", "site-a")
 	_, err := h.handleUpdateRole(context.Background(), subj, []byte("not json"))
@@ -329,7 +330,7 @@ func TestHandler_UpdateRole_GetRoomError(t *testing.T) {
 	store := NewMockRoomStore(ctrl)
 	store.EXPECT().GetRoom(gomock.Any(), "r1").Return(nil, fmt.Errorf("db error"))
 	h := &Handler{store: store, siteID: "site-a", maxRoomSize: 1000,
-		publishToStream: func(_ context.Context, _ string, _ []byte) error { return nil },
+		publishToStream: func(_ context.Context, _ string, _ []byte, _ string) error { return nil },
 	}
 	req := model.UpdateRoleRequest{Account: "bob", NewRole: model.RoleOwner}
 	data, _ := json.Marshal(req)
@@ -344,7 +345,7 @@ func TestHandler_UpdateRole_RoomIDMismatch(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	store := NewMockRoomStore(ctrl)
 	h := &Handler{store: store, siteID: "site-a", maxRoomSize: 1000,
-		publishToStream: func(_ context.Context, _ string, _ []byte) error { return nil },
+		publishToStream: func(_ context.Context, _ string, _ []byte, _ string) error { return nil },
 	}
 	// Payload RoomID "r-other" does not match subject RoomID "r1"
 	req := model.UpdateRoleRequest{RoomID: "r-other", Account: "bob", NewRole: model.RoleOwner}
@@ -365,7 +366,7 @@ func TestHandler_UpdateRole_RequesterSubError(t *testing.T) {
 	store.EXPECT().GetRoom(gomock.Any(), "r1").Return(&model.Room{ID: "r1", Type: model.RoomTypeChannel}, nil)
 	store.EXPECT().GetSubscription(gomock.Any(), "alice", "r1").Return(nil, fmt.Errorf("db error"))
 	h := &Handler{store: store, siteID: "site-a", maxRoomSize: 1000,
-		publishToStream: func(_ context.Context, _ string, _ []byte) error { return nil },
+		publishToStream: func(_ context.Context, _ string, _ []byte, _ string) error { return nil },
 	}
 	req := model.UpdateRoleRequest{Account: "bob", NewRole: model.RoleOwner}
 	data, _ := json.Marshal(req)
@@ -386,7 +387,7 @@ func TestHandler_UpdateRole_TargetSubError(t *testing.T) {
 	}, nil)
 	store.EXPECT().GetSubscriptionWithMembership(gomock.Any(), "r1", "bob").Return(nil, fmt.Errorf("db error"))
 	h := &Handler{store: store, siteID: "site-a", maxRoomSize: 1000,
-		publishToStream: func(_ context.Context, _ string, _ []byte) error { return nil },
+		publishToStream: func(_ context.Context, _ string, _ []byte, _ string) error { return nil },
 	}
 	req := model.UpdateRoleRequest{Account: "bob", NewRole: model.RoleOwner}
 	data, _ := json.Marshal(req)
@@ -412,7 +413,7 @@ func TestHandler_UpdateRole_CountOwnersError(t *testing.T) {
 	}, nil) // target lookup (same user, self-demote)
 	store.EXPECT().CountOwners(gomock.Any(), "r1").Return(0, fmt.Errorf("db error"))
 	h := &Handler{store: store, siteID: "site-a", maxRoomSize: 1000,
-		publishToStream: func(_ context.Context, _ string, _ []byte) error { return nil },
+		publishToStream: func(_ context.Context, _ string, _ []byte, _ string) error { return nil },
 	}
 	req := model.UpdateRoleRequest{Account: "alice", NewRole: model.RoleMember}
 	data, _ := json.Marshal(req)
@@ -436,7 +437,7 @@ func TestHandler_UpdateRole_PublishError(t *testing.T) {
 		HasIndividualMembership: true,
 	}, nil)
 	h := &Handler{store: store, siteID: "site-a", maxRoomSize: 1000,
-		publishToStream: func(_ context.Context, _ string, _ []byte) error { return fmt.Errorf("nats down") },
+		publishToStream: func(_ context.Context, _ string, _ []byte, _ string) error { return fmt.Errorf("nats down") },
 	}
 	req := model.UpdateRoleRequest{Account: "bob", NewRole: model.RoleOwner}
 	data, _ := json.Marshal(req)
@@ -465,7 +466,7 @@ func TestHandler_RemoveMember_SelfLeave_Success(t *testing.T) {
 
 	var publishedSubj string
 	var publishedData []byte
-	handler := NewHandler(store, nil, nil, nil, "site-a", 1000, 500, 5*time.Second, func(ctx context.Context, subj string, data []byte) error {
+	handler := NewHandler(store, nil, nil, nil, "site-a", 1000, 500, 5*time.Second, 5, func(ctx context.Context, subj string, data []byte, _ string) error {
 		publishedSubj = subj
 		publishedData = data
 		return nil
@@ -510,7 +511,7 @@ func TestHandler_RemoveMember_OrgOnly_Rejected(t *testing.T) {
 			store.EXPECT().GetRoom(gomock.Any(), "r1").Return(&model.Room{ID: "r1", Type: model.RoomTypeChannel}, nil)
 			store.EXPECT().GetSubscriptionWithMembership(gomock.Any(), "r1", "alice").
 				Return(&SubscriptionWithMembership{Subscription: sub, HasOrgMembership: true}, nil)
-			handler := NewHandler(store, nil, nil, nil, "site-a", 1000, 500, 5*time.Second, nil, nil)
+			handler := NewHandler(store, nil, nil, nil, "site-a", 1000, 500, 5*time.Second, 5, nil, nil)
 			reqSubj := subject.MemberRemove(tc.requester, "r1", "site-a")
 			reqBody, _ := json.Marshal(model.RemoveMemberRequest{RoomID: "r1", Account: tc.target})
 			_, err := handler.handleRemoveMember(context.Background(), reqSubj, reqBody)
@@ -534,7 +535,7 @@ func TestHandler_RemoveMember_SelfLeave_NoOrgs_Allowed(t *testing.T) {
 		Return(&RoomCounts{MemberCount: 2, OwnerCount: 1}, nil)
 
 	var publishedData []byte
-	handler := NewHandler(store, nil, nil, nil, "site-a", 1000, 500, 5*time.Second, func(ctx context.Context, _ string, data []byte) error {
+	handler := NewHandler(store, nil, nil, nil, "site-a", 1000, 500, 5*time.Second, 5, func(ctx context.Context, _ string, data []byte, _ string) error {
 		publishedData = data
 		return nil
 	}, nil)
@@ -573,7 +574,7 @@ func TestHandler_RemoveMember_LastOwner_Rejected(t *testing.T) {
 			}
 			store.EXPECT().CountMembersAndOwners(gomock.Any(), "r1").
 				Return(&RoomCounts{MemberCount: 3, OwnerCount: 1}, nil)
-			handler := NewHandler(store, nil, nil, nil, "site-a", 1000, 500, 5*time.Second, nil, nil)
+			handler := NewHandler(store, nil, nil, nil, "site-a", 1000, 500, 5*time.Second, 5, nil, nil)
 			reqSubj := subject.MemberRemove(tc.requester, "r1", "site-a")
 			reqBody, _ := json.Marshal(model.RemoveMemberRequest{RoomID: "r1", Account: "alice"})
 			_, err := handler.handleRemoveMember(context.Background(), reqSubj, reqBody)
@@ -595,7 +596,7 @@ func TestHandler_RemoveMember_LastMember_Rejected(t *testing.T) {
 		Return(&SubscriptionWithMembership{Subscription: sub, HasIndividualMembership: true}, nil)
 	store.EXPECT().CountMembersAndOwners(gomock.Any(), "r1").
 		Return(&RoomCounts{MemberCount: 1, OwnerCount: 0}, nil)
-	handler := NewHandler(store, nil, nil, nil, "site-a", 1000, 500, 5*time.Second, nil, nil)
+	handler := NewHandler(store, nil, nil, nil, "site-a", 1000, 500, 5*time.Second, 5, nil, nil)
 	reqSubj := subject.MemberRemove("alice", "r1", "site-a")
 	reqBody, _ := json.Marshal(model.RemoveMemberRequest{RoomID: "r1", Account: "alice"})
 	_, err := handler.handleRemoveMember(context.Background(), reqSubj, reqBody)
@@ -621,7 +622,7 @@ func TestHandler_RemoveMember_OwnerRemovesOther_Success(t *testing.T) {
 	store.EXPECT().CountMembersAndOwners(gomock.Any(), "r1").
 		Return(&RoomCounts{MemberCount: 3, OwnerCount: 1}, nil)
 	var publishedData []byte
-	handler := NewHandler(store, nil, nil, nil, "site-a", 1000, 500, 5*time.Second, func(ctx context.Context, subj string, data []byte) error {
+	handler := NewHandler(store, nil, nil, nil, "site-a", 1000, 500, 5*time.Second, 5, func(ctx context.Context, subj string, data []byte, _ string) error {
 		publishedData = data
 		return nil
 	}, nil)
@@ -648,7 +649,7 @@ func TestHandler_RemoveMember_NonOwnerRemovesOther_Rejected(t *testing.T) {
 	store.EXPECT().GetSubscriptionWithMembership(gomock.Any(), "r1", "bob").
 		Return(&SubscriptionWithMembership{Subscription: targetSub, HasIndividualMembership: true}, nil)
 	store.EXPECT().GetSubscription(gomock.Any(), "alice", "r1").Return(requesterSub, nil)
-	handler := NewHandler(store, nil, nil, nil, "site-a", 1000, 500, 5*time.Second, nil, nil)
+	handler := NewHandler(store, nil, nil, nil, "site-a", 1000, 500, 5*time.Second, 5, nil, nil)
 	reqSubj := subject.MemberRemove("alice", "r1", "site-a")
 	reqBody, _ := json.Marshal(model.RemoveMemberRequest{RoomID: "r1", Account: "bob"})
 	_, err := handler.handleRemoveMember(context.Background(), reqSubj, reqBody)
@@ -666,7 +667,7 @@ func TestHandler_RemoveMember_OwnerRemovesOrg_Success(t *testing.T) {
 	store.EXPECT().GetRoom(gomock.Any(), "r1").Return(&model.Room{ID: "r1", Type: model.RoomTypeChannel}, nil)
 	store.EXPECT().GetSubscription(gomock.Any(), "alice", "r1").Return(ownerSub, nil)
 	var publishedData []byte
-	handler := NewHandler(store, nil, nil, nil, "site-a", 1000, 500, 5*time.Second, func(ctx context.Context, subj string, data []byte) error {
+	handler := NewHandler(store, nil, nil, nil, "site-a", 1000, 500, 5*time.Second, 5, func(ctx context.Context, subj string, data []byte, _ string) error {
 		publishedData = data
 		return nil
 	}, nil)
@@ -684,7 +685,7 @@ func TestHandler_RemoveMember_BothAccountAndOrgID_Rejected(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	store := NewMockRoomStore(ctrl)
 	store.EXPECT().GetRoom(gomock.Any(), "r1").Return(&model.Room{ID: "r1", Type: model.RoomTypeChannel}, nil)
-	handler := NewHandler(store, nil, nil, nil, "site-a", 1000, 500, 5*time.Second, nil, nil)
+	handler := NewHandler(store, nil, nil, nil, "site-a", 1000, 500, 5*time.Second, 5, nil, nil)
 	reqSubj := subject.MemberRemove("alice", "r1", "site-a")
 	reqBody, _ := json.Marshal(model.RemoveMemberRequest{RoomID: "r1", Account: "bob", OrgID: "eng-org"})
 	_, err := handler.handleRemoveMember(context.Background(), reqSubj, reqBody)
@@ -696,7 +697,7 @@ func TestHandler_RemoveMember_NeitherAccountNorOrgID_Rejected(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	store := NewMockRoomStore(ctrl)
 	store.EXPECT().GetRoom(gomock.Any(), "r1").Return(&model.Room{ID: "r1", Type: model.RoomTypeChannel}, nil)
-	handler := NewHandler(store, nil, nil, nil, "site-a", 1000, 500, 5*time.Second, nil, nil)
+	handler := NewHandler(store, nil, nil, nil, "site-a", 1000, 500, 5*time.Second, 5, nil, nil)
 	reqSubj := subject.MemberRemove("alice", "r1", "site-a")
 	reqBody, _ := json.Marshal(model.RemoveMemberRequest{RoomID: "r1"})
 	_, err := handler.handleRemoveMember(context.Background(), reqSubj, reqBody)
@@ -707,7 +708,7 @@ func TestHandler_RemoveMember_NeitherAccountNorOrgID_Rejected(t *testing.T) {
 func TestHandler_RemoveMember_InvalidSubject(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	store := NewMockRoomStore(ctrl)
-	handler := NewHandler(store, nil, nil, nil, "site-a", 1000, 500, 5*time.Second, nil, nil)
+	handler := NewHandler(store, nil, nil, nil, "site-a", 1000, 500, 5*time.Second, 5, nil, nil)
 	_, err := handler.handleRemoveMember(context.Background(), "bogus", []byte("{}"))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid remove-member subject")
@@ -716,7 +717,7 @@ func TestHandler_RemoveMember_InvalidSubject(t *testing.T) {
 func TestHandler_RemoveMember_InvalidJSON(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	store := NewMockRoomStore(ctrl)
-	handler := NewHandler(store, nil, nil, nil, "site-a", 1000, 500, 5*time.Second, nil, nil)
+	handler := NewHandler(store, nil, nil, nil, "site-a", 1000, 500, 5*time.Second, 5, nil, nil)
 	reqSubj := subject.MemberRemove("alice", "r1", "site-a")
 	_, err := handler.handleRemoveMember(context.Background(), reqSubj, []byte("{not json"))
 	require.Error(t, err)
@@ -726,7 +727,7 @@ func TestHandler_RemoveMember_InvalidJSON(t *testing.T) {
 func TestHandler_RemoveMember_RoomIDMismatch(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	store := NewMockRoomStore(ctrl)
-	handler := NewHandler(store, nil, nil, nil, "site-a", 1000, 500, 5*time.Second, nil, nil)
+	handler := NewHandler(store, nil, nil, nil, "site-a", 1000, 500, 5*time.Second, 5, nil, nil)
 	reqSubj := subject.MemberRemove("alice", "r1", "site-a")
 	body, _ := json.Marshal(model.RemoveMemberRequest{RoomID: "r2", Account: "alice"})
 	_, err := handler.handleRemoveMember(context.Background(), reqSubj, body)
@@ -740,7 +741,7 @@ func TestHandler_RemoveMember_GetTargetError(t *testing.T) {
 	store.EXPECT().GetRoom(gomock.Any(), "r1").Return(&model.Room{ID: "r1", Type: model.RoomTypeChannel}, nil)
 	store.EXPECT().GetSubscriptionWithMembership(gomock.Any(), "r1", "alice").
 		Return(nil, fmt.Errorf("db down"))
-	handler := NewHandler(store, nil, nil, nil, "site-a", 1000, 500, 5*time.Second, nil, nil)
+	handler := NewHandler(store, nil, nil, nil, "site-a", 1000, 500, 5*time.Second, 5, nil, nil)
 	reqSubj := subject.MemberRemove("alice", "r1", "site-a")
 	body, _ := json.Marshal(model.RemoveMemberRequest{RoomID: "r1", Account: "alice"})
 	_, err := handler.handleRemoveMember(context.Background(), reqSubj, body)
@@ -759,7 +760,7 @@ func TestHandler_RemoveMember_OwnerRemoves_RequesterLookupError(t *testing.T) {
 		Return(&SubscriptionWithMembership{Subscription: targetSub, HasIndividualMembership: true}, nil)
 	store.EXPECT().GetSubscription(gomock.Any(), "alice", "r1").
 		Return(nil, fmt.Errorf("db down"))
-	handler := NewHandler(store, nil, nil, nil, "site-a", 1000, 500, 5*time.Second, nil, nil)
+	handler := NewHandler(store, nil, nil, nil, "site-a", 1000, 500, 5*time.Second, 5, nil, nil)
 	reqSubj := subject.MemberRemove("alice", "r1", "site-a")
 	body, _ := json.Marshal(model.RemoveMemberRequest{RoomID: "r1", Account: "bob"})
 	_, err := handler.handleRemoveMember(context.Background(), reqSubj, body)
@@ -778,7 +779,7 @@ func TestHandler_RemoveMember_CountsError(t *testing.T) {
 		Return(&SubscriptionWithMembership{Subscription: sub, HasIndividualMembership: true}, nil)
 	store.EXPECT().CountMembersAndOwners(gomock.Any(), "r1").
 		Return(nil, fmt.Errorf("db down"))
-	handler := NewHandler(store, nil, nil, nil, "site-a", 1000, 500, 5*time.Second, nil, nil)
+	handler := NewHandler(store, nil, nil, nil, "site-a", 1000, 500, 5*time.Second, 5, nil, nil)
 	reqSubj := subject.MemberRemove("alice", "r1", "site-a")
 	body, _ := json.Marshal(model.RemoveMemberRequest{RoomID: "r1", Account: "alice"})
 	_, err := handler.handleRemoveMember(context.Background(), reqSubj, body)
@@ -792,7 +793,7 @@ func TestHandler_RemoveMember_OrgPath_RequesterLookupError(t *testing.T) {
 	store.EXPECT().GetRoom(gomock.Any(), "r1").Return(&model.Room{ID: "r1", Type: model.RoomTypeChannel}, nil)
 	store.EXPECT().GetSubscription(gomock.Any(), "alice", "r1").
 		Return(nil, fmt.Errorf("db down"))
-	handler := NewHandler(store, nil, nil, nil, "site-a", 1000, 500, 5*time.Second, nil, nil)
+	handler := NewHandler(store, nil, nil, nil, "site-a", 1000, 500, 5*time.Second, 5, nil, nil)
 	reqSubj := subject.MemberRemove("alice", "r1", "site-a")
 	body, _ := json.Marshal(model.RemoveMemberRequest{RoomID: "r1", OrgID: "eng-org"})
 	_, err := handler.handleRemoveMember(context.Background(), reqSubj, body)
@@ -811,7 +812,7 @@ func TestHandler_RemoveMember_PublishError(t *testing.T) {
 		Return(&SubscriptionWithMembership{Subscription: sub, HasIndividualMembership: true}, nil)
 	store.EXPECT().CountMembersAndOwners(gomock.Any(), "r1").
 		Return(&RoomCounts{MemberCount: 3, OwnerCount: 2}, nil)
-	handler := NewHandler(store, nil, nil, nil, "site-a", 1000, 500, 5*time.Second, func(_ context.Context, _ string, _ []byte) error {
+	handler := NewHandler(store, nil, nil, nil, "site-a", 1000, 500, 5*time.Second, 5, func(_ context.Context, _ string, _ []byte, _ string) error {
 		return fmt.Errorf("nats down")
 	}, nil)
 	reqSubj := subject.MemberRemove("alice", "r1", "site-a")
@@ -828,7 +829,7 @@ func TestHandler_RemoveMember_RejectsNonChannelRoom(t *testing.T) {
 		ID: "r1", Type: model.RoomTypeDM,
 	}, nil)
 	h := &Handler{store: store, siteID: "site-a", maxRoomSize: 1000,
-		publishToStream: func(_ context.Context, _ string, _ []byte) error {
+		publishToStream: func(_ context.Context, _ string, _ []byte, _ string) error {
 			t.Fatal("publishToStream must not be called")
 			return nil
 		},
@@ -856,7 +857,7 @@ func TestHandler_AddMembers_DMRejected(t *testing.T) {
 		Return(&model.Room{ID: "r1", Name: "dm-room", Type: model.RoomTypeDM}, nil)
 
 	h := &Handler{store: store, siteID: "site-a", maxRoomSize: 10,
-		publishToStream: func(_ context.Context, _ string, _ []byte) error { return nil },
+		publishToStream: func(_ context.Context, _ string, _ []byte, _ string) error { return nil },
 	}
 
 	req := model.AddMembersRequest{RoomID: "r1", Users: []string{"bob"}}
@@ -880,7 +881,7 @@ func TestHandler_AddMembers_RestrictedNonOwnerRejected(t *testing.T) {
 		Return(&model.Room{ID: "r1", Name: "restricted-room", Type: model.RoomTypeChannel, Restricted: true}, nil)
 
 	h := &Handler{store: store, siteID: "site-a", maxRoomSize: 10,
-		publishToStream: func(_ context.Context, _ string, _ []byte) error { return nil },
+		publishToStream: func(_ context.Context, _ string, _ []byte, _ string) error { return nil },
 	}
 
 	req := model.AddMembersRequest{RoomID: "r1", Users: []string{"charlie"}}
@@ -908,7 +909,7 @@ func TestHandler_AddMembers_CapacityExceeded(t *testing.T) {
 		Return(5, nil)
 
 	h := &Handler{store: store, siteID: "site-a", maxRoomSize: 10,
-		publishToStream: func(_ context.Context, _ string, _ []byte) error { return nil },
+		publishToStream: func(_ context.Context, _ string, _ []byte, _ string) error { return nil },
 	}
 
 	req := model.AddMembersRequest{RoomID: "r1", Users: []string{"u1", "u2", "u3", "u4", "u5"}}
@@ -924,8 +925,8 @@ func TestHandler_AddMembers_RestrictedOwnerAllowed(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	store := NewMockRoomStore(ctrl)
 
-	publish := func(_ context.Context, _ string, _ []byte) error { return nil }
-	h := NewHandler(store, nil, nil, nil, "site-a", 100, 500, 5*time.Second, publish, nil)
+	publish := func(_ context.Context, _ string, _ []byte, _ string) error { return nil }
+	h := NewHandler(store, nil, nil, nil, "site-a", 100, 500, 5*time.Second, 5, publish, nil)
 
 	store.EXPECT().GetSubscription(gomock.Any(), "alice", "r1").Return(&model.Subscription{
 		Roles: []model.Role{model.RoleOwner},
@@ -952,8 +953,8 @@ func TestHandler_AddMembers_EmptyAfterResolve(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	store := NewMockRoomStore(ctrl)
 
-	publish := func(_ context.Context, _ string, _ []byte) error { return nil }
-	h := NewHandler(store, nil, nil, nil, "site-a", 100, 500, 5*time.Second, publish, nil)
+	publish := func(_ context.Context, _ string, _ []byte, _ string) error { return nil }
+	h := NewHandler(store, nil, nil, nil, "site-a", 100, 500, 5*time.Second, 5, publish, nil)
 
 	store.EXPECT().GetSubscription(gomock.Any(), "alice", "r1").Return(&model.Subscription{
 		Roles: []model.Role{model.RoleMember},
@@ -989,7 +990,7 @@ func TestHandler_AddMembers_RejectsDirectBot(t *testing.T) {
 	}, nil)
 
 	h := &Handler{store: store, siteID: "site-a", maxRoomSize: 1000,
-		publishToStream: func(_ context.Context, _ string, _ []byte) error { return nil },
+		publishToStream: func(_ context.Context, _ string, _ []byte, _ string) error { return nil },
 	}
 	body, _ := json.Marshal(model.AddMembersRequest{
 		Users: []string{"weather.bot"},
@@ -1029,7 +1030,7 @@ func TestHandler_AddMembers_SilentlyFiltersBotsFromChannelRefs(t *testing.T) {
 	var publishedPayload []byte
 	h := &Handler{
 		store: store, siteID: "site-a", maxRoomSize: 1000, memberListClient: mc,
-		publishToStream: func(_ context.Context, _ string, data []byte) error {
+		publishToStream: func(_ context.Context, _ string, data []byte, _ string) error {
 			publishedPayload = data
 			return nil
 		},
@@ -1169,7 +1170,7 @@ func TestHandler_AddMembers_PhantomValidation(t *testing.T) {
 
 			publishCalled := false
 			h := &Handler{store: store, siteID: "site-a", maxRoomSize: 1000,
-				publishToStream: func(_ context.Context, _ string, _ []byte) error {
+				publishToStream: func(_ context.Context, _ string, _ []byte, _ string) error {
 					publishCalled = true
 					return nil
 				},
@@ -1259,7 +1260,7 @@ func TestHandler_CreateRoomChannel_PhantomValidation(t *testing.T) {
 
 			publishCalled := false
 			h := &Handler{store: store, siteID: "site-a", maxRoomSize: 1000,
-				publishToStream: func(_ context.Context, _ string, _ []byte) error {
+				publishToStream: func(_ context.Context, _ string, _ []byte, _ string) error {
 					publishCalled = true
 					return nil
 				},
@@ -2149,7 +2150,7 @@ func TestHandler_handleUpdateRole_PropagatesRequestID(t *testing.T) {
 
 	var capturedHeader nats.Header
 	h := &Handler{store: store, siteID: "site-a", maxRoomSize: 1000,
-		publishToStream: func(ctx context.Context, _ string, _ []byte) error {
+		publishToStream: func(ctx context.Context, _ string, _ []byte, _ string) error {
 			capturedHeader = natsutil.HeaderForContext(ctx)
 			return nil
 		},
@@ -2321,7 +2322,7 @@ func TestHandleCreateRoom_DM_HappyPath(t *testing.T) {
 
 	var publishedData []byte
 	h := &Handler{store: store, siteID: "site-a", maxRoomSize: 1000,
-		publishToStream: func(_ context.Context, _ string, data []byte) error {
+		publishToStream: func(_ context.Context, _ string, data []byte, _ string) error {
 			publishedData = data
 			return nil
 		},
@@ -2372,7 +2373,7 @@ func TestHandleCreateRoom_BotDM_HappyPath(t *testing.T) {
 
 	var publishedData []byte
 	h := &Handler{store: store, siteID: "site-a", maxRoomSize: 1000,
-		publishToStream: func(_ context.Context, _ string, data []byte) error {
+		publishToStream: func(_ context.Context, _ string, data []byte, _ string) error {
 			publishedData = data
 			return nil
 		},
@@ -2413,7 +2414,7 @@ func TestHandleCreateRoom_BotDM_AppCounterpartNoNameFields(t *testing.T) {
 	var published bool
 	h := &Handler{
 		store: store, siteID: "site-a", maxRoomSize: 1000,
-		publishToStream: func(_ context.Context, _ string, _ []byte) error {
+		publishToStream: func(_ context.Context, _ string, _ []byte, _ string) error {
 			published = true
 			return nil
 		},
@@ -2479,7 +2480,7 @@ func TestHandleCreateRoom_Channel_HappyPath(t *testing.T) {
 
 	var publishedData []byte
 	h := &Handler{store: store, siteID: "site-a", maxRoomSize: 1000,
-		publishToStream: func(_ context.Context, _ string, data []byte) error {
+		publishToStream: func(_ context.Context, _ string, data []byte, _ string) error {
 			publishedData = data
 			return nil
 		},
@@ -2541,7 +2542,7 @@ func TestHandleCreateRoom_Channel_NameAtBoundary(t *testing.T) {
 	expectAllAccountsExist(store)
 	store.EXPECT().CountNewMembers(gomock.Any(), gomock.Any(), gomock.Any(), "", gomock.Any()).Return(2, nil)
 	h := &Handler{store: store, siteID: "site-a", maxRoomSize: 1000,
-		publishToStream: func(_ context.Context, _ string, _ []byte) error { return nil },
+		publishToStream: func(_ context.Context, _ string, _ []byte, _ string) error { return nil },
 	}
 
 	body, _ := json.Marshal(model.CreateRoomRequest{Name: strings.Repeat("世", 100), Users: []string{"bob"}})
@@ -2619,7 +2620,7 @@ func TestHandleCreateRoom_Channel_AcceptsAtCreatorInclusiveCap(t *testing.T) {
 	expectAllAccountsExist(store)
 	store.EXPECT().CountNewMembers(gomock.Any(), gomock.Any(), gomock.Any(), "", gomock.Any()).Return(9, nil)
 	h := &Handler{store: store, siteID: "site-a", maxRoomSize: 10,
-		publishToStream: func(_ context.Context, _ string, _ []byte) error { return nil }}
+		publishToStream: func(_ context.Context, _ string, _ []byte, _ string) error { return nil }}
 
 	body, _ := json.Marshal(model.CreateRoomRequest{Name: "edge", Users: []string{"bob"}})
 	_, err := h.handleCreateRoom(ctxWithReqID(), createRoomSubj("alice", "site-a"), body)
@@ -2652,7 +2653,7 @@ func TestHandleCreateRoom_BotDM_PUnderscoreWebhookBot(t *testing.T) {
 	}, nil)
 	var publishedData []byte
 	h := &Handler{store: store, siteID: "site-a", maxRoomSize: 1000,
-		publishToStream: func(_ context.Context, _ string, data []byte) error {
+		publishToStream: func(_ context.Context, _ string, data []byte, _ string) error {
 			publishedData = data
 			return nil
 		},
@@ -2745,7 +2746,7 @@ func newMessageReadFixture(t *testing.T) *messageReadFixture {
 	f.handler = &Handler{
 		store:  store,
 		siteID: "site-a",
-		publishToStream: func(_ context.Context, subj string, data []byte) error {
+		publishToStream: func(_ context.Context, subj string, data []byte, _ string) error {
 			f.publishCalls++
 			f.publishedSubj = subj
 			f.publishedData = data
@@ -3301,7 +3302,7 @@ func TestHandler_handleMessageReadReceipt(t *testing.T) {
 				tt.prep(setup{store: store, reader: reader})
 			}
 
-			h := NewHandler(store, nil, nil, reader, siteID, 1000, 1000, time.Second, nil, nil)
+			h := NewHandler(store, nil, nil, reader, siteID, 1000, 1000, time.Second, 5, nil, nil)
 			gotBytes, err := h.handleMessageReadReceipt(context.Background(), tt.subject, tt.body)
 
 			if tt.wantErr != nil {
@@ -3341,7 +3342,7 @@ func TestHandler_CreateRoom_WritesKeyBeforePublish(t *testing.T) {
 			return 0, nil
 		})
 
-	publish := func(_ context.Context, subj string, _ []byte) error {
+	publish := func(_ context.Context, subj string, _ []byte, _ string) error {
 		// Write-before-publish invariant: room-worker reads the key on canonical
 		// arrival, so Set must complete before the create event is published.
 		assert.True(t, keyStored, "keyStore.Set must run before publishToStream")
@@ -3374,7 +3375,7 @@ func TestHandler_CreateRoom_AbortsOnKeyStoreSetError(t *testing.T) {
 		Return(0, fmt.Errorf("valkey down"))
 
 	h := &Handler{store: store, keyStore: keyStore, siteID: "site-a", maxRoomSize: 1000,
-		publishToStream: func(_ context.Context, _ string, _ []byte) error {
+		publishToStream: func(_ context.Context, _ string, _ []byte, _ string) error {
 			t.Fatal("publishToStream must not be called when Set fails")
 			return nil
 		},
@@ -3517,7 +3518,7 @@ func newThreadReadFixture(t *testing.T) *threadReadFixture {
 	f.handler = &Handler{
 		store:  store,
 		siteID: "site-a",
-		publishToStream: func(_ context.Context, subj string, data []byte) error {
+		publishToStream: func(_ context.Context, subj string, data []byte, _ string) error {
 			f.publishCalls++
 			f.publishedSubj = subj
 			f.publishedData = data
@@ -3863,7 +3864,7 @@ func TestHandler_MuteToggle_Success(t *testing.T) {
 	h := &Handler{
 		store:  store,
 		siteID: "site-a",
-		publishToStream: func(_ context.Context, _ string, _ []byte) error {
+		publishToStream: func(_ context.Context, _ string, _ []byte, _ string) error {
 			t.Fatal("publishToStream must not be called for same-site mute toggle")
 			return nil
 		},
@@ -3913,7 +3914,7 @@ func TestHandler_MuteToggle_CrossSitePublishesOutbox(t *testing.T) {
 	var streamData []byte
 	h := &Handler{
 		store: store, siteID: "site-a",
-		publishToStream: func(_ context.Context, s string, d []byte) error {
+		publishToStream: func(_ context.Context, s string, d []byte, _ string) error {
 			streamSubj = s
 			streamData = d
 			return nil
@@ -3951,7 +3952,7 @@ func TestHandler_MuteToggle_NotRoomMember(t *testing.T) {
 
 	h := &Handler{
 		store: store, siteID: "site-a",
-		publishToStream: func(_ context.Context, _ string, _ []byte) error { return nil },
+		publishToStream: func(_ context.Context, _ string, _ []byte, _ string) error { return nil },
 		publishCore:     func(_ context.Context, _ string, _ []byte) error { return nil },
 	}
 
@@ -3963,7 +3964,7 @@ func TestHandler_MuteToggle_NotRoomMember(t *testing.T) {
 func TestHandler_MuteToggle_InvalidSubject(t *testing.T) {
 	h := &Handler{
 		siteID:          "site-a",
-		publishToStream: func(_ context.Context, _ string, _ []byte) error { return nil },
+		publishToStream: func(_ context.Context, _ string, _ []byte, _ string) error { return nil },
 		publishCore:     func(_ context.Context, _ string, _ []byte) error { return nil },
 	}
 	_, err := h.handleMuteToggle(context.Background(), "garbage.subject", nil)
@@ -3981,7 +3982,7 @@ func TestHandler_MuteToggle_StoreError(t *testing.T) {
 
 	h := &Handler{
 		store: store, siteID: "site-a",
-		publishToStream: func(_ context.Context, _ string, _ []byte) error { return nil },
+		publishToStream: func(_ context.Context, _ string, _ []byte, _ string) error { return nil },
 		publishCore:     func(_ context.Context, _ string, _ []byte) error { return nil },
 	}
 	subj := subject.MuteToggle("alice", "r1", "site-a")
@@ -4005,7 +4006,7 @@ func TestHandler_MuteToggle_GetUserSiteIDError(t *testing.T) {
 
 	h := &Handler{
 		store: store, siteID: "site-a",
-		publishToStream: func(_ context.Context, _ string, _ []byte) error {
+		publishToStream: func(_ context.Context, _ string, _ []byte, _ string) error {
 			t.Fatal("publishToStream must not be called when GetUserSiteID fails")
 			return nil
 		},
@@ -4036,7 +4037,7 @@ func TestHandler_MuteToggle_CrossSiteOutboxPublishFailure(t *testing.T) {
 
 	h := &Handler{
 		store: store, siteID: "site-a",
-		publishToStream: func(_ context.Context, _ string, _ []byte) error {
+		publishToStream: func(_ context.Context, _ string, _ []byte, _ string) error {
 			return fmt.Errorf("nats unavailable")
 		},
 		publishCore: func(_ context.Context, _ string, _ []byte) error { return nil },
@@ -4157,7 +4158,7 @@ func TestHandler_natsGetRoomKey(t *testing.T) {
 			ks := NewMockRoomKeyStore(ctrl)
 			tc.setup(t, store, ks)
 
-			h := NewHandler(store, ks, nil, nil, siteID, 1000, 500, 5*time.Second, nil, nil)
+			h := NewHandler(store, ks, nil, nil, siteID, 1000, 500, 5*time.Second, 5, nil, nil)
 			resp, err := h.handleGetRoomKey(t.Context(), subj, tc.body)
 			if tc.want.errSubstr != "" {
 				require.Error(t, err)
@@ -4166,6 +4167,303 @@ func TestHandler_natsGetRoomKey(t *testing.T) {
 			}
 			require.NoError(t, err)
 			require.JSONEq(t, tc.want.replyJSON, string(resp))
+		})
+	}
+}
+
+// --- RoomRename tests ---
+
+func TestHandleRoomRename_Validation(t *testing.T) {
+	const validReqID = "01970a4f-8c2d-7c9a-abcd-e0123456789f"
+
+	tests := []struct {
+		name       string
+		subj       string
+		body       []byte
+		ctx        context.Context
+		setupStore func(*MockRoomStore)
+		wantErr    error
+	}{
+		{
+			name:    "invalid subject",
+			subj:    "bad.subject",
+			body:    mustJSON(t, model.RenameRoomRequest{NewName: "new"}),
+			ctx:     natsutil.WithRequestID(context.Background(), validReqID),
+			wantErr: errInvalidRenameSubject,
+		},
+		{
+			name:    "blank name after trim",
+			subj:    subject.RoomRename("alice", "r1", "site-a"),
+			body:    mustJSON(t, model.RenameRoomRequest{NewName: "   "}),
+			ctx:     natsutil.WithRequestID(context.Background(), validReqID),
+			wantErr: errInvalidName,
+		},
+		{
+			name:    "name too long (>100 chars)",
+			subj:    subject.RoomRename("alice", "r1", "site-a"),
+			body:    mustJSON(t, model.RenameRoomRequest{NewName: strings.Repeat("x", 101)}),
+			ctx:     natsutil.WithRequestID(context.Background(), validReqID),
+			wantErr: errInvalidName,
+		},
+		{
+			name: "room not found",
+			subj: subject.RoomRename("alice", "r1", "site-a"),
+			body: mustJSON(t, model.RenameRoomRequest{NewName: "new-name"}),
+			ctx:  natsutil.WithRequestID(context.Background(), validReqID),
+			setupStore: func(s *MockRoomStore) {
+				s.EXPECT().GetUser(gomock.Any(), "alice").Return(&model.User{Account: "alice"}, nil)
+				s.EXPECT().GetRoom(gomock.Any(), "r1").Return(nil, mongo.ErrNoDocuments)
+			},
+			wantErr: errRoomNotFound,
+		},
+		{
+			name: "wrong room type (DM)",
+			subj: subject.RoomRename("alice", "r1", "site-a"),
+			body: mustJSON(t, model.RenameRoomRequest{NewName: "new-name"}),
+			ctx:  natsutil.WithRequestID(context.Background(), validReqID),
+			setupStore: func(s *MockRoomStore) {
+				s.EXPECT().GetUser(gomock.Any(), "alice").Return(&model.User{Account: "alice"}, nil)
+				s.EXPECT().GetRoom(gomock.Any(), "r1").Return(&model.Room{ID: "r1", Type: model.RoomTypeDM}, nil)
+			},
+			wantErr: errRenameChannelOnly,
+		},
+		{
+			name: "non-admin non-owner",
+			subj: subject.RoomRename("alice", "r1", "site-a"),
+			body: mustJSON(t, model.RenameRoomRequest{NewName: "new-name"}),
+			ctx:  natsutil.WithRequestID(context.Background(), validReqID),
+			setupStore: func(s *MockRoomStore) {
+				s.EXPECT().GetUser(gomock.Any(), "alice").Return(&model.User{Account: "alice", Roles: []model.UserRole{model.UserRoleUser}}, nil)
+				s.EXPECT().GetRoom(gomock.Any(), "r1").Return(&model.Room{ID: "r1", Type: model.RoomTypeChannel}, nil)
+				// GetSubscription returns member-only role
+				s.EXPECT().GetSubscription(gomock.Any(), "alice", "r1").Return(
+					&model.Subscription{Roles: []model.Role{model.RoleMember}}, nil,
+				)
+			},
+			wantErr: errOnlyOwnersOrAdmins,
+		},
+		{
+			name: "owner subscription allowed",
+			subj: subject.RoomRename("alice", "r1", "site-a"),
+			body: mustJSON(t, model.RenameRoomRequest{NewName: "new-name"}),
+			ctx:  natsutil.WithRequestID(context.Background(), validReqID),
+			setupStore: func(s *MockRoomStore) {
+				s.EXPECT().GetUser(gomock.Any(), "alice").Return(&model.User{Account: "alice", Roles: []model.UserRole{model.UserRoleUser}}, nil)
+				s.EXPECT().GetRoom(gomock.Any(), "r1").Return(&model.Room{ID: "r1", Type: model.RoomTypeChannel, SiteID: "site-a"}, nil)
+				s.EXPECT().GetSubscription(gomock.Any(), "alice", "r1").Return(
+					&model.Subscription{Roles: []model.Role{model.RoleOwner}}, nil,
+				)
+			},
+			wantErr: nil,
+		},
+		{
+			name: "room admin rejected (only owner or platform admin allowed)",
+			subj: subject.RoomRename("alice", "r1", "site-a"),
+			body: mustJSON(t, model.RenameRoomRequest{NewName: "new-name"}),
+			ctx:  natsutil.WithRequestID(context.Background(), validReqID),
+			setupStore: func(s *MockRoomStore) {
+				s.EXPECT().GetUser(gomock.Any(), "alice").Return(&model.User{Account: "alice", Roles: []model.UserRole{model.UserRoleUser}}, nil)
+				s.EXPECT().GetRoom(gomock.Any(), "r1").Return(&model.Room{ID: "r1", Type: model.RoomTypeChannel}, nil)
+				s.EXPECT().GetSubscription(gomock.Any(), "alice", "r1").Return(
+					&model.Subscription{Roles: []model.Role{model.RoleAdmin}}, nil,
+				)
+			},
+			wantErr: errOnlyOwnersOrAdmins,
+		},
+		{
+			name: "admin allowed without subscription",
+			subj: subject.RoomRename("admin1", "r1", "site-a"),
+			body: mustJSON(t, model.RenameRoomRequest{NewName: "new-name"}),
+			ctx:  natsutil.WithRequestID(context.Background(), validReqID),
+			setupStore: func(s *MockRoomStore) {
+				s.EXPECT().GetUser(gomock.Any(), "admin1").Return(&model.User{Account: "admin1", Roles: []model.UserRole{model.UserRoleAdmin}}, nil)
+				s.EXPECT().GetRoom(gomock.Any(), "r1").Return(&model.Room{ID: "r1", Type: model.RoomTypeChannel, SiteID: "site-a"}, nil)
+				// No GetSubscription call expected for platform admin
+			},
+			wantErr: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			store := NewMockRoomStore(ctrl)
+			if tt.setupStore != nil {
+				tt.setupStore(store)
+			}
+			h := NewHandler(store, nil, nil, nil, "site-a", 1000, 500, 5*time.Second, 5,
+				func(_ context.Context, _ string, _ []byte, _ string) error { return nil }, nil)
+
+			_, err := h.handleRoomRename(tt.ctx, tt.subj, tt.body)
+			if tt.wantErr == nil {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+				assert.ErrorIs(t, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// --- RoomRestricted tests ---
+
+// happyPathRestrictedSuccessSetup wires the post-validation store calls that
+// the sync handler needs to complete: Mongo writes, subscription list, user
+// lookup. Used by the success-path table rows.
+func happyPathRestrictedSuccessSetup(s *MockRoomStore) {
+	s.EXPECT().UpdateRoomVisibility(gomock.Any(), "r1", gomock.Any(), gomock.Any()).Return(nil)
+	s.EXPECT().ApplySubscriptionVisibility(gomock.Any(), "r1", gomock.Any(), gomock.Any(), gomock.Any()).Return(nil)
+	s.EXPECT().ListSubscriptionsByRoom(gomock.Any(), "r1").Return(nil, nil)
+	s.EXPECT().FindUsersByAccounts(gomock.Any(), gomock.Any()).Return(nil, nil)
+}
+
+func TestHandleRoomRestricted_Validation(t *testing.T) {
+	const validReqID = "01970a4f-8c2d-7c9a-abcd-e0123456789f"
+
+	tests := []struct {
+		name       string
+		body       []byte
+		ctx        context.Context
+		setupStore func(*MockRoomStore)
+		wantErr    error
+	}{
+		{
+			name:    "missing roomID/account in body",
+			body:    mustJSON(t, model.RoomRestrictedRequest{Restricted: true}),
+			ctx:     natsutil.WithRequestID(context.Background(), validReqID),
+			wantErr: errInvalidRestrictedSubject,
+		},
+		{
+			name: "non-admin requester",
+			body: mustJSON(t, model.RoomRestrictedRequest{RoomID: "r1", Account: "alice", Restricted: true}),
+			ctx:  natsutil.WithRequestID(context.Background(), validReqID),
+			setupStore: func(s *MockRoomStore) {
+				s.EXPECT().GetUser(gomock.Any(), "alice").Return(&model.User{Account: "alice", Roles: []model.UserRole{model.UserRoleUser}}, nil)
+			},
+			wantErr: errOnlyAdmins,
+		},
+		{
+			name: "room not found",
+			body: mustJSON(t, model.RoomRestrictedRequest{RoomID: "r1", Account: "admin1", Restricted: true}),
+			ctx:  natsutil.WithRequestID(context.Background(), validReqID),
+			setupStore: func(s *MockRoomStore) {
+				s.EXPECT().GetUser(gomock.Any(), "admin1").Return(&model.User{Account: "admin1", Roles: []model.UserRole{model.UserRoleAdmin}}, nil)
+				s.EXPECT().GetRoom(gomock.Any(), "r1").Return(nil, mongo.ErrNoDocuments)
+			},
+			wantErr: errRoomNotFound,
+		},
+		{
+			name: "non-channel room",
+			body: mustJSON(t, model.RoomRestrictedRequest{RoomID: "r1", Account: "admin1", Restricted: true}),
+			ctx:  natsutil.WithRequestID(context.Background(), validReqID),
+			setupStore: func(s *MockRoomStore) {
+				s.EXPECT().GetUser(gomock.Any(), "admin1").Return(&model.User{Account: "admin1", Roles: []model.UserRole{model.UserRoleAdmin}}, nil)
+				s.EXPECT().GetRoom(gomock.Any(), "r1").Return(&model.Room{ID: "r1", Type: model.RoomTypeDM}, nil)
+			},
+			wantErr: errRestrictedChannelOnly,
+		},
+		{
+			name: "restricted=true + ownerAccount given + owner not a member",
+			body: mustJSON(t, model.RoomRestrictedRequest{
+				RoomID: "r1", Account: "admin1",
+				Restricted: true, OwnerAccount: "nonmember",
+			}),
+			ctx: natsutil.WithRequestID(context.Background(), validReqID),
+			setupStore: func(s *MockRoomStore) {
+				s.EXPECT().GetUser(gomock.Any(), "admin1").Return(&model.User{Account: "admin1", Roles: []model.UserRole{model.UserRoleAdmin}}, nil)
+				s.EXPECT().GetRoom(gomock.Any(), "r1").Return(&model.Room{ID: "r1", Type: model.RoomTypeChannel, Restricted: true, UserCount: 10}, nil)
+				s.EXPECT().GetSubscription(gomock.Any(), "nonmember", "r1").Return(nil, mongo.ErrNoDocuments)
+			},
+			wantErr: errOwnerNotMember,
+		},
+		{
+			name: "transition false→true without ownerAccount",
+			body: mustJSON(t, model.RoomRestrictedRequest{
+				RoomID: "r1", Account: "admin1", Restricted: true,
+			}),
+			ctx: natsutil.WithRequestID(context.Background(), validReqID),
+			setupStore: func(s *MockRoomStore) {
+				s.EXPECT().GetUser(gomock.Any(), "admin1").Return(&model.User{Account: "admin1", Roles: []model.UserRole{model.UserRoleAdmin}}, nil)
+				s.EXPECT().GetRoom(gomock.Any(), "r1").Return(&model.Room{ID: "r1", Type: model.RoomTypeChannel, Restricted: false, UserCount: 10}, nil)
+			},
+			wantErr: errOwnerAccountRequired,
+		},
+		{
+			name: "transition with UserCount < 5 (need at least 5)",
+			body: mustJSON(t, model.RoomRestrictedRequest{
+				RoomID: "r1", Account: "admin1",
+				Restricted: true, OwnerAccount: "owner1",
+			}),
+			ctx: natsutil.WithRequestID(context.Background(), validReqID),
+			setupStore: func(s *MockRoomStore) {
+				s.EXPECT().GetUser(gomock.Any(), "admin1").Return(&model.User{Account: "admin1", Roles: []model.UserRole{model.UserRoleAdmin}}, nil)
+				s.EXPECT().GetRoom(gomock.Any(), "r1").Return(&model.Room{ID: "r1", Type: model.RoomTypeChannel, Restricted: false, UserCount: 3}, nil)
+				s.EXPECT().GetSubscription(gomock.Any(), "owner1", "r1").Return(&model.Subscription{}, nil)
+			},
+			wantErr: errNotEnoughMembers,
+		},
+		{
+			name: "transition success (admin + ownerAccount + UserCount >= 5)",
+			body: mustJSON(t, model.RoomRestrictedRequest{
+				RoomID: "r1", Account: "admin1",
+				Restricted: true, OwnerAccount: "owner1",
+			}),
+			ctx: natsutil.WithRequestID(context.Background(), validReqID),
+			setupStore: func(s *MockRoomStore) {
+				s.EXPECT().GetUser(gomock.Any(), "admin1").Return(&model.User{Account: "admin1", Roles: []model.UserRole{model.UserRoleAdmin}}, nil)
+				s.EXPECT().GetRoom(gomock.Any(), "r1").Return(&model.Room{ID: "r1", Type: model.RoomTypeChannel, Restricted: false, UserCount: 10}, nil)
+				s.EXPECT().GetSubscription(gomock.Any(), "owner1", "r1").Return(&model.Subscription{}, nil)
+				happyPathRestrictedSuccessSetup(s)
+			},
+			wantErr: nil,
+		},
+		{
+			name: "unrestrict (no owner/threshold checks)",
+			body: mustJSON(t, model.RoomRestrictedRequest{
+				RoomID: "r1", Account: "admin1", Restricted: false,
+			}),
+			ctx: natsutil.WithRequestID(context.Background(), validReqID),
+			setupStore: func(s *MockRoomStore) {
+				s.EXPECT().GetUser(gomock.Any(), "admin1").Return(&model.User{Account: "admin1", Roles: []model.UserRole{model.UserRoleAdmin}}, nil)
+				s.EXPECT().GetRoom(gomock.Any(), "r1").Return(&model.Room{ID: "r1", Type: model.RoomTypeChannel, Restricted: true, UserCount: 10}, nil)
+				happyPathRestrictedSuccessSetup(s)
+			},
+			wantErr: nil,
+		},
+		{
+			name: "already-restricted owner change success",
+			body: mustJSON(t, model.RoomRestrictedRequest{
+				RoomID: "r1", Account: "admin1",
+				Restricted: true, OwnerAccount: "owner2",
+			}),
+			ctx: natsutil.WithRequestID(context.Background(), validReqID),
+			setupStore: func(s *MockRoomStore) {
+				s.EXPECT().GetUser(gomock.Any(), "admin1").Return(&model.User{Account: "admin1", Roles: []model.UserRole{model.UserRoleAdmin}}, nil)
+				s.EXPECT().GetRoom(gomock.Any(), "r1").Return(&model.Room{ID: "r1", Type: model.RoomTypeChannel, Restricted: true, UserCount: 2}, nil)
+				s.EXPECT().GetSubscription(gomock.Any(), "owner2", "r1").Return(&model.Subscription{}, nil)
+				happyPathRestrictedSuccessSetup(s)
+			},
+			wantErr: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			store := NewMockRoomStore(ctrl)
+			if tt.setupStore != nil {
+				tt.setupStore(store)
+			}
+			h := NewHandler(store, nil, nil, nil, "site-a", 1000, 500, 5*time.Second, 5,
+				func(_ context.Context, _ string, _ []byte, _ string) error { return nil }, nil)
+
+			_, err := h.handleRoomRestricted(tt.ctx, tt.body)
+			if tt.wantErr == nil {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+				assert.ErrorIs(t, err, tt.wantErr)
+			}
 		})
 	}
 }
@@ -4194,7 +4492,7 @@ func TestHandler_MuteToggle_CorePublishFailureIsNonFatal(t *testing.T) {
 		publishCore: func(_ context.Context, _ string, _ []byte) error {
 			return fmt.Errorf("core nats down")
 		},
-		publishToStream: func(_ context.Context, _ string, _ []byte) error {
+		publishToStream: func(_ context.Context, _ string, _ []byte, _ string) error {
 			t.Fatal("publishToStream must not be called for same-site mute toggle")
 			return nil
 		},
@@ -4227,7 +4525,7 @@ func TestPublishCreateRoom_ProvisionsDEKBeforePublish(t *testing.T) {
 	h := &Handler{
 		siteID:          "site-a",
 		dekProvisioner:  prov,
-		publishToStream: func(context.Context, string, []byte) error { published++; return nil },
+		publishToStream: func(context.Context, string, []byte, string) error { published++; return nil },
 	}
 
 	_, err := h.publishCreateRoom(context.Background(),
@@ -4244,7 +4542,7 @@ func TestPublishCreateRoom_DEKFailure_BlocksAndSkipsPublish(t *testing.T) {
 	h := &Handler{
 		siteID:          "site-a",
 		dekProvisioner:  prov,
-		publishToStream: func(context.Context, string, []byte) error { published++; return nil },
+		publishToStream: func(context.Context, string, []byte, string) error { published++; return nil },
 	}
 
 	_, err := h.publishCreateRoom(context.Background(),
@@ -4259,7 +4557,7 @@ func TestPublishCreateRoom_NoProvisioner_Skips(t *testing.T) {
 	h := &Handler{
 		siteID:          "site-a",
 		dekProvisioner:  nil, // ATREST disabled
-		publishToStream: func(context.Context, string, []byte) error { published++; return nil },
+		publishToStream: func(context.Context, string, []byte, string) error { published++; return nil },
 	}
 
 	_, err := h.publishCreateRoom(context.Background(),
@@ -4291,7 +4589,7 @@ func TestHandler_FavoriteToggle_Success(t *testing.T) {
 	h := &Handler{
 		store:  store,
 		siteID: "site-a",
-		publishToStream: func(_ context.Context, _ string, _ []byte) error {
+		publishToStream: func(_ context.Context, _ string, _ []byte, _ string) error {
 			t.Fatal("publishToStream must not be called for same-site favorite toggle")
 			return nil
 		},
@@ -4341,7 +4639,7 @@ func TestHandler_FavoriteToggle_CrossSitePublishesOutbox(t *testing.T) {
 	var streamData []byte
 	h := &Handler{
 		store: store, siteID: "site-a",
-		publishToStream: func(_ context.Context, s string, d []byte) error {
+		publishToStream: func(_ context.Context, s string, d []byte, _ string) error {
 			streamSubj = s
 			streamData = d
 			return nil
@@ -4379,7 +4677,7 @@ func TestHandler_FavoriteToggle_NotRoomMember(t *testing.T) {
 
 	h := &Handler{
 		store: store, siteID: "site-a",
-		publishToStream: func(_ context.Context, _ string, _ []byte) error { return nil },
+		publishToStream: func(_ context.Context, _ string, _ []byte, _ string) error { return nil },
 		publishCore:     func(_ context.Context, _ string, _ []byte) error { return nil },
 	}
 
@@ -4391,7 +4689,7 @@ func TestHandler_FavoriteToggle_NotRoomMember(t *testing.T) {
 func TestHandler_FavoriteToggle_InvalidSubject(t *testing.T) {
 	h := &Handler{
 		siteID:          "site-a",
-		publishToStream: func(_ context.Context, _ string, _ []byte) error { return nil },
+		publishToStream: func(_ context.Context, _ string, _ []byte, _ string) error { return nil },
 		publishCore:     func(_ context.Context, _ string, _ []byte) error { return nil },
 	}
 	_, err := h.handleFavoriteToggle(context.Background(), "garbage.subject", nil)
@@ -4409,7 +4707,7 @@ func TestHandler_FavoriteToggle_StoreError(t *testing.T) {
 
 	h := &Handler{
 		store: store, siteID: "site-a",
-		publishToStream: func(_ context.Context, _ string, _ []byte) error { return nil },
+		publishToStream: func(_ context.Context, _ string, _ []byte, _ string) error { return nil },
 		publishCore:     func(_ context.Context, _ string, _ []byte) error { return nil },
 	}
 	subj := subject.FavoriteToggle("alice", "r1", "site-a")
@@ -4433,7 +4731,7 @@ func TestHandler_FavoriteToggle_GetUserSiteIDError(t *testing.T) {
 
 	h := &Handler{
 		store: store, siteID: "site-a",
-		publishToStream: func(_ context.Context, _ string, _ []byte) error {
+		publishToStream: func(_ context.Context, _ string, _ []byte, _ string) error {
 			t.Fatal("publishToStream must not be called when GetUserSiteID fails")
 			return nil
 		},
@@ -4464,7 +4762,7 @@ func TestHandler_FavoriteToggle_CrossSiteOutboxPublishFailure(t *testing.T) {
 
 	h := &Handler{
 		store: store, siteID: "site-a",
-		publishToStream: func(_ context.Context, _ string, _ []byte) error {
+		publishToStream: func(_ context.Context, _ string, _ []byte, _ string) error {
 			return fmt.Errorf("nats unavailable")
 		},
 		publishCore: func(_ context.Context, _ string, _ []byte) error { return nil },
@@ -4497,7 +4795,7 @@ func TestHandler_FavoriteToggle_CorePublishFailureIsNonFatal(t *testing.T) {
 		publishCore: func(_ context.Context, _ string, _ []byte) error {
 			return fmt.Errorf("core nats down")
 		},
-		publishToStream: func(_ context.Context, _ string, _ []byte) error {
+		publishToStream: func(_ context.Context, _ string, _ []byte, _ string) error {
 			t.Fatal("publishToStream must not be called for same-site favorite toggle")
 			return nil
 		},

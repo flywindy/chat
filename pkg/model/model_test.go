@@ -2606,3 +2606,146 @@ func TestUnpinRoomEventJSON(t *testing.T) {
 	}
 	roundTrip(t, &evt, &model.UnpinRoomEvent{})
 }
+
+// --- User.Roles ---
+
+func TestUserJSON_WithRoles(t *testing.T) {
+	u := model.User{ID: "u1", Account: "admin1", SiteID: "site-a",
+		Roles: []model.UserRole{model.UserRoleAdmin}}
+	roundTrip(t, &u, &model.User{})
+}
+
+func TestUserRoleConstants(t *testing.T) {
+	if model.UserRoleAdmin != "admin" || model.UserRoleUser != "user" {
+		t.Fatalf("UserRole consts: admin=%q user=%q", model.UserRoleAdmin, model.UserRoleUser)
+	}
+}
+
+// --- Room.ExternalAccess ---
+
+func TestRoomJSON_RestrictedAndExternalAccess(t *testing.T) {
+	r := model.Room{
+		ID: "r1", Name: "x", Type: model.RoomTypeChannel, SiteID: "site-a", UserCount: 5,
+		CreatedAt:  time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		UpdatedAt:  time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		Restricted: true, ExternalAccess: true,
+	}
+	roundTrip(t, &r, &model.Room{})
+}
+
+func TestRoomJSON_ExternalAccessOmittedWhenFalse(t *testing.T) {
+	r := model.Room{ID: "r1", Name: "x", Type: model.RoomTypeChannel, SiteID: "site-a",
+		CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		UpdatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+	data, err := json.Marshal(&r)
+	require.NoError(t, err)
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(data, &raw))
+	_, has := raw["externalAccess"]
+	assert.False(t, has, "false ExternalAccess must omit")
+}
+
+// --- Subscription.Restricted / ExternalAccess ---
+
+func TestSubscriptionJSON_RestrictedAndExternalAccess(t *testing.T) {
+	s := model.Subscription{
+		ID: "s1", User: model.SubscriptionUser{ID: "u1", Account: "alice"},
+		RoomID: "r1", SiteID: "site-a",
+		Roles: []model.Role{model.RoleMember}, Name: "x", RoomType: model.RoomTypeChannel,
+		JoinedAt:   time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		Restricted: true, ExternalAccess: true,
+	}
+	roundTrip(t, &s, &model.Subscription{})
+}
+
+// --- Request types ---
+
+func TestRenameRoomRequestJSON(t *testing.T) {
+	r := model.RenameRoomRequest{RoomID: "r1", NewName: "new", Account: "alice", Timestamp: 1700000000000}
+	roundTrip(t, &r, &model.RenameRoomRequest{})
+}
+
+func TestRoomRestrictedRequestJSON(t *testing.T) {
+	r := model.RoomRestrictedRequest{
+		RoomID: "r1", Restricted: true, ExternalAccess: false,
+		OwnerAccount: "alice", Account: "admin1", Timestamp: 1700000000000,
+	}
+	roundTrip(t, &r, &model.RoomRestrictedRequest{})
+}
+
+func TestRoomRestrictedRequest_OwnerOmittedWhenEmpty(t *testing.T) {
+	r := model.RoomRestrictedRequest{RoomID: "r1", Account: "admin1", Timestamp: 1700000000000}
+	data, err := json.Marshal(&r)
+	require.NoError(t, err)
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(data, &raw))
+	_, has := raw["ownerAccount"]
+	assert.False(t, has)
+}
+
+// --- Sys message + outbox payloads ---
+
+func TestRoomRenamedSysDataJSON(t *testing.T) {
+	d := model.RoomRenamedSysData{NewName: "renamed", ByAccount: "alice"}
+	roundTrip(t, &d, &model.RoomRenamedSysData{})
+}
+
+func TestRoomRenamedRoomEventJSON(t *testing.T) {
+	e := model.RoomRenamedRoomEvent{
+		Type:      model.RoomEventRoomRenamed,
+		RoomID:    "r1",
+		SiteID:    "site-a",
+		Timestamp: 1700000000000,
+		NewName:   "engineering",
+		ByAccount: "alice",
+		RenamedAt: time.UnixMilli(1700000000000).UTC(),
+	}
+	roundTrip(t, &e, &model.RoomRenamedRoomEvent{})
+}
+
+func TestRoomRestrictedRoomEventJSON(t *testing.T) {
+	e := model.RoomRestrictedRoomEvent{
+		Type:           model.RoomEventRoomRestricted,
+		RoomID:         "r1",
+		SiteID:         "site-a",
+		Timestamp:      1700000000000,
+		Restricted:     true,
+		ExternalAccess: false,
+		OwnerAccount:   "alice",
+		ByAccount:      "admin1",
+		ChangedAt:      time.UnixMilli(1700000000000).UTC(),
+	}
+	roundTrip(t, &e, &model.RoomRestrictedRoomEvent{})
+}
+
+func TestRoomRestrictedSysDataJSON(t *testing.T) {
+	d := model.RoomRestrictedSysData{
+		Restricted: true, ExternalAccess: false, ByAccount: "admin1", OwnerAccount: "alice",
+	}
+	roundTrip(t, &d, &model.RoomRestrictedSysData{})
+}
+
+func TestRoomRenamedOutboxPayloadJSON(t *testing.T) {
+	p := model.RoomRenamedOutboxPayload{RoomID: "r1", NewName: "x", Timestamp: 1700000000000}
+	roundTrip(t, &p, &model.RoomRenamedOutboxPayload{})
+}
+
+func TestRoomRestrictedOutboxPayloadJSON(t *testing.T) {
+	p := model.RoomRestrictedOutboxPayload{
+		RoomID: "r1", Restricted: true, ExternalAccess: false,
+		OwnerAccount: "alice", Timestamp: 1700000000000,
+	}
+	roundTrip(t, &p, &model.RoomRestrictedOutboxPayload{})
+}
+
+// --- Constants ---
+
+func TestMessageAndOutboxAndAsyncOpConstants(t *testing.T) {
+	assert.Equal(t, "room_renamed", model.MessageTypeRoomRenamed)
+	assert.Equal(t, "room_restricted", model.MessageTypeRoomRestricted)
+	assert.Equal(t, "room_renamed", model.OutboxRoomRenamed)
+	assert.Equal(t, "room_restricted", model.OutboxRoomRestricted)
+	assert.Equal(t, "room.rename", model.AsyncJobOpRoomRename)
+	assert.Equal(t, model.RoomEventType("room_renamed"), model.RoomEventRoomRenamed)
+	assert.Equal(t, model.RoomEventType("room_restricted"), model.RoomEventRoomRestricted)
+}

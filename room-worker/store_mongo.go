@@ -470,3 +470,32 @@ func (s *MongoStore) FindDMSubscriptionPair(ctx context.Context, roomID, request
 	}
 	return requesterSub, counterpartSub, nil
 }
+
+func (s *MongoStore) UpdateRoomName(ctx context.Context, roomID, newName string) error {
+	return s.updateChannelRoom(ctx, roomID, bson.M{
+		"$set": bson.M{"name": newName, "updatedAt": time.Now().UTC()},
+	})
+}
+
+// updateChannelRoom applies a $set update; room-service validates type=channel
+// upstream before publishing the canonical event, so the store layer does not
+// re-check.
+func (s *MongoStore) updateChannelRoom(ctx context.Context, roomID string, update bson.M) error {
+	res, err := s.rooms.UpdateOne(ctx, bson.M{"_id": roomID}, update)
+	if err != nil {
+		return fmt.Errorf("update channel room %s: %w", roomID, err)
+	}
+	if res.MatchedCount == 0 {
+		return ErrRoomNotFound
+	}
+	return nil
+}
+
+func (s *MongoStore) UpdateSubscriptionNamesForRoom(ctx context.Context, roomID, newName string) error {
+	if _, err := s.subscriptions.UpdateMany(ctx,
+		bson.M{"roomId": roomID},
+		bson.M{"$set": bson.M{"name": newName}}); err != nil {
+		return fmt.Errorf("update subscription names for room %s: %w", roomID, err)
+	}
+	return nil
+}

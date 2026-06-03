@@ -178,6 +178,8 @@ func (h *Handler) HandleJetStreamMsg(ctx context.Context, msg jetstream.Msg) {
 		err = h.processRemoveMember(ctx, msg.Data())
 	case strings.HasSuffix(subj, ".create"):
 		err = h.processCreateRoom(ctx, msg.Data())
+	case strings.HasSuffix(subj, ".room.rename"):
+		err = h.processRoomRename(ctx, msg.Data())
 	default:
 		slog.WarnContext(ctx, "unknown member operation", "subject", subj)
 	}
@@ -1044,7 +1046,7 @@ func (h *Handler) processAddMembers(ctx context.Context, data []byte) (err error
 	historySharedSince := historySharedSincePtr(req.History, req.Timestamp, req.RoomID)
 	if len(actualAccounts) > 0 || len(req.Orgs) > 0 {
 		memberAddEvt := model.MemberAddEvent{
-			Type:               "member_added",
+			Type:               model.OutboxMemberAdded,
 			RoomID:             req.RoomID,
 			RoomName:           room.Name,
 			RoomType:           room.Type,
@@ -1066,7 +1068,7 @@ func (h *Handler) processAddMembers(ctx context.Context, data []byte) (err error
 
 		if len(actualAccounts) > 0 {
 			inboxOutbox := model.OutboxEvent{
-				Type:       "member_added",
+				Type:       model.OutboxMemberAdded,
 				SiteID:     room.SiteID,
 				DestSiteID: room.SiteID,
 				Payload:    memberAddData,
@@ -1120,22 +1122,28 @@ func (h *Handler) processAddMembers(ctx context.Context, data []byte) (err error
 		}
 	}
 
-	// 10. Outbox for cross-site members — batched by destination site
-	remoteSiteMembers := make(map[string][]string)
-	for _, sub := range subs {
-		user, ok := userMap[sub.User.Account]
-		if !ok || user.SiteID == room.SiteID {
+	// 10. Outbox for cross-site members — one event per destination site.
+	// Single-pass bucket: accounts → home site, skipping the local site. The map
+	// keys are the distinct remote sites; each entry already carries the
+	// per-site filtered account list, so the downstream loop is O(sites) not
+	// O(sites × accounts). Sending the full list would over-pressure NATS and
+	// ship subscription identities to sites that have no business knowing them,
+	// even though inbox-worker would filter on the destination.
+	accountsBySite := make(map[string][]string)
+	for _, acc := range actualAccounts {
+		siteID := userMap[acc].SiteID
+		if siteID == "" || siteID == h.siteID {
 			continue
 		}
-		remoteSiteMembers[user.SiteID] = append(remoteSiteMembers[user.SiteID], sub.User.Account)
+		accountsBySite[siteID] = append(accountsBySite[siteID], acc)
 	}
-	for destSiteID, accounts := range remoteSiteMembers {
+	for destSiteID, siteAccounts := range accountsBySite {
 		siteEvt := model.MemberAddEvent{
-			Type:               "member_added",
+			Type:               model.OutboxMemberAdded,
 			RoomID:             req.RoomID,
 			RoomName:           room.Name,
 			RoomType:           room.Type,
-			Accounts:           accounts,
+			Accounts:           siteAccounts,
 			SiteID:             room.SiteID,
 			RequesterAccount:   req.RequesterAccount,
 			JoinedAt:           req.Timestamp,
@@ -1144,13 +1152,13 @@ func (h *Handler) processAddMembers(ctx context.Context, data []byte) (err error
 		}
 		siteEvtData, _ := json.Marshal(siteEvt)
 		outbox := model.OutboxEvent{
-			Type: "member_added", SiteID: room.SiteID, DestSiteID: destSiteID,
+			Type: model.OutboxMemberAdded, SiteID: room.SiteID, DestSiteID: destSiteID,
 			Payload: siteEvtData, Timestamp: now.UnixMilli(),
 		}
 		outboxData, _ := json.Marshal(outbox)
 		payloadSeed := fmt.Sprintf("%s:%s:%d", req.RoomID, req.RequesterAccount, req.Timestamp)
 		dedupID := natsutil.OutboxDedupID(ctx, destSiteID, payloadSeed)
-		if err := h.publish(ctx, subject.Outbox(room.SiteID, destSiteID, "member_added"), outboxData, dedupID); err != nil {
+		if err := h.publish(ctx, subject.Outbox(room.SiteID, destSiteID, model.OutboxMemberAdded), outboxData, dedupID); err != nil {
 			return fmt.Errorf("outbox publish to %s failed: %w", destSiteID, err)
 		}
 	}
@@ -1814,6 +1822,133 @@ func (h *Handler) publishSubscriptionUpdates(ctx context.Context, subs []*model.
 				"error", err, "account", sub.User.Account, "request_id", requestID)
 		}
 	}
+}
+
+// findRemoteSitesForAccounts looks up the home site of each account and returns
+// the deduplicated set of remote sites (siteID != h.siteID). Empty in → empty out.
+func (h *Handler) findRemoteSitesForAccounts(ctx context.Context, accounts []string) ([]string, error) {
+	if len(accounts) == 0 {
+		return []string{}, nil
+	}
+	users, err := h.store.FindUsersByAccounts(ctx, accounts)
+	if err != nil {
+		return nil, fmt.Errorf("find users by accounts: %w", err)
+	}
+	seen := make(map[string]struct{}, len(users))
+	out := make([]string, 0, len(users))
+	for i := range users {
+		if users[i].SiteID == h.siteID {
+			continue
+		}
+		if _, dup := seen[users[i].SiteID]; dup {
+			continue
+		}
+		seen[users[i].SiteID] = struct{}{}
+		out = append(out, users[i].SiteID)
+	}
+	return out, nil
+}
+
+func (h *Handler) processRoomRename(ctx context.Context, data []byte) (err error) {
+	var requesterAccount, roomID string
+	defer func() {
+		h.publishAsyncJobResult(ctx, requesterAccount, model.AsyncJobOpRoomRename, roomID, err)
+	}()
+
+	requestID := natsutil.RequestIDFromContext(ctx)
+	if requestID == "" {
+		return permanent(errcode.BadRequest("missing X-Request-ID"))
+	}
+	if !idgen.IsValidUUID(requestID) {
+		return permanent(errcode.BadRequest("invalid X-Request-ID: must be a hyphenated UUID"))
+	}
+
+	var req model.RenameRoomRequest
+	if err = json.Unmarshal(data, &req); err != nil {
+		return permanent(errcode.BadRequest(fmt.Sprintf("unmarshal rename request: %s", err.Error())))
+	}
+	requesterAccount, roomID = req.Account, req.RoomID
+	slog.Info("processing room.rename",
+		"op", model.AsyncJobOpRoomRename,
+		"requester", req.Account,
+		"roomID", req.RoomID,
+		"requestID", requestID)
+
+	if err = h.store.UpdateRoomName(ctx, req.RoomID, req.NewName); err != nil {
+		if errors.Is(err, ErrRoomNotFound) {
+			return permanent(errcode.NotFound("room not found"))
+		}
+		if errors.Is(err, ErrNotChannelRoom) {
+			return permanent(errcode.BadRequest("rename is only allowed in channel rooms", errcode.WithReason(errcode.RoomNonChannelOperation)))
+		}
+		return fmt.Errorf("update room name: %w", err)
+	}
+	if err = h.store.UpdateSubscriptionNamesForRoom(ctx, req.RoomID, req.NewName); err != nil {
+		return fmt.Errorf("update subscription names: %w", err)
+	}
+
+	sysData, err := json.Marshal(model.RoomRenamedSysData{NewName: req.NewName, ByAccount: req.Account})
+	if err != nil {
+		return fmt.Errorf("marshal sys data: %w", err)
+	}
+	requester, err := h.store.GetUser(ctx, req.Account)
+	if err != nil && !errors.Is(err, ErrUserNotFound) {
+		return fmt.Errorf("get requester for sys message: %w", err)
+	}
+	requesterLabel := req.Account
+	if requester != nil {
+		requesterLabel = displayName(requester)
+	}
+	msg := model.Message{
+		ID:          idgen.MessageIDFromRequestID(requestID, "room_renamed"),
+		RoomID:      req.RoomID,
+		UserAccount: req.Account,
+		Type:        model.MessageTypeRoomRenamed,
+		Content:     fmt.Sprintf("%q renamed the channel to %q", requesterLabel, req.NewName),
+		SysMsgData:  sysData,
+		CreatedAt:   time.UnixMilli(req.Timestamp).UTC(),
+	}
+	if err = h.publishCanonical(ctx, &msg, h.siteID, time.Now().UTC()); err != nil {
+		return fmt.Errorf("publish room_renamed sys message: %w", err)
+	}
+
+	// Single room-scoped event (the room_renamed sys message published above)
+	// is sufficient — clients update their subscription state from the room
+	// event without per-subscription fan-out.
+	subs, err := h.store.ListByRoom(ctx, req.RoomID)
+	if err != nil {
+		return fmt.Errorf("list subscriptions: %w", err)
+	}
+
+	accounts := make([]string, 0, len(subs))
+	for i := range subs {
+		accounts = append(accounts, subs[i].User.Account)
+	}
+	remoteSites, err := h.findRemoteSitesForAccounts(ctx, accounts)
+	if err != nil {
+		return fmt.Errorf("find remote sites for outbox fan-out: %w", err)
+	}
+	renamedPayload, err := json.Marshal(model.RoomRenamedOutboxPayload{
+		RoomID: req.RoomID, NewName: req.NewName, Timestamp: req.Timestamp,
+	})
+	if err != nil {
+		return fmt.Errorf("marshal rename outbox payload: %w", err)
+	}
+	for _, remoteSiteID := range remoteSites {
+		evt := model.OutboxEvent{
+			Type: model.OutboxRoomRenamed, SiteID: h.siteID, DestSiteID: remoteSiteID,
+			Payload: renamedPayload, Timestamp: time.Now().UTC().UnixMilli(),
+		}
+		evtData, mErr := json.Marshal(evt)
+		if mErr != nil {
+			return fmt.Errorf("marshal rename outbox event: %w", mErr)
+		}
+		if err = h.publish(ctx, subject.Outbox(h.siteID, remoteSiteID, model.OutboxRoomRenamed),
+			evtData, natsutil.OutboxDedupID(ctx, remoteSiteID, requestID)); err != nil {
+			return fmt.Errorf("publish rename outbox to %s: %w", remoteSiteID, err)
+		}
+	}
+	return nil
 }
 
 func (h *Handler) publishSyncDMOutbox(ctx context.Context, room *model.Room, requester, other *model.User, joinedAt time.Time) error {

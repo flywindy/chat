@@ -43,6 +43,20 @@ func (m *MockRoomStore) EXPECT() *MockRoomStoreMockRecorder {
 	return m.recorder
 }
 
+// ApplySubscriptionVisibility mocks base method.
+func (m *MockRoomStore) ApplySubscriptionVisibility(ctx context.Context, roomID string, restricted, externalAccess bool, ownerAccount string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ApplySubscriptionVisibility", ctx, roomID, restricted, externalAccess, ownerAccount)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// ApplySubscriptionVisibility indicates an expected call of ApplySubscriptionVisibility.
+func (mr *MockRoomStoreMockRecorder) ApplySubscriptionVisibility(ctx, roomID, restricted, externalAccess, ownerAccount any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ApplySubscriptionVisibility", reflect.TypeOf((*MockRoomStore)(nil).ApplySubscriptionVisibility), ctx, roomID, restricted, externalAccess, ownerAccount)
+}
+
 // CountMembersAndOwners mocks base method.
 func (m *MockRoomStore) CountMembersAndOwners(ctx context.Context, roomID string) (*RoomCounts, error) {
 	m.ctrl.T.Helper()
@@ -131,6 +145,21 @@ func (m *MockRoomStore) FindExistingOrgIDs(ctx context.Context, orgIDs []string)
 func (mr *MockRoomStoreMockRecorder) FindExistingOrgIDs(ctx, orgIDs any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindExistingOrgIDs", reflect.TypeOf((*MockRoomStore)(nil).FindExistingOrgIDs), ctx, orgIDs)
+}
+
+// FindUsersByAccounts mocks base method.
+func (m *MockRoomStore) FindUsersByAccounts(ctx context.Context, accounts []string) ([]model.User, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FindUsersByAccounts", ctx, accounts)
+	ret0, _ := ret[0].([]model.User)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FindUsersByAccounts indicates an expected call of FindUsersByAccounts.
+func (mr *MockRoomStoreMockRecorder) FindUsersByAccounts(ctx, accounts any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindUsersByAccounts", reflect.TypeOf((*MockRoomStore)(nil).FindUsersByAccounts), ctx, accounts)
 }
 
 // GetApp mocks base method.
@@ -298,6 +327,21 @@ func (mr *MockRoomStoreMockRecorder) ListRoomsByIDs(ctx, ids any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListRoomsByIDs", reflect.TypeOf((*MockRoomStore)(nil).ListRoomsByIDs), ctx, ids)
 }
 
+// ListSubscriptionsByRoom mocks base method.
+func (m *MockRoomStore) ListSubscriptionsByRoom(ctx context.Context, roomID string) ([]model.Subscription, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListSubscriptionsByRoom", ctx, roomID)
+	ret0, _ := ret[0].([]model.Subscription)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListSubscriptionsByRoom indicates an expected call of ListSubscriptionsByRoom.
+func (mr *MockRoomStoreMockRecorder) ListSubscriptionsByRoom(ctx, roomID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListSubscriptionsByRoom", reflect.TypeOf((*MockRoomStore)(nil).ListSubscriptionsByRoom), ctx, roomID)
+}
+
 // MinSubscriptionLastSeenByRoomID mocks base method.
 func (m *MockRoomStore) MinSubscriptionLastSeenByRoomID(ctx context.Context, roomID string) (*time.Time, error) {
 	m.ctrl.T.Helper()
@@ -355,6 +399,20 @@ func (m *MockRoomStore) UpdateRoomMinUserLastSeenAt(ctx context.Context, roomID 
 func (mr *MockRoomStoreMockRecorder) UpdateRoomMinUserLastSeenAt(ctx, roomID, t any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateRoomMinUserLastSeenAt", reflect.TypeOf((*MockRoomStore)(nil).UpdateRoomMinUserLastSeenAt), ctx, roomID, t)
+}
+
+// UpdateRoomVisibility mocks base method.
+func (m *MockRoomStore) UpdateRoomVisibility(ctx context.Context, roomID string, restricted, externalAccess bool) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UpdateRoomVisibility", ctx, roomID, restricted, externalAccess)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// UpdateRoomVisibility indicates an expected call of UpdateRoomVisibility.
+func (mr *MockRoomStoreMockRecorder) UpdateRoomVisibility(ctx, roomID, restricted, externalAccess any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateRoomVisibility", reflect.TypeOf((*MockRoomStore)(nil).UpdateRoomVisibility), ctx, roomID, restricted, externalAccess)
 }
 
 // UpdateSubscriptionRead mocks base method.

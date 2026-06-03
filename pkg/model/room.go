@@ -25,7 +25,8 @@ type Room struct {
 	CreatedAt         time.Time  `json:"createdAt" bson:"createdAt"`
 	UpdatedAt         time.Time  `json:"updatedAt" bson:"updatedAt"`
 	Restricted        bool       `json:"restricted,omitempty" bson:"restricted,omitempty"`
-	UIDs              []string   `json:"uids,omitempty"     bson:"uids,omitempty"`
+	ExternalAccess    bool       `json:"externalAccess,omitempty" bson:"externalAccess,omitempty"`
+	UIDs              []string   `json:"uids,omitempty" bson:"uids,omitempty"`
 	Accounts          []string   `json:"accounts,omitempty" bson:"accounts,omitempty"`
 }
 
@@ -62,4 +63,30 @@ func BuildDMParticipants(a, b *User) (uids, accounts []string) {
 		return []string{a.ID, b.ID}, []string{a.Account, b.Account}
 	}
 	return []string{b.ID, a.ID}, []string{b.Account, a.Account}
+}
+
+// RenameRoomRequest is the canonical event for renaming a channel room.
+// Clients send only NewName; RoomID and Account are derived from the request
+// subject by room-service and Timestamp is stamped at acceptance — those three
+// fields are server-set before the canonical event is published, never trusted
+// from the wire body.
+type RenameRoomRequest struct {
+	RoomID    string `json:"roomId"    bson:"roomId"`
+	NewName   string `json:"newName"   bson:"newName"`
+	Account   string `json:"account"   bson:"account"`
+	Timestamp int64  `json:"timestamp" bson:"timestamp"`
+}
+
+// RoomRestrictedRequest is the request body for the sync chat.server.> RPC
+// that sets Restricted + ExternalAccess on a channel room. When
+// Restricted=true and OwnerAccount is non-empty, that account becomes sole
+// owner regardless of prior role. Account identifies the admin caller for
+// audit / sys-message authorship.
+type RoomRestrictedRequest struct {
+	RoomID         string `json:"roomId"                 bson:"roomId"`
+	Restricted     bool   `json:"restricted"             bson:"restricted"`
+	ExternalAccess bool   `json:"externalAccess"         bson:"externalAccess"`
+	OwnerAccount   string `json:"ownerAccount,omitempty" bson:"ownerAccount,omitempty"`
+	Account        string `json:"account"                bson:"account"`
+	Timestamp      int64  `json:"timestamp"              bson:"timestamp"`
 }

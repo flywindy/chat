@@ -88,6 +88,8 @@ const (
 	OutboxSubscriptionFavoriteToggled OutboxEventType = "subscription_favorite_toggled"
 	OutboxThreadSubscriptionUpserted  OutboxEventType = "thread_subscription_upserted"
 	OutboxThreadRead                  OutboxEventType = "thread_read"
+	OutboxRoomRenamed                 OutboxEventType = "room_renamed"
+	OutboxRoomRestricted              OutboxEventType = "room_restricted"
 )
 
 // SubscriptionReadEvent is the OutboxEvent.Payload for type
@@ -160,6 +162,8 @@ const (
 	RoomEventMessageDeleted  RoomEventType = "message_deleted"
 	RoomEventMessagePinned   RoomEventType = "message_pinned"
 	RoomEventMessageUnpinned RoomEventType = "message_unpinned"
+	RoomEventRoomRenamed     RoomEventType = "room_renamed"
+	RoomEventRoomRestricted  RoomEventType = "room_restricted"
 )
 
 // RoomEvent is the live fan-out event for a newly created message
@@ -239,6 +243,38 @@ type UnpinRoomEvent struct {
 	MessageID  string        `json:"messageId" bson:"messageId"`
 	UnpinnedBy *Participant  `json:"unpinnedBy,omitempty" bson:"unpinnedBy,omitempty"`
 	UnpinnedAt time.Time     `json:"unpinnedAt" bson:"unpinnedAt"`
+}
+
+// RoomRenamedRoomEvent is the live event published when a channel is renamed.
+// Flat shape (same convention as EditRoomEvent / DeleteRoomEvent) — no
+// zero-valued RoomEvent base fields shipped to clients. Drives the client's
+// local subscription `name` update; no separate `subscription.update` fan-out
+// fires for renames.
+type RoomRenamedRoomEvent struct {
+	Type      RoomEventType `json:"type" bson:"type"`
+	RoomID    string        `json:"roomId" bson:"roomId"`
+	SiteID    string        `json:"siteId" bson:"siteId"`
+	Timestamp int64         `json:"timestamp" bson:"timestamp"`
+	NewName   string        `json:"newName" bson:"newName"`
+	ByAccount string        `json:"byAccount" bson:"byAccount"`
+	RenamedAt time.Time     `json:"renamedAt" bson:"renamedAt"`
+}
+
+// RoomRestrictedRoomEvent is the live event published when a channel's
+// restricted / externalAccess flags change. Flat shape. `OwnerAccount` is
+// non-empty only on the unrestricted→restricted transition (when an owner is
+// designated). Drives the client's local subscription `restricted` /
+// `externalAccess` / `roles` update.
+type RoomRestrictedRoomEvent struct {
+	Type           RoomEventType `json:"type" bson:"type"`
+	RoomID         string        `json:"roomId" bson:"roomId"`
+	SiteID         string        `json:"siteId" bson:"siteId"`
+	Timestamp      int64         `json:"timestamp" bson:"timestamp"`
+	Restricted     bool          `json:"restricted" bson:"restricted"`
+	ExternalAccess bool          `json:"externalAccess" bson:"externalAccess"`
+	OwnerAccount   string        `json:"ownerAccount,omitempty" bson:"ownerAccount,omitempty"`
+	ByAccount      string        `json:"byAccount" bson:"byAccount"`
+	ChangedAt      time.Time     `json:"changedAt" bson:"changedAt"`
 }
 
 // RemovedSubscriptionRef is the minimal subscription identity carried on a
@@ -357,6 +393,7 @@ const (
 	AsyncJobOpRoomMemberRemove     = "room.member.remove"
 	AsyncJobOpRoomMemberRemoveOrg  = "room.member.remove_org"
 	AsyncJobOpRoomMemberRoleUpdate = "room.member.role_update"
+	AsyncJobOpRoomRename           = "room.rename"
 )
 
 const (
@@ -368,6 +405,11 @@ const (
 	MessageTypeMemberRemoved = "member_removed"
 	// MessageTypeMemberLeft is the system-message type emitted when a member self-leaves.
 	MessageTypeMemberLeft = "member_left"
+	// MessageTypeRoomRenamed is the system-message type emitted when a channel is renamed.
+	MessageTypeRoomRenamed = "room_renamed"
+	// MessageTypeRoomRestricted is the system-message type emitted when a
+	// channel's Restricted/ExternalAccess flags change.
+	MessageTypeRoomRestricted = "room_restricted"
 )
 
 const (
@@ -390,3 +432,21 @@ const CreateRoomReplyAccepted = "accepted"
 // CreateRoomStatusExists indicates the requested DM already existed; RoomID is
 // the existing room. Clients treat it as success and open that room.
 const CreateRoomStatusExists = "exists"
+
+// RoomRenamedOutboxPayload is wrapped in OutboxEvent.Payload for OutboxRoomRenamed.
+type RoomRenamedOutboxPayload struct {
+	RoomID    string `json:"roomId"    bson:"roomId"`
+	NewName   string `json:"newName"   bson:"newName"`
+	Timestamp int64  `json:"timestamp" bson:"timestamp"`
+}
+
+// RoomRestrictedOutboxPayload is wrapped in OutboxEvent.Payload for
+// OutboxRoomRestricted. When OwnerAccount is non-empty AND Restricted is
+// true, the destination $cond promotes that account to sole owner.
+type RoomRestrictedOutboxPayload struct {
+	RoomID         string `json:"roomId"                 bson:"roomId"`
+	Restricted     bool   `json:"restricted"             bson:"restricted"`
+	ExternalAccess bool   `json:"externalAccess"         bson:"externalAccess"`
+	OwnerAccount   string `json:"ownerAccount,omitempty" bson:"ownerAccount,omitempty"`
+	Timestamp      int64  `json:"timestamp"              bson:"timestamp"`
+}

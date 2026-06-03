@@ -9,12 +9,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/Marz32onE/instrumentation-go/otel-nats/otelnats"
 	"github.com/gocql/gocql"
 	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -25,6 +27,7 @@ import (
 	"github.com/hmchangw/chat/pkg/model"
 	"github.com/hmchangw/chat/pkg/natsutil"
 	"github.com/hmchangw/chat/pkg/roomkeystore"
+	"github.com/hmchangw/chat/pkg/stream"
 	"github.com/hmchangw/chat/pkg/subject"
 	"github.com/hmchangw/chat/pkg/testutil"
 )
@@ -1077,12 +1080,12 @@ func TestAddMembers_SameSiteChannel_RoomMembersPath(t *testing.T) {
 	// expandChannelRefs uses store.ListRoomMembers and never invokes the client.
 	var publishedSubj string
 	var publishedData []byte
-	publish := func(_ context.Context, subj string, data []byte) error {
+	publish := func(_ context.Context, subj string, data []byte, _ string) error {
 		publishedSubj = subj
 		publishedData = data
 		return nil
 	}
-	handler := NewHandler(store, keyStore, nil, nil, "site-a", 1000, 500, 5*time.Second, publish, func(context.Context, string, []byte) error { return nil })
+	handler := NewHandler(store, keyStore, nil, nil, "site-a", 1000, 500, 5*time.Second, 5, publish, func(context.Context, string, []byte) error { return nil })
 
 	req := model.AddMembersRequest{
 		Channels: []model.ChannelRef{{RoomID: "source", SiteID: "site-a"}},
@@ -1141,12 +1144,12 @@ func TestAddMembers_SameSiteChannel_SubscriptionsFallback(t *testing.T) {
 	// Same-site only: nil memberListClient is safe (the same-site branch never invokes it).
 	var publishedSubj string
 	var publishedData []byte
-	publish := func(_ context.Context, subj string, data []byte) error {
+	publish := func(_ context.Context, subj string, data []byte, _ string) error {
 		publishedSubj = subj
 		publishedData = data
 		return nil
 	}
-	handler := NewHandler(store, keyStore, nil, nil, "site-a", 1000, 500, 5*time.Second, publish, func(context.Context, string, []byte) error { return nil })
+	handler := NewHandler(store, keyStore, nil, nil, "site-a", 1000, 500, 5*time.Second, 5, publish, func(context.Context, string, []byte) error { return nil })
 
 	req := model.AddMembersRequest{Channels: []model.ChannelRef{{RoomID: "source", SiteID: "site-a"}}}
 	data, err := json.Marshal(req)
@@ -1188,7 +1191,7 @@ func TestAddMembers_RequesterNotSubscribed_Rejected(t *testing.T) {
 
 	// Same-site only: nil memberListClient is safe — request fails on the same-site
 	// GetSubscription check before reaching the cross-site branch.
-	handler := NewHandler(store, keyStore, nil, nil, "site-a", 1000, 500, 5*time.Second, func(context.Context, string, []byte) error { return nil }, func(context.Context, string, []byte) error { return nil })
+	handler := NewHandler(store, keyStore, nil, nil, "site-a", 1000, 500, 5*time.Second, 5, func(context.Context, string, []byte, string) error { return nil }, func(context.Context, string, []byte) error { return nil })
 
 	req := model.AddMembersRequest{Channels: []model.ChannelRef{{RoomID: "source", SiteID: "site-a"}}}
 	data, err := json.Marshal(req)
@@ -1246,7 +1249,7 @@ func TestAddMembers_TwoSiteEndToEnd(t *testing.T) {
 	mustInsertSub(t, dbB, &model.Subscription{ID: "sb3", RoomID: "source", User: model.SubscriptionUser{ID: "req", Account: "alice"}})
 
 	// Site-B handler registers member.list endpoint (RegisterCRUD subscribes to MemberListWildcard).
-	handlerB := NewHandler(storeB, keyStore, nil, nil, "site-b", 1000, 500, 5*time.Second, func(context.Context, string, []byte) error { return nil }, func(context.Context, string, []byte) error { return nil })
+	handlerB := NewHandler(storeB, keyStore, nil, nil, "site-b", 1000, 500, 5*time.Second, 5, func(context.Context, string, []byte, string) error { return nil }, func(context.Context, string, []byte) error { return nil })
 	require.NoError(t, handlerB.RegisterCRUD(otelNCb))
 	require.NoError(t, otelNCb.NatsConn().Flush())
 
@@ -1261,12 +1264,12 @@ func TestAddMembers_TwoSiteEndToEnd(t *testing.T) {
 	// Capture what site-A publishes to its canonical stream
 	var publishedSubj string
 	var publishedData []byte
-	publish := func(_ context.Context, subj string, data []byte) error {
+	publish := func(_ context.Context, subj string, data []byte, _ string) error {
 		publishedSubj = subj
 		publishedData = data
 		return nil
 	}
-	handlerA := NewHandler(storeA, keyStore, memberListClient, nil, "site-a", 1000, 500, 5*time.Second, publish, func(context.Context, string, []byte) error { return nil })
+	handlerA := NewHandler(storeA, keyStore, memberListClient, nil, "site-a", 1000, 500, 5*time.Second, 5, publish, func(context.Context, string, []byte) error { return nil })
 
 	// Call add-members on site-A with a site-B source channel
 	req := model.AddMembersRequest{Channels: []model.ChannelRef{{RoomID: "source", SiteID: "site-b"}}}
@@ -1326,7 +1329,7 @@ func TestAddMembers_CrossSiteTimeout(t *testing.T) {
 	t.Cleanup(func() { _ = sub.Unsubscribe() })
 
 	memberListClient := NewNATSMemberListClient(nc, 200*time.Millisecond)
-	handler := NewHandler(store, keyStore, memberListClient, nil, "site-a", 1000, 500, 200*time.Millisecond, func(context.Context, string, []byte) error { return nil }, func(context.Context, string, []byte) error { return nil })
+	handler := NewHandler(store, keyStore, memberListClient, nil, "site-a", 1000, 500, 200*time.Millisecond, 5, func(context.Context, string, []byte, string) error { return nil }, func(context.Context, string, []byte) error { return nil })
 
 	req := model.AddMembersRequest{Channels: []model.ChannelRef{{RoomID: "source", SiteID: "site-b"}}}
 	data, err := json.Marshal(req)
@@ -1372,7 +1375,7 @@ func TestRoomsInfoBatchRPC(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = otelNC.Drain() })
 
-	handler := NewHandler(store, keyStore, nil, nil, "site-a", 1000, 500, 5*time.Second, func(context.Context, string, []byte) error { return nil }, func(context.Context, string, []byte) error { return nil })
+	handler := NewHandler(store, keyStore, nil, nil, "site-a", 1000, 500, 5*time.Second, 5, func(context.Context, string, []byte, string) error { return nil }, func(context.Context, string, []byte) error { return nil })
 	require.NoError(t, handler.RegisterCRUD(otelNC))
 	require.NoError(t, otelNC.NatsConn().Flush())
 
@@ -1566,12 +1569,12 @@ func newRoomServiceHandler(t *testing.T, store *MongoStore, keyStore RoomKeyStor
 	t.Helper()
 	var lastSubj string
 	var lastData []byte
-	publish := func(_ context.Context, subj string, data []byte) error {
+	publish := func(_ context.Context, subj string, data []byte, _ string) error {
 		lastSubj = subj
 		lastData = data
 		return nil
 	}
-	h := NewHandler(store, keyStore, nil, nil, siteID, 1000, 500, 5*time.Second, publish, func(context.Context, string, []byte) error { return nil })
+	h := NewHandler(store, keyStore, nil, nil, siteID, 1000, 500, 5*time.Second, 5, publish, func(context.Context, string, []byte) error { return nil })
 	return h, func() (string, []byte) { return lastSubj, lastData }
 }
 
@@ -2143,4 +2146,330 @@ func TestMongoStore_ListRoomMembers_OrgDisplay_FallbackToOrgId_Integration(t *te
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	assert.Equal(t, "Y", got[0].Member.SectName, "no matching users → falls back to member.id")
+}
+
+// setupRoomsStream creates the ROOMS_{siteID} JetStream stream and returns a JetStream
+// client. The stream captures all chat.room.canonical.{siteID}.* events published by
+// the handler's publishToStream closure.
+func setupRoomsStream(t *testing.T, nc *nats.Conn, siteID string) jetstream.JetStream {
+	t.Helper()
+	ctx := context.Background()
+	js, err := jetstream.New(nc)
+	require.NoError(t, err)
+	cfg := stream.Rooms(siteID)
+	_, err = js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
+		Name:     cfg.Name,
+		Subjects: cfg.Subjects,
+	})
+	require.NoError(t, err)
+	return js
+}
+
+// drainJetStreamMsg fetches the first available message from a JetStream consumer
+// with a deadline, then acks it and returns the raw data.
+func drainJetStreamMsg(t *testing.T, cons jetstream.Consumer, timeout time.Duration) []byte {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	msgs, err := cons.Fetch(1, jetstream.FetchMaxWait(timeout))
+	require.NoError(t, err)
+	select {
+	case msg := <-msgs.Messages():
+		require.NotNil(t, msg)
+		require.NoError(t, msg.Ack())
+		return msg.Data()
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for JetStream message")
+		return nil
+	}
+}
+
+// TestIntegration_RoomRename exercises the room.rename RPC end-to-end through NATS.
+func TestIntegration_RoomRename(t *testing.T) {
+	const siteID = "site-rename"
+
+	t.Run("owner can rename a channel — canonical event published", func(t *testing.T) {
+		db := testutil.MongoDB(t, "room-service-rename")
+		store := NewMongoStore(db)
+		ctx := context.Background()
+
+		natsURL := setupNATS(t)
+		clientNC, err := nats.Connect(natsURL)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = clientNC.Drain() })
+
+		// Set up the ROOMS stream so publishToStream can land events.
+		js := setupRoomsStream(t, clientNC, siteID)
+
+		// Wire a JetStream-backed publishToStream on the handler.
+		handlerNC, err := otelnats.Connect(natsURL)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = handlerNC.Drain() })
+
+		handlerJS, err := jetstream.New(handlerNC.NatsConn())
+		require.NoError(t, err)
+
+		publishToStream := func(pCtx context.Context, subj string, data []byte, _ string) error {
+			msg := natsutil.NewMsg(pCtx, subj, data)
+			_, err := handlerJS.PublishMsg(pCtx, msg)
+			return err
+		}
+
+		keyStore := setupValkey(t)
+		h := NewHandler(store, keyStore, nil, nil, siteID, 1000, 500, 5*time.Second, 5,
+			publishToStream, func(context.Context, string, []byte) error { return nil })
+		require.NoError(t, h.RegisterCRUD(handlerNC))
+		require.NoError(t, handlerNC.NatsConn().Flush())
+
+		// Seed: channel room + alice as owner.
+		const roomID = "room-rename-1"
+		mustInsertRoom(t, db, &model.Room{ID: roomID, Name: "old-name", Type: model.RoomTypeChannel, SiteID: siteID})
+		mustInsertUser(t, db, &model.User{ID: "u-alice", Account: "alice", SiteID: siteID, Roles: []model.UserRole{model.UserRoleUser}})
+		mustInsertSub(t, db, &model.Subscription{
+			ID: idgen.GenerateUUIDv7(), RoomID: roomID, SiteID: siteID,
+			User:  model.SubscriptionUser{ID: "u-alice", Account: "alice"},
+			Roles: []model.Role{model.RoleOwner},
+		})
+
+		// Set up a JetStream consumer to catch the canonical event.
+		cons, err := js.CreateOrUpdateConsumer(ctx, stream.Rooms(siteID).Name, jetstream.ConsumerConfig{
+			Durable:       "test-rename-consumer",
+			AckPolicy:     jetstream.AckExplicitPolicy,
+			FilterSubject: subject.RoomCanonical(siteID, "room.rename"),
+		})
+		require.NoError(t, err)
+
+		reqID := idgen.GenerateRequestID()
+		body, err := json.Marshal(model.RenameRoomRequest{NewName: "new-name"})
+		require.NoError(t, err)
+
+		msg := &nats.Msg{
+			Subject: subject.RoomRename("alice", roomID, siteID),
+			Data:    body,
+			Header:  nats.Header{natsutil.RequestIDHeader: []string{reqID}},
+		}
+		reply, err := clientNC.RequestMsg(msg, 5*time.Second)
+		require.NoError(t, err)
+
+		// Assert accepted response.
+		var resp map[string]string
+		require.NoError(t, json.Unmarshal(reply.Data, &resp))
+		assert.Equal(t, "accepted", resp["status"])
+		assert.Equal(t, reqID, resp["requestId"])
+
+		// Assert canonical event landed on the stream.
+		raw := drainJetStreamMsg(t, cons, 5*time.Second)
+		var event model.RenameRoomRequest
+		require.NoError(t, json.Unmarshal(raw, &event))
+		assert.Equal(t, roomID, event.RoomID)
+		assert.Equal(t, "new-name", event.NewName)
+		assert.Equal(t, "alice", event.Account)
+		assert.NotZero(t, event.Timestamp)
+	})
+
+	t.Run("non-admin non-owner is rejected", func(t *testing.T) {
+		db := testutil.MongoDB(t, "room-service-rename-reject")
+		store := NewMongoStore(db)
+
+		natsURL := setupNATS(t)
+		handlerNC, err := otelnats.Connect(natsURL)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = handlerNC.Drain() })
+
+		clientNC, err := nats.Connect(natsURL)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = clientNC.Drain() })
+
+		keyStore := setupValkey(t)
+		h := NewHandler(store, keyStore, nil, nil, siteID, 1000, 500, 5*time.Second, 5,
+			func(context.Context, string, []byte, string) error { return nil },
+			func(context.Context, string, []byte) error { return nil })
+		require.NoError(t, h.RegisterCRUD(handlerNC))
+		require.NoError(t, handlerNC.NatsConn().Flush())
+
+		const roomID = "room-rename-2"
+		mustInsertRoom(t, db, &model.Room{ID: roomID, Name: "my-channel", Type: model.RoomTypeChannel, SiteID: siteID})
+		// bob is a plain member, not an owner or platform admin.
+		mustInsertUser(t, db, &model.User{ID: "u-bob", Account: "bob", SiteID: siteID, Roles: []model.UserRole{model.UserRoleUser}})
+		mustInsertSub(t, db, &model.Subscription{
+			ID: idgen.GenerateUUIDv7(), RoomID: roomID, SiteID: siteID,
+			User:  model.SubscriptionUser{ID: "u-bob", Account: "bob"},
+			Roles: []model.Role{model.RoleMember},
+		})
+
+		reqID := idgen.GenerateRequestID()
+		body, err := json.Marshal(model.RenameRoomRequest{NewName: "hacked-name"})
+		require.NoError(t, err)
+
+		msg := &nats.Msg{
+			Subject: subject.RoomRename("bob", roomID, siteID),
+			Data:    body,
+			Header:  nats.Header{natsutil.RequestIDHeader: []string{reqID}},
+		}
+		reply, err := clientNC.RequestMsg(msg, 5*time.Second)
+		require.NoError(t, err)
+
+		var errResp errcode.Error
+		require.NoError(t, json.Unmarshal(reply.Data, &errResp))
+		assert.Contains(t, errResp.Message, "only owners or platform admins can rename a channel")
+	})
+}
+
+// TestIntegration_RoomRestricted exercises the room.restricted server-to-server
+// RPC end-to-end through NATS. The handler does all the work synchronously and
+// the reply carries the actual result.
+func TestIntegration_RoomRestricted(t *testing.T) {
+	const siteID = "site-restricted"
+
+	t.Run("admin syncs restricted state — sys message published + Mongo updated", func(t *testing.T) {
+		db := testutil.MongoDB(t, "room-service-restricted")
+		store := NewMongoStore(db)
+		ctx := context.Background()
+
+		natsURL := setupNATS(t)
+		clientNC, err := nats.Connect(natsURL)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = clientNC.Drain() })
+
+		handlerNC, err := otelnats.Connect(natsURL)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = handlerNC.Drain() })
+
+		// Capture publishes via the handler's stream-publish callback so we can
+		// assert the sys message lands without standing up the MESSAGES_CANONICAL
+		// stream just for this test.
+		type captured struct {
+			subj string
+			data []byte
+		}
+		var (
+			mu   sync.Mutex
+			pubs []captured
+		)
+		publishToStream := func(_ context.Context, subj string, data []byte, _ string) error {
+			mu.Lock()
+			defer mu.Unlock()
+			cp := make([]byte, len(data))
+			copy(cp, data)
+			pubs = append(pubs, captured{subj: subj, data: cp})
+			return nil
+		}
+
+		keyStore := setupValkey(t)
+		h := NewHandler(store, keyStore, nil, nil, siteID, 1000, 500, 5*time.Second, 5,
+			publishToStream, func(context.Context, string, []byte) error { return nil })
+		require.NoError(t, h.RegisterCRUD(handlerNC))
+		require.NoError(t, handlerNC.NatsConn().Flush())
+
+		// Seed: channel room + admin + 5 members (the restricted-transition
+		// guard requires UserCount >= 5).
+		const roomID = "room-restricted-1"
+		mustInsertRoom(t, db, &model.Room{
+			ID: roomID, Name: "big-channel", Type: model.RoomTypeChannel,
+			SiteID: siteID, UserCount: 5,
+		})
+		mustInsertUser(t, db, &model.User{
+			ID: "u-admin1", Account: "admin1", SiteID: siteID,
+			Roles: []model.UserRole{model.UserRoleAdmin},
+		})
+		for i := 0; i < 5; i++ {
+			mustInsertSub(t, db, &model.Subscription{
+				ID: idgen.GenerateUUIDv7(), RoomID: roomID, SiteID: siteID,
+				User: model.SubscriptionUser{
+					ID:      fmt.Sprintf("u-member-%d", i),
+					Account: fmt.Sprintf("member%d", i),
+				},
+				Roles: []model.Role{model.RoleMember},
+			})
+		}
+		mustInsertSub(t, db, &model.Subscription{
+			ID: idgen.GenerateUUIDv7(), RoomID: roomID, SiteID: siteID,
+			User:  model.SubscriptionUser{ID: "u-admin1", Account: "admin1"},
+			Roles: []model.Role{model.RoleMember},
+		})
+
+		reqID := idgen.GenerateRequestID()
+		body, err := json.Marshal(model.RoomRestrictedRequest{
+			RoomID: roomID, Account: "admin1",
+			Restricted:   true,
+			OwnerAccount: "admin1",
+		})
+		require.NoError(t, err)
+
+		msg := &nats.Msg{
+			Subject: subject.RoomRestricted(siteID),
+			Data:    body,
+			Header:  nats.Header{natsutil.RequestIDHeader: []string{reqID}},
+		}
+		reply, err := clientNC.RequestMsg(msg, 5*time.Second)
+		require.NoError(t, err)
+
+		// Sync reply confirms the actual result.
+		var resp map[string]string
+		require.NoError(t, json.Unmarshal(reply.Data, &resp))
+		assert.Equal(t, "ok", resp["status"])
+		assert.Equal(t, reqID, resp["requestId"])
+
+		// Mongo: room flags updated.
+		updatedRoom, err := store.GetRoom(ctx, roomID)
+		require.NoError(t, err)
+		assert.True(t, updatedRoom.Restricted)
+
+		// Sys message published to canonical messages stream.
+		mu.Lock()
+		var sawSysMsg bool
+		for _, p := range pubs {
+			if p.subj == subject.MsgCanonicalCreated(siteID) {
+				sawSysMsg = true
+				var msgEvt model.MessageEvent
+				require.NoError(t, json.Unmarshal(p.data, &msgEvt))
+				assert.Equal(t, model.MessageTypeRoomRestricted, msgEvt.Message.Type)
+			}
+		}
+		mu.Unlock()
+		assert.True(t, sawSysMsg, "expected room_restricted sys message to be published")
+	})
+
+	t.Run("non-admin requester is rejected", func(t *testing.T) {
+		db := testutil.MongoDB(t, "room-service-restricted-reject")
+		store := NewMongoStore(db)
+
+		natsURL := setupNATS(t)
+		handlerNC, err := otelnats.Connect(natsURL)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = handlerNC.Drain() })
+
+		clientNC, err := nats.Connect(natsURL)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = clientNC.Drain() })
+
+		keyStore := setupValkey(t)
+		h := NewHandler(store, keyStore, nil, nil, siteID, 1000, 500, 5*time.Second, 5,
+			func(context.Context, string, []byte, string) error { return nil },
+			func(context.Context, string, []byte) error { return nil })
+		require.NoError(t, h.RegisterCRUD(handlerNC))
+		require.NoError(t, handlerNC.NatsConn().Flush())
+
+		const roomID = "room-restricted-2"
+		mustInsertRoom(t, db, &model.Room{ID: roomID, Name: "my-channel", Type: model.RoomTypeChannel, SiteID: siteID, UserCount: 5})
+		mustInsertUser(t, db, &model.User{ID: "u-carol", Account: "carol", SiteID: siteID, Roles: []model.UserRole{model.UserRoleUser}})
+
+		reqID := idgen.GenerateRequestID()
+		body, err := json.Marshal(model.RoomRestrictedRequest{
+			RoomID: roomID, Account: "carol", Restricted: true,
+		})
+		require.NoError(t, err)
+
+		msg := &nats.Msg{
+			Subject: subject.RoomRestricted(siteID),
+			Data:    body,
+			Header:  nats.Header{natsutil.RequestIDHeader: []string{reqID}},
+		}
+		reply, err := clientNC.RequestMsg(msg, 5*time.Second)
+		require.NoError(t, err)
+
+		var errResp errcode.Error
+		require.NoError(t, json.Unmarshal(reply.Data, &errResp))
+		assert.Contains(t, errResp.Message, "only admins can change room restricted state")
+	})
 }

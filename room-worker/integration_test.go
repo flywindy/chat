@@ -831,7 +831,9 @@ func TestProcessAddMembers_OutboxPerRemoteSite(t *testing.T) {
 	require.Len(t, pubsC, 1)
 	assert.Empty(t, pubsA, "no member_added outbox to home site-A")
 
-	// Decode site-B event.
+	// Each remote site receives only its own homed accounts — bob (site-B) and
+	// ian (site-C) are partitioned by the userMap[].SiteID filter at the publish
+	// site so we never ship cross-site account identities over the wire.
 	var envB model.OutboxEvent
 	require.NoError(t, json.Unmarshal(pubsB[0].data, &envB))
 	var evtB model.MemberAddEvent
@@ -841,7 +843,6 @@ func TestProcessAddMembers_OutboxPerRemoteSite(t *testing.T) {
 	assert.Equal(t, "site-A", evtB.SiteID)
 	assert.Equal(t, reqID+":site-B", pubsB[0].msgID)
 
-	// Decode site-C event.
 	var envC model.OutboxEvent
 	require.NoError(t, json.Unmarshal(pubsC[0].data, &envC))
 	var evtC model.MemberAddEvent
@@ -1743,6 +1744,43 @@ func TestHandler_ProcessCreateRoom_DMConcurrentByCounterpart_Integration(t *test
 	}
 }
 
+func newSubFixture(id, userID, account, roomID, name string) model.Subscription {
+	s := newSubFixtureWithRoles(id, userID, account, roomID, []model.Role{model.RoleMember})
+	s.Name = name
+	return s
+}
+
+func newSubFixtureWithRoles(id, userID, account, roomID string, roles []model.Role) model.Subscription {
+	return model.Subscription{
+		ID:       id,
+		User:     model.SubscriptionUser{ID: userID, Account: account},
+		RoomID:   roomID,
+		SiteID:   "site-a",
+		Name:     "n",
+		Roles:    roles,
+		RoomType: model.RoomTypeChannel,
+		JoinedAt: time.Now().UTC(),
+	}
+}
+
+func TestMongoStore_UpdateRoomName(t *testing.T) {
+	ctx := context.Background()
+	db := testutil.MongoDB(t, "room-worker-rename")
+	store := NewMongoStore(db)
+
+	_, err := db.Collection("rooms").InsertOne(ctx, model.Room{
+		ID: "r1", Name: "old", Type: model.RoomTypeChannel, SiteID: "site-a",
+		CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+	})
+	require.NoError(t, err)
+	require.NoError(t, store.UpdateRoomName(ctx, "r1", "new"))
+	got, err := store.GetRoom(ctx, "r1")
+	require.NoError(t, err)
+	assert.Equal(t, "new", got.Name)
+
+	assert.ErrorIs(t, store.UpdateRoomName(ctx, "missing", "x"), ErrRoomNotFound)
+}
+
 // TestHandler_ProcessCreateRoom_RecoversFromMidWriteCrash exercises the
 // recovery path when a worker crashed AFTER CreateRoom succeeded but BEFORE
 // BulkCreateSubscriptions wrote any subs. JetStream redelivers the canonical
@@ -1801,4 +1839,96 @@ func TestHandler_ProcessCreateRoom_RecoversFromMidWriteCrash(t *testing.T) {
 	room, err := store.GetRoom(ctx, roomID)
 	require.NoError(t, err)
 	assert.Equal(t, 2, room.UserCount, "ReconcileMemberCounts ran on retry")
+}
+
+func TestIntegration_ProcessRoomRename(t *testing.T) {
+	ctx := context.Background()
+	db := testutil.MongoDB(t, "room-worker-rename-integ")
+	store := NewMongoStore(db)
+
+	const (
+		siteID     = "site-a"
+		remoteSite = "site-b"
+		roomID     = "r-rename-1"
+		oldName    = "old-name"
+		newName    = "new-name"
+	)
+
+	// Seed: channel room + 2 local subs + 1 remote sub + 3 users.
+	mustInsertRoom(t, db, &model.Room{
+		ID: roomID, Name: oldName, Type: model.RoomTypeChannel, SiteID: siteID,
+		CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+	})
+	mustInsertSub(t, db, &model.Subscription{
+		ID: idgen.GenerateUUIDv7(), User: model.SubscriptionUser{ID: "u1", Account: "alice"},
+		RoomID: roomID, SiteID: siteID, Name: oldName, RoomType: model.RoomTypeChannel,
+		Roles: []model.Role{model.RoleOwner}, JoinedAt: time.Now().UTC(),
+	})
+	mustInsertSub(t, db, &model.Subscription{
+		ID: idgen.GenerateUUIDv7(), User: model.SubscriptionUser{ID: "u2", Account: "bob"},
+		RoomID: roomID, SiteID: siteID, Name: oldName, RoomType: model.RoomTypeChannel,
+		Roles: []model.Role{model.RoleMember}, JoinedAt: time.Now().UTC(),
+	})
+	mustInsertSub(t, db, &model.Subscription{
+		ID: idgen.GenerateUUIDv7(), User: model.SubscriptionUser{ID: "u3", Account: "carol"},
+		RoomID: roomID, SiteID: siteID, Name: oldName, RoomType: model.RoomTypeChannel,
+		Roles: []model.Role{model.RoleMember}, JoinedAt: time.Now().UTC(),
+	})
+	mustInsertUser(t, db, &model.User{ID: "u1", Account: "alice", SiteID: siteID})
+	mustInsertUser(t, db, &model.User{ID: "u2", Account: "bob", SiteID: siteID})
+	mustInsertUser(t, db, &model.User{ID: "u3", Account: "carol", SiteID: remoteSite})
+
+	cap := &publishCapture{}
+	h := NewHandler(store, siteID, cap.fn(), testKeyStore, testKeySender)
+	const reqID = "01970a4f-8c2d-7c9a-abcd-e0123456789a"
+	ctx = natsutil.WithRequestID(ctx, reqID)
+
+	body, err := json.Marshal(model.RenameRoomRequest{
+		RoomID:    roomID,
+		NewName:   newName,
+		Account:   "alice",
+		Timestamp: time.Now().UTC().UnixMilli(),
+	})
+	require.NoError(t, err)
+	require.NoError(t, h.processRoomRename(ctx, body))
+
+	// Room name updated in Mongo.
+	room, err := store.GetRoom(ctx, roomID)
+	require.NoError(t, err)
+	assert.Equal(t, newName, room.Name, "room name must be updated")
+
+	// All subscriptions renamed.
+	subs, err := store.ListByRoom(ctx, roomID)
+	require.NoError(t, err)
+	for _, sub := range subs {
+		assert.Equal(t, newName, sub.Name, "sub %s name must be updated", sub.User.Account)
+	}
+
+	// One sys message published to canonical.
+	sysPubs := cap.outboxOnPrefix(subject.MsgCanonicalCreated(siteID))
+	require.Len(t, sysPubs, 1, "exactly one sys message published for room rename")
+	var sysEvt model.MessageEvent
+	require.NoError(t, json.Unmarshal(sysPubs[0].data, &sysEvt))
+	assert.Equal(t, model.MessageTypeRoomRenamed, sysEvt.Message.Type)
+	assert.Equal(t, "alice", sysEvt.Message.UserAccount)
+
+	// Rename publishes a single room-scoped sys message via canonical; no
+	// per-subscription fan-out — clients derive their state from the room event.
+	cap.mu.Lock()
+	for _, p := range cap.captured {
+		assert.False(t,
+			strings.HasPrefix(p.subject, "chat.user.") && strings.HasSuffix(p.subject, ".event.subscription.update"),
+			"rename must not fan out subscription.update events (got %s)", p.subject)
+	}
+	cap.mu.Unlock()
+
+	// One outbox publish to remote site-b.
+	outboxPubs := cap.outboxOnPrefix(subject.Outbox(siteID, remoteSite, model.OutboxRoomRenamed))
+	require.Len(t, outboxPubs, 1, "exactly one outbox publish to remote site-b")
+	var outboxEvt model.OutboxEvent
+	require.NoError(t, json.Unmarshal(outboxPubs[0].data, &outboxEvt))
+	var outboxPayload model.RoomRenamedOutboxPayload
+	require.NoError(t, json.Unmarshal(outboxEvt.Payload, &outboxPayload))
+	assert.Equal(t, roomID, outboxPayload.RoomID)
+	assert.Equal(t, newName, outboxPayload.NewName)
 }

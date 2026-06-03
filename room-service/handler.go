@@ -20,6 +20,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/sync/errgroup"
 
+	"github.com/hmchangw/chat/pkg/displayfmt"
 	"github.com/hmchangw/chat/pkg/errcode"
 	"github.com/hmchangw/chat/pkg/errcode/errnats"
 	"github.com/hmchangw/chat/pkg/idgen"
@@ -38,29 +39,31 @@ type Handler struct {
 	// at-rest DEK creation at room-create time (message-worker's lazy create
 	// still covers remote sites and pre-rollout rooms). Injected as a field
 	// rather than a constructor arg to avoid churning every NewHandler caller.
-	dekProvisioner    DEKProvisioner
-	memberListClient  MemberListClient
-	msgReader         MessageReader
-	siteID            string
-	maxRoomSize       int
-	maxBatchSize      int
-	memberListTimeout time.Duration
-	publishToStream   func(ctx context.Context, subj string, data []byte) error
-	publishCore       func(ctx context.Context, subj string, data []byte) error
+	dekProvisioner           DEKProvisioner
+	memberListClient         MemberListClient
+	msgReader                MessageReader
+	siteID                   string
+	maxRoomSize              int
+	maxBatchSize             int
+	memberListTimeout        time.Duration
+	publishToStream          func(ctx context.Context, subj string, data []byte, msgID string) error
+	publishCore              func(ctx context.Context, subj string, data []byte) error
+	restrictedRoomMinMembers int
 }
 
-func NewHandler(store RoomStore, keyStore RoomKeyStore, memberListClient MemberListClient, msgReader MessageReader, siteID string, maxRoomSize, maxBatchSize int, memberListTimeout time.Duration, publishToStream func(context.Context, string, []byte) error, publishCore func(context.Context, string, []byte) error) *Handler {
+func NewHandler(store RoomStore, keyStore RoomKeyStore, memberListClient MemberListClient, msgReader MessageReader, siteID string, maxRoomSize, maxBatchSize int, memberListTimeout time.Duration, restrictedRoomMinMembers int, publishToStream func(context.Context, string, []byte, string) error, publishCore func(context.Context, string, []byte) error) *Handler {
 	return &Handler{
-		store:             store,
-		keyStore:          keyStore,
-		memberListClient:  memberListClient,
-		msgReader:         msgReader,
-		siteID:            siteID,
-		maxRoomSize:       maxRoomSize,
-		maxBatchSize:      maxBatchSize,
-		memberListTimeout: memberListTimeout,
-		publishToStream:   publishToStream,
-		publishCore:       publishCore,
+		store:                    store,
+		keyStore:                 keyStore,
+		memberListClient:         memberListClient,
+		msgReader:                msgReader,
+		siteID:                   siteID,
+		maxRoomSize:              maxRoomSize,
+		maxBatchSize:             maxBatchSize,
+		memberListTimeout:        memberListTimeout,
+		restrictedRoomMinMembers: restrictedRoomMinMembers,
+		publishToStream:          publishToStream,
+		publishCore:              publishCore,
 	}
 }
 
@@ -127,6 +130,12 @@ func (h *Handler) RegisterCRUD(nc *otelnats.Conn) error {
 	}
 	if _, err := nc.QueueSubscribe(subject.FavoriteToggleWildcard(h.siteID), queue, h.natsFavoriteToggle); err != nil {
 		return fmt.Errorf("subscribe favorite toggle: %w", err)
+	}
+	if _, err := nc.QueueSubscribe(subject.RoomRenameWildcard(h.siteID), queue, h.natsRoomRename); err != nil {
+		return fmt.Errorf("subscribe room rename: %w", err)
+	}
+	if _, err := nc.QueueSubscribe(subject.RoomRestricted(h.siteID), queue, h.natsRoomRestricted); err != nil {
+		return fmt.Errorf("subscribe room restricted: %w", err)
 	}
 	return nil
 }
@@ -376,7 +385,7 @@ func (h *Handler) publishCreateRoom(ctx context.Context, req *model.CreateRoomRe
 	if err != nil {
 		return nil, fmt.Errorf("marshal canonical event: %w", err)
 	}
-	if err := h.publishToStream(ctx, subject.RoomCanonical(h.siteID, "create"), payload); err != nil {
+	if err := h.publishToStream(ctx, subject.RoomCanonical(h.siteID, "create"), payload, ""); err != nil {
 		return nil, fmt.Errorf("publish canonical: %w", err)
 	}
 	return json.Marshal(model.CreateRoomReply{
@@ -633,7 +642,7 @@ func (h *Handler) handleRemoveMember(ctx context.Context, subj string, data []by
 	if err != nil {
 		return nil, fmt.Errorf("marshal remove member request: %w", err)
 	}
-	if err := h.publishToStream(ctx, subject.RoomCanonical(h.siteID, "member.remove"), data); err != nil {
+	if err := h.publishToStream(ctx, subject.RoomCanonical(h.siteID, "member.remove"), data, ""); err != nil {
 		return nil, fmt.Errorf("publish to stream: %w", err)
 	}
 
@@ -721,7 +730,7 @@ func (h *Handler) handleUpdateRole(ctx context.Context, subj string, data []byte
 	if err != nil {
 		return nil, fmt.Errorf("marshal role update request: %w", err)
 	}
-	if err := h.publishToStream(ctx, subject.RoomCanonical(h.siteID, "member.role-update"), data); err != nil {
+	if err := h.publishToStream(ctx, subject.RoomCanonical(h.siteID, "member.role-update"), data, ""); err != nil {
 		return nil, fmt.Errorf("publish to stream: %w", err)
 	}
 	return json.Marshal(map[string]string{"status": "accepted"})
@@ -842,7 +851,7 @@ func (h *Handler) handleAddMembers(ctx context.Context, subj string, data []byte
 	if err != nil {
 		return nil, fmt.Errorf("marshal add-members request: %w", err)
 	}
-	if err := h.publishToStream(ctx, subject.RoomCanonical(h.siteID, "member.add"), normalized); err != nil {
+	if err := h.publishToStream(ctx, subject.RoomCanonical(h.siteID, "member.add"), normalized, ""); err != nil {
 		return nil, fmt.Errorf("publish to stream: %w", err)
 	}
 
@@ -1226,7 +1235,7 @@ func (h *Handler) handleMessageRead(ctx context.Context, subj string, _ []byte) 
 		if err != nil {
 			return nil, fmt.Errorf("marshal outbox event: %w", err)
 		}
-		if err := h.publishToStream(ctx, subject.Outbox(h.siteID, userSiteID, model.OutboxSubscriptionRead), outboxData); err != nil {
+		if err := h.publishToStream(ctx, subject.Outbox(h.siteID, userSiteID, model.OutboxSubscriptionRead), outboxData, ""); err != nil {
 			return nil, fmt.Errorf("publish subscription_read outbox: %w", err)
 		}
 	}
@@ -1475,7 +1484,7 @@ func (h *Handler) handleMessageThreadRead(ctx context.Context, subj string, data
 		if err != nil {
 			return nil, fmt.Errorf("marshal outbox event: %w", err)
 		}
-		if err := h.publishToStream(ctx, subject.Outbox(h.siteID, userSiteID, model.OutboxThreadRead), outboxData); err != nil {
+		if err := h.publishToStream(ctx, subject.Outbox(h.siteID, userSiteID, model.OutboxThreadRead), outboxData, ""); err != nil {
 			return nil, fmt.Errorf("publish thread_read outbox: %w", err)
 		}
 	}
@@ -1545,6 +1554,270 @@ func (h *Handler) handleEnsureRoomKey(ctx context.Context, data []byte) ([]byte,
 		RoomID:  req.RoomID,
 		Version: ver,
 	})
+}
+
+func (h *Handler) natsRoomRename(m otelnats.Msg) {
+	ctx, err := wrappedCtx(m)
+	if err != nil {
+		errnats.Reply(ctx, m.Msg, err)
+		return
+	}
+	resp, err := h.handleRoomRename(ctx, m.Msg.Subject, m.Msg.Data)
+	if err != nil {
+		errnats.Reply(ctx, m.Msg, err)
+		return
+	}
+	if err := m.Msg.Respond(resp); err != nil {
+		slog.Error("failed to respond to rename", "error", err)
+	}
+}
+
+func (h *Handler) handleRoomRename(ctx context.Context, subj string, data []byte) ([]byte, error) {
+	account, roomID, ok := subject.ParseUserRoomSubject(subj)
+	if !ok {
+		return nil, fmt.Errorf("%w: %s", errInvalidRenameSubject, subj)
+	}
+	requestID := natsutil.RequestIDFromContext(ctx)
+
+	// Client body carries only newName — roomID and account are taken from the
+	// subject (the authoritative identity), never from the wire body.
+	var body struct {
+		NewName string `json:"newName"`
+	}
+	if err := json.Unmarshal(data, &body); err != nil {
+		return nil, fmt.Errorf("invalid request: %w", err)
+	}
+
+	slog.Debug("processing room.rename",
+		"op", model.AsyncJobOpRoomRename,
+		"requester", account,
+		"roomID", roomID,
+		"requestID", requestID)
+
+	name := strings.TrimSpace(body.NewName)
+	if name == "" || utf8.RuneCountInString(name) > 100 {
+		return nil, errInvalidName
+	}
+
+	requesterUser, getUserErr := h.store.GetUser(ctx, account)
+	if getUserErr != nil && !errors.Is(getUserErr, ErrUserNotFound) {
+		return nil, fmt.Errorf("get user: %w", getUserErr)
+	}
+
+	room, err := h.store.GetRoom(ctx, roomID)
+	if err != nil {
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			return nil, errRoomNotFound
+		}
+		return nil, fmt.Errorf("get room: %w", err)
+	}
+	if room.Type != model.RoomTypeChannel {
+		return nil, errRenameChannelOnly
+	}
+
+	if !isPlatformAdmin(requesterUser) {
+		sub, subErr := h.store.GetSubscription(ctx, account, roomID)
+		if subErr != nil {
+			if errors.Is(subErr, mongo.ErrNoDocuments) || errors.Is(subErr, model.ErrSubscriptionNotFound) {
+				return nil, errOnlyOwnersOrAdmins
+			}
+			return nil, fmt.Errorf("get requester subscription: %w", subErr)
+		}
+		if !hasRole(sub.Roles, model.RoleOwner) {
+			return nil, errOnlyOwnersOrAdmins
+		}
+	}
+
+	canonical := model.RenameRoomRequest{
+		RoomID:    roomID,
+		Account:   account,
+		NewName:   name,
+		Timestamp: time.Now().UTC().UnixMilli(),
+	}
+	out, err := json.Marshal(canonical)
+	if err != nil {
+		return nil, fmt.Errorf("marshal rename request: %w", err)
+	}
+	if err := h.publishToStream(ctx, subject.RoomCanonical(h.siteID, "room.rename"), out, ""); err != nil {
+		return nil, fmt.Errorf("publish to stream: %w", err)
+	}
+	return json.Marshal(map[string]string{"status": "accepted", "requestId": requestID})
+}
+
+func (h *Handler) natsRoomRestricted(m otelnats.Msg) {
+	ctx, err := wrappedCtx(m)
+	if err != nil {
+		errnats.Reply(ctx, m.Msg, err)
+		return
+	}
+	resp, err := h.handleRoomRestricted(ctx, m.Msg.Data)
+	if err != nil {
+		errnats.Reply(ctx, m.Msg, err)
+		return
+	}
+	if err := m.Msg.Respond(resp); err != nil {
+		slog.Error("failed to respond to restricted", "error", err)
+	}
+}
+
+// handleRoomRestricted is the sync chat.server.> RPC. Account in the body is
+// the audit identity (no subject prefix authenticates the caller — this RPC
+// is server-side admin tooling). Mongo writes + sys-message publish + outbox
+// fan-out happen inline; caller retries safely via dedup IDs.
+func (h *Handler) handleRoomRestricted(ctx context.Context, data []byte) ([]byte, error) {
+	requestID := natsutil.RequestIDFromContext(ctx)
+
+	var req model.RoomRestrictedRequest
+	if err := json.Unmarshal(data, &req); err != nil {
+		return nil, fmt.Errorf("invalid request: %w", err)
+	}
+	if req.RoomID == "" || req.Account == "" {
+		return nil, fmt.Errorf("%w: roomId and account are required", errInvalidRestrictedSubject)
+	}
+
+	// Admin-only RPC is rare; info-level audit trail is justified.
+	slog.Info("processing room.restricted",
+		"requester", req.Account,
+		"roomID", req.RoomID,
+		"requestID", requestID)
+
+	requesterUser, getUserErr := h.store.GetUser(ctx, req.Account)
+	if getUserErr != nil && !errors.Is(getUserErr, ErrUserNotFound) {
+		return nil, fmt.Errorf("get user: %w", getUserErr)
+	}
+	if !isPlatformAdmin(requesterUser) {
+		return nil, errOnlyAdmins
+	}
+
+	room, err := h.store.GetRoom(ctx, req.RoomID)
+	if err != nil {
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			return nil, errRoomNotFound
+		}
+		return nil, fmt.Errorf("get room: %w", err)
+	}
+	if room.Type != model.RoomTypeChannel {
+		return nil, errRestrictedChannelOnly
+	}
+
+	isTransition := req.Restricted && !room.Restricted
+
+	if req.Restricted && req.OwnerAccount != "" {
+		if _, subErr := h.store.GetSubscription(ctx, req.OwnerAccount, req.RoomID); subErr != nil {
+			if errors.Is(subErr, mongo.ErrNoDocuments) || errors.Is(subErr, model.ErrSubscriptionNotFound) {
+				return nil, errOwnerNotMember
+			}
+			return nil, fmt.Errorf("get owner subscription: %w", subErr)
+		}
+	}
+	if isTransition {
+		if req.OwnerAccount == "" {
+			return nil, errOwnerAccountRequired
+		}
+		if room.UserCount < h.restrictedRoomMinMembers {
+			return nil, fmt.Errorf("%w (need at least %d)", errNotEnoughMembers, h.restrictedRoomMinMembers)
+		}
+	}
+
+	req.Timestamp = time.Now().UTC().UnixMilli()
+
+	if err := h.store.UpdateRoomVisibility(ctx, req.RoomID, req.Restricted, req.ExternalAccess); err != nil {
+		if errors.Is(err, ErrRoomNotFound) {
+			return nil, errRoomNotFound
+		}
+		return nil, fmt.Errorf("update room restricted: %w", err)
+	}
+	if err := h.store.ApplySubscriptionVisibility(ctx, req.RoomID, req.Restricted, req.ExternalAccess, req.OwnerAccount); err != nil {
+		if errors.Is(err, ErrOwnerNotSubscribed) {
+			return nil, errOwnerNotMember
+		}
+		return nil, fmt.Errorf("apply subscription restricted: %w", err)
+	}
+
+	sysData, err := json.Marshal(model.RoomRestrictedSysData{
+		Restricted:     req.Restricted,
+		ExternalAccess: req.ExternalAccess,
+		ByAccount:      req.Account,
+		OwnerAccount:   req.OwnerAccount,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("marshal restricted sys data: %w", err)
+	}
+	requesterDisplay := displayfmt.CombineWithFallback(requesterUser.EngName, requesterUser.ChineseName, requesterUser.Account)
+	sysMsg := model.Message{
+		ID:          idgen.MessageIDFromRequestID(requestID, "room_restricted"),
+		RoomID:      req.RoomID,
+		UserAccount: req.Account,
+		Type:        model.MessageTypeRoomRestricted,
+		Content:     fmt.Sprintf("%q changed the channel restricted state", requesterDisplay),
+		SysMsgData:  sysData,
+		CreatedAt:   time.UnixMilli(req.Timestamp).UTC(),
+	}
+	msgEvt := model.MessageEvent{
+		Event:     model.EventCreated,
+		Message:   sysMsg,
+		SiteID:    h.siteID,
+		Timestamp: req.Timestamp,
+	}
+	msgEvtData, err := json.Marshal(msgEvt)
+	if err != nil {
+		return nil, fmt.Errorf("marshal sys message event: %w", err)
+	}
+	if err := h.publishToStream(ctx, subject.MsgCanonicalCreated(h.siteID), msgEvtData, natsutil.CanonicalDedupID(&msgEvt)); err != nil {
+		return nil, fmt.Errorf("publish room_restricted sys message: %w", err)
+	}
+
+	subs, err := h.store.ListSubscriptionsByRoom(ctx, req.RoomID)
+	if err != nil {
+		return nil, fmt.Errorf("list subscriptions: %w", err)
+	}
+	accounts := make([]string, 0, len(subs))
+	for i := range subs {
+		accounts = append(accounts, subs[i].User.Account)
+	}
+	users, err := h.store.FindUsersByAccounts(ctx, accounts)
+	if err != nil {
+		return nil, fmt.Errorf("find users for outbox fan-out: %w", err)
+	}
+	seenSites := make(map[string]struct{})
+	var remoteSites []string
+	for i := range users {
+		if users[i].SiteID == "" || users[i].SiteID == h.siteID {
+			continue
+		}
+		if _, dup := seenSites[users[i].SiteID]; dup {
+			continue
+		}
+		seenSites[users[i].SiteID] = struct{}{}
+		remoteSites = append(remoteSites, users[i].SiteID)
+	}
+	if len(remoteSites) > 0 {
+		payload, err := json.Marshal(model.RoomRestrictedOutboxPayload{
+			RoomID:         req.RoomID,
+			Restricted:     req.Restricted,
+			ExternalAccess: req.ExternalAccess,
+			OwnerAccount:   req.OwnerAccount,
+			Timestamp:      req.Timestamp,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("marshal restricted outbox payload: %w", err)
+		}
+		for _, remoteSiteID := range remoteSites {
+			evt := model.OutboxEvent{
+				Type: model.OutboxRoomRestricted, SiteID: h.siteID, DestSiteID: remoteSiteID,
+				Payload: payload, Timestamp: time.Now().UTC().UnixMilli(),
+			}
+			evtData, mErr := json.Marshal(evt)
+			if mErr != nil {
+				return nil, fmt.Errorf("marshal restricted outbox event: %w", mErr)
+			}
+			if err := h.publishToStream(ctx, subject.Outbox(h.siteID, remoteSiteID, model.OutboxRoomRestricted), evtData, natsutil.OutboxDedupID(ctx, remoteSiteID, requestID)); err != nil {
+				return nil, fmt.Errorf("publish restricted outbox to %s: %w", remoteSiteID, err)
+			}
+		}
+	}
+
+	return json.Marshal(map[string]string{"status": "ok", "requestId": requestID})
 }
 
 func (h *Handler) natsMuteToggle(m otelnats.Msg) {
@@ -1627,7 +1900,7 @@ func (h *Handler) handleMuteToggle(ctx context.Context, subj string, _ []byte) (
 		if err != nil {
 			return nil, fmt.Errorf("marshal outbox event: %w", err)
 		}
-		if err := h.publishToStream(ctx, subject.Outbox(h.siteID, userSiteID, model.OutboxSubscriptionMuteToggled), outboxData); err != nil {
+		if err := h.publishToStream(ctx, subject.Outbox(h.siteID, userSiteID, model.OutboxSubscriptionMuteToggled), outboxData, ""); err != nil {
 			return nil, fmt.Errorf("publish mute-toggled outbox: %w", err)
 		}
 	}
@@ -1715,7 +1988,7 @@ func (h *Handler) handleFavoriteToggle(ctx context.Context, subj string, _ []byt
 		if err != nil {
 			return nil, fmt.Errorf("marshal outbox event: %w", err)
 		}
-		if err := h.publishToStream(ctx, subject.Outbox(h.siteID, userSiteID, model.OutboxSubscriptionFavoriteToggled), outboxData); err != nil {
+		if err := h.publishToStream(ctx, subject.Outbox(h.siteID, userSiteID, model.OutboxSubscriptionFavoriteToggled), outboxData, ""); err != nil {
 			return nil, fmt.Errorf("publish favorite-toggled outbox: %w", err)
 		}
 	}

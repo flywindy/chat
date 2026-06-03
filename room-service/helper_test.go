@@ -156,6 +156,23 @@ func TestStripAccount(t *testing.T) {
 	}
 }
 
+func TestIsPlatformAdmin(t *testing.T) {
+	tests := []struct {
+		name string
+		user *model.User
+		want bool
+	}{
+		{"nil", nil, false},
+		{"empty roles", &model.User{Account: "alice"}, false},
+		{"user only", &model.User{Account: "a", Roles: []model.UserRole{model.UserRoleUser}}, false},
+		{"admin", &model.User{Account: "a", Roles: []model.UserRole{model.UserRoleAdmin}}, true},
+		{"mixed", &model.User{Account: "a", Roles: []model.UserRole{model.UserRoleUser, model.UserRoleAdmin}}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) { assert.Equal(t, tt.want, isPlatformAdmin(tt.user)) })
+	}
+}
+
 func TestDetermineRoomType(t *testing.T) {
 	tests := []struct {
 		name string

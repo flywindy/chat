@@ -10,8 +10,10 @@ import (
 )
 
 var (
-	ErrUserNotFound = errors.New("user not found") // GetUser: no matching account
-	ErrAppNotFound  = errors.New("app not found")  // GetApp: no matching bot account
+	ErrUserNotFound       = errors.New("user not found")                        // GetUser: no matching account
+	ErrAppNotFound        = errors.New("app not found")                         // GetApp: no matching bot account
+	ErrRoomNotFound       = errors.New("room not found")                        // UpdateRoomVisibility: no matching room
+	ErrOwnerNotSubscribed = errors.New("owner account is no longer subscribed") // ApplySubscriptionVisibility: owner left
 )
 
 //go:generate mockgen -source=store.go -destination=mock_store_test.go -package=main
@@ -122,6 +124,23 @@ type RoomStore interface {
 	UpdateSubscriptionThreadRead(ctx context.Context, roomID, account string, threadUnread []string, alert bool) error
 
 	UpdateThreadSubscriptionRead(ctx context.Context, threadRoomID, account string, lastSeenAt time.Time) error
+
+	// UpdateRoomVisibility sets rooms.{restricted, externalAccess, updatedAt}.
+	// Returns ErrRoomNotFound when no room matches.
+	UpdateRoomVisibility(ctx context.Context, roomID string, restricted, externalAccess bool) error
+	// ApplySubscriptionVisibility writes the {restricted, externalAccess} denorm
+	// flags to every subscription of the room. When restricted=true and
+	// ownerAccount is non-empty, an aggregation-pipeline $cond also rewrites
+	// roles so only ownerAccount holds RoleOwner. Returns ErrOwnerNotSubscribed
+	// when ownerAccount has no active subscription in the room (the rewrite
+	// would leave zero owners).
+	ApplySubscriptionVisibility(ctx context.Context, roomID string, restricted, externalAccess bool, ownerAccount string) error
+	// ListSubscriptionsByRoom returns every subscription in the room. Used to
+	// drive cross-site outbox fan-out (one event per remote site).
+	ListSubscriptionsByRoom(ctx context.Context, roomID string) ([]model.Subscription, error)
+	// FindUsersByAccounts returns the User docs for the supplied accounts. Used
+	// to bucket subscriptions by home site for cross-site fan-out.
+	FindUsersByAccounts(ctx context.Context, accounts []string) ([]model.User, error)
 }
 
 // RoomKeyStore is the consumer-side interface for room encryption key lookups.

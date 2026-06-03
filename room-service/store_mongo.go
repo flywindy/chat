@@ -1046,3 +1046,98 @@ func (s *MongoStore) UpdateThreadSubscriptionRead(ctx context.Context, threadRoo
 	}
 	return nil
 }
+
+// UpdateRoomVisibility sets {restricted, externalAccess, updatedAt} on the
+// room. Room-service callers have already validated type=channel before
+// reaching this layer, so no type filter runs here.
+func (s *MongoStore) UpdateRoomVisibility(ctx context.Context, roomID string, restricted, externalAccess bool) error {
+	res, err := s.rooms.UpdateOne(ctx, bson.M{"_id": roomID}, bson.M{
+		"$set": bson.M{
+			"restricted":     restricted,
+			"externalAccess": externalAccess,
+			"updatedAt":      time.Now().UTC(),
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("update room visibility %s: %w", roomID, err)
+	}
+	if res.MatchedCount == 0 {
+		return ErrRoomNotFound
+	}
+	return nil
+}
+
+// ApplySubscriptionVisibility writes the {restricted, externalAccess} denorm
+// flags to every subscription of the room. When restricted=true and ownerAccount
+// is non-empty, an aggregation-pipeline $cond also rewrites roles so only
+// ownerAccount holds RoleOwner — atomically, so the restrict transition cannot
+// land in a zero-owner state. Returns ErrOwnerNotSubscribed when ownerAccount
+// has no active subscription in the room.
+func (s *MongoStore) ApplySubscriptionVisibility(ctx context.Context, roomID string, restricted, externalAccess bool, ownerAccount string) error {
+	filter := bson.M{"roomId": roomID}
+
+	if restricted && ownerAccount != "" {
+		// TOCTOU: if the owner unsubscribes between this count and the
+		// UpdateMany below, the room is left with zero owners. Acceptable for
+		// an admin RPC (rare, recoverable by retry).
+		n, err := s.subscriptions.CountDocuments(ctx, bson.M{"roomId": roomID, "u.account": ownerAccount})
+		if err != nil {
+			return fmt.Errorf("count owner subscription: %w", err)
+		}
+		if n == 0 {
+			return ErrOwnerNotSubscribed
+		}
+		pipeline := mongo.Pipeline{
+			bson.D{{Key: "$set", Value: bson.M{
+				"restricted":     true,
+				"externalAccess": externalAccess,
+				"roles": bson.M{"$cond": bson.M{
+					"if":   bson.M{"$eq": bson.A{"$u.account", ownerAccount}},
+					"then": bson.A{string(model.RoleOwner)},
+					"else": bson.A{string(model.RoleMember)},
+				}},
+			}}},
+		}
+		if _, err := s.subscriptions.UpdateMany(ctx, filter, pipeline); err != nil {
+			return fmt.Errorf("apply visibility (restrict+rewrite): %w", err)
+		}
+		return nil
+	}
+
+	if _, err := s.subscriptions.UpdateMany(ctx, filter, bson.M{
+		"$set": bson.M{"restricted": restricted, "externalAccess": externalAccess},
+	}); err != nil {
+		return fmt.Errorf("apply visibility (flags only): %w", err)
+	}
+	return nil
+}
+
+// ListSubscriptionsByRoom returns every subscription in the room.
+func (s *MongoStore) ListSubscriptionsByRoom(ctx context.Context, roomID string) ([]model.Subscription, error) {
+	cursor, err := s.subscriptions.Find(ctx, bson.M{"roomId": roomID})
+	if err != nil {
+		return nil, fmt.Errorf("list subscriptions for room %q: find: %w", roomID, err)
+	}
+	var subs []model.Subscription
+	if err := cursor.All(ctx, &subs); err != nil {
+		return nil, fmt.Errorf("list subscriptions for room %q: decode: %w", roomID, err)
+	}
+	return subs, nil
+}
+
+// FindUsersByAccounts returns User docs for the supplied accounts. Empty input
+// returns nil, nil.
+func (s *MongoStore) FindUsersByAccounts(ctx context.Context, accounts []string) ([]model.User, error) {
+	if len(accounts) == 0 {
+		return nil, nil
+	}
+	cursor, err := s.users.Find(ctx, bson.M{"account": bson.M{"$in": accounts}})
+	if err != nil {
+		return nil, fmt.Errorf("find users by accounts: %w", err)
+	}
+	var users []model.User
+	if err := cursor.All(ctx, &users); err != nil {
+		return nil, fmt.Errorf("decode users: %w", err)
+	}
+	return users, nil
+}

@@ -11,6 +11,12 @@ import (
 // ErrUserNotFound is returned by GetUser when the account does not exist.
 var ErrUserNotFound = errors.New("user not found")
 
+var (
+	ErrRoomNotFound       = errors.New("room not found")
+	ErrNotChannelRoom     = errors.New("not a channel room")
+	ErrOwnerNotSubscribed = errors.New("owner account is no longer subscribed")
+)
+
 //go:generate mockgen -destination=mock_store_test.go -package=main . SubscriptionStore,RoomKeyStore
 
 // UserWithMembership is the result of the GetUserWithMembership aggregation pipeline.
@@ -103,6 +109,21 @@ type SubscriptionStore interface {
 	// passes the requester's account so they aren't materialized as a regular
 	// member in addition to being added separately as the owner.
 	ListNewMembersForNewRoom(ctx context.Context, orgIDs, accounts []string, excludeAccount string) ([]string, error)
+
+	// Rename operations. (Restricted moved to room-service as a sync RPC.)
+
+	// UpdateRoomName sets {name, updatedAt} on the channel-typed room doc.
+	// Returns ErrRoomNotFound; ErrNotChannelRoom is no longer returned since
+	// room-service validates type upstream.
+	UpdateRoomName(ctx context.Context, roomID, newName string) error
+
+	// UpdateSubscriptionNamesForRoom updateMany on subscriptions matching {roomId: roomID}.
+	UpdateSubscriptionNamesForRoom(ctx context.Context, roomID, newName string) error
+
+	// ListByRoom returns all subscriptions for roomID across every site.
+	// Used by the rename processor to bucket accounts by remote site for
+	// outbox fan-out.
+	ListByRoom(ctx context.Context, roomID string) ([]model.Subscription, error)
 }
 
 // Key store used by room-worker: reads for fan-out, writes for rotation.

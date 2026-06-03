@@ -10,6 +10,7 @@ import (
 	"github.com/caarlos0/env/v11"
 
 	"github.com/Marz32onE/instrumentation-go/otel-nats/oteljetstream"
+	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/hmchangw/chat/pkg/atrest"
 	"github.com/hmchangw/chat/pkg/cassutil"
@@ -21,25 +22,26 @@ import (
 )
 
 type config struct {
-	NatsURL           string          `env:"NATS_URL,required"`
-	NatsCredsFile     string          `env:"NATS_CREDS_FILE"           envDefault:""`
-	SiteID            string          `env:"SITE_ID"                   envDefault:"site-local"`
-	MongoURI          string          `env:"MONGO_URI,required"`
-	MongoDB           string          `env:"MONGO_DB"                  envDefault:"chat"`
-	MongoUsername     string          `env:"MONGO_USERNAME"            envDefault:""`
-	MongoPassword     string          `env:"MONGO_PASSWORD"            envDefault:""`
-	MaxRoomSize       int             `env:"MAX_ROOM_SIZE"             envDefault:"1000"`
-	MaxBatchSize      int             `env:"MAX_BATCH_SIZE"            envDefault:"1000"`
-	MemberListTimeout time.Duration   `env:"MEMBER_LIST_TIMEOUT"       envDefault:"5s"`
-	ValkeyAddrs       []string        `env:"VALKEY_ADDRS,required"     envSeparator:","`
-	ValkeyPassword    string          `env:"VALKEY_PASSWORD"           envDefault:""`
-	ValkeyGracePeriod time.Duration   `env:"VALKEY_KEY_GRACE_PERIOD,required"`
-	CassandraHosts    string          `env:"CASSANDRA_HOSTS,required"`
-	CassandraKeyspace string          `env:"CASSANDRA_KEYSPACE"        envDefault:"chat"`
-	CassandraUsername string          `env:"CASSANDRA_USERNAME"        envDefault:""`
-	CassandraPassword string          `env:"CASSANDRA_PASSWORD"        envDefault:""`
-	CassandraNumConns int             `env:"CASSANDRA_NUM_CONNS"       envDefault:"8"`
-	Bootstrap         bootstrapConfig `envPrefix:"BOOTSTRAP_"`
+	NatsURL                  string          `env:"NATS_URL,required"`
+	NatsCredsFile            string          `env:"NATS_CREDS_FILE"           envDefault:""`
+	SiteID                   string          `env:"SITE_ID"                   envDefault:"site-local"`
+	MongoURI                 string          `env:"MONGO_URI,required"`
+	MongoDB                  string          `env:"MONGO_DB"                  envDefault:"chat"`
+	MongoUsername            string          `env:"MONGO_USERNAME"            envDefault:""`
+	MongoPassword            string          `env:"MONGO_PASSWORD"            envDefault:""`
+	MaxRoomSize              int             `env:"MAX_ROOM_SIZE"             envDefault:"1000"`
+	MaxBatchSize             int             `env:"MAX_BATCH_SIZE"            envDefault:"1000"`
+	MemberListTimeout        time.Duration   `env:"MEMBER_LIST_TIMEOUT"       envDefault:"5s"`
+	ValkeyAddrs              []string        `env:"VALKEY_ADDRS,required"     envSeparator:","`
+	ValkeyPassword           string          `env:"VALKEY_PASSWORD"           envDefault:""`
+	ValkeyGracePeriod        time.Duration   `env:"VALKEY_KEY_GRACE_PERIOD,required"`
+	CassandraHosts           string          `env:"CASSANDRA_HOSTS,required"`
+	CassandraKeyspace        string          `env:"CASSANDRA_KEYSPACE"        envDefault:"chat"`
+	CassandraUsername        string          `env:"CASSANDRA_USERNAME"        envDefault:""`
+	CassandraPassword        string          `env:"CASSANDRA_PASSWORD"        envDefault:""`
+	CassandraNumConns        int             `env:"CASSANDRA_NUM_CONNS"       envDefault:"8"`
+	Bootstrap                bootstrapConfig `envPrefix:"BOOTSTRAP_"`
+	RestrictedRoomMinMembers int             `env:"RESTRICTED_ROOM_MIN_MEMBERS" envDefault:"5"`
 	// Atrest/Vault drive eager at-rest DEK provisioning at room creation.
 	// When Atrest.Enabled is false the DEK is created lazily by message-worker.
 	Atrest atrest.Config      // env vars already prefixed ATREST_*
@@ -56,6 +58,10 @@ func main() {
 	}
 	if cfg.MemberListTimeout <= 0 {
 		slog.Error("invalid MEMBER_LIST_TIMEOUT: must be > 0", "value", cfg.MemberListTimeout)
+		os.Exit(1)
+	}
+	if cfg.RestrictedRoomMinMembers <= 0 {
+		slog.Error("invalid RESTRICTED_ROOM_MIN_MEMBERS: must be > 0", "value", cfg.RestrictedRoomMinMembers)
 		os.Exit(1)
 	}
 
@@ -141,9 +147,14 @@ func main() {
 	}
 
 	memberListClient := NewNATSMemberListClient(nc.NatsConn(), cfg.MemberListTimeout)
-	handler := NewHandler(store, keyStore, memberListClient, cassReader, cfg.SiteID, cfg.MaxRoomSize, cfg.MaxBatchSize, cfg.MemberListTimeout,
-		func(ctx context.Context, subj string, data []byte) error {
-			if _, err := js.PublishMsg(ctx, natsutil.NewMsg(ctx, subj, data)); err != nil {
+	handler := NewHandler(store, keyStore, memberListClient, cassReader, cfg.SiteID, cfg.MaxRoomSize, cfg.MaxBatchSize, cfg.MemberListTimeout, cfg.RestrictedRoomMinMembers,
+		func(ctx context.Context, subj string, data []byte, msgID string) error {
+			msg := natsutil.NewMsg(ctx, subj, data)
+			var opts []jetstream.PublishOpt
+			if msgID != "" {
+				opts = append(opts, jetstream.WithMsgID(msgID))
+			}
+			if _, err := js.PublishMsg(ctx, msg, opts...); err != nil {
 				return fmt.Errorf("publish to %q: %w", subj, err)
 			}
 			return nil

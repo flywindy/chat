@@ -30,6 +30,23 @@ type Message struct {
 	PinnedBy                     *Participant                   `json:"pinnedBy,omitempty"                     bson:"pinnedBy,omitempty"`
 }
 
+// RoomRenamedSysData is the JSON payload stored in Message.SysMsgData
+// for a room_renamed system message.
+type RoomRenamedSysData struct {
+	NewName   string `json:"newName"   bson:"newName"`
+	ByAccount string `json:"byAccount" bson:"byAccount"`
+}
+
+// RoomRestrictedSysData is the JSON payload stored in Message.SysMsgData
+// for a room_restricted system message — emitted when room.restricted or
+// room.externalAccess flip.
+type RoomRestrictedSysData struct {
+	Restricted     bool   `json:"restricted"             bson:"restricted"`
+	ExternalAccess bool   `json:"externalAccess"         bson:"externalAccess"`
+	ByAccount      string `json:"byAccount"              bson:"byAccount"`
+	OwnerAccount   string `json:"ownerAccount,omitempty" bson:"ownerAccount,omitempty"`
+}
+
 type SendMessageRequest struct {
 	ID                           string `json:"id"`
 	Content                      string `json:"content"`
