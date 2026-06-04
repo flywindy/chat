@@ -99,6 +99,11 @@ type RoomStore interface {
 	// ToggleSubscriptionFavorite atomically flips favorite via a single FindOneAndUpdate.
 	// Returns the post-flip subscription, or model.ErrSubscriptionNotFound (wrapped) when no match.
 	ToggleSubscriptionFavorite(ctx context.Context, roomID, account string) (*model.Subscription, error)
+	// SetOwnerRole atomically grants (makeOwner=true) or revokes (makeOwner=false)
+	// the owner role on the subscription keyed by (roomID, account) via a single
+	// FindOneAndUpdate. Other roles (e.g. member) are retained. Returns the
+	// updated subscription, or model.ErrSubscriptionNotFound (wrapped) when no match.
+	SetOwnerRole(ctx context.Context, roomID, account string, makeOwner bool) (*model.Subscription, error)
 	// GetUserSiteID returns the home site of a user looked up by account.
 	// Returns ("", nil) when the user is not found locally; callers treat
 	// that as "skip cross-site outbox".

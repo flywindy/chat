@@ -735,16 +735,64 @@ func (h *Handler) handleUpdateRole(ctx context.Context, subj string, data []byte
 			return nil, errCannotDemoteLast
 		}
 	}
-	// Stable acceptance time → stable Nats-Msg-Id across redeliveries.
-	req.Timestamp = time.Now().UTC().UnixMilli()
-	data, err = json.Marshal(req)
+	sub, err := h.store.SetOwnerRole(ctx, roomID, req.Account, req.NewRole == model.RoleOwner)
 	if err != nil {
-		return nil, fmt.Errorf("marshal role update request: %w", err)
+		if errors.Is(err, model.ErrSubscriptionNotFound) {
+			return nil, errTargetNotMember // defensive: target removed between validation and mutate
+		}
+		return nil, fmt.Errorf("set owner role: %w", err)
 	}
-	if err := h.publishToStream(ctx, subject.RoomCanonical(h.siteID, "member.role-update"), data, ""); err != nil {
-		return nil, fmt.Errorf("publish to stream: %w", err)
+
+	now := time.Now().UTC()
+	subEvtData, err := h.publishSubscriptionUpdate(ctx, req.Account, "role_updated", sub, now)
+	if err != nil {
+		return nil, err
 	}
-	return json.Marshal(map[string]string{"status": "accepted"})
+
+	userSiteID, err := h.store.GetUserSiteID(ctx, req.Account)
+	if err != nil {
+		return nil, fmt.Errorf("get user siteId: %w", err)
+	}
+	if userSiteID != "" && userSiteID != h.siteID {
+		outbox := model.OutboxEvent{
+			Type:       "role_updated",
+			SiteID:     h.siteID,
+			DestSiteID: userSiteID,
+			Payload:    subEvtData, // inbox-worker.handleRoleUpdated decodes a SubscriptionUpdateEvent
+			Timestamp:  now.UnixMilli(),
+		}
+		outboxData, err := json.Marshal(outbox)
+		if err != nil {
+			return nil, fmt.Errorf("marshal outbox event: %w", err)
+		}
+		if err := h.publishToStream(ctx, subject.Outbox(h.siteID, userSiteID, "role_updated"), outboxData, ""); err != nil {
+			return nil, fmt.Errorf("publish role-updated outbox: %w", err)
+		}
+	}
+
+	return json.Marshal(map[string]string{"status": "ok"})
+}
+
+// publishSubscriptionUpdate marshals a SubscriptionUpdateEvent for sub with the
+// given action and best-effort publishes it to the account's subscription.update
+// subject over core NATS. A publish failure is logged, not returned — the DB
+// write is the source of truth; clients reconcile on next refetch. Returns the
+// marshaled event so callers can reuse it (e.g. as a cross-site outbox payload).
+func (h *Handler) publishSubscriptionUpdate(ctx context.Context, account, action string, sub *model.Subscription, ts time.Time) ([]byte, error) {
+	subEvt := model.SubscriptionUpdateEvent{
+		UserID:       sub.User.ID,
+		Subscription: *sub,
+		Action:       action,
+		Timestamp:    ts.UnixMilli(),
+	}
+	data, err := json.Marshal(subEvt)
+	if err != nil {
+		return nil, fmt.Errorf("marshal subscription update event: %w", err)
+	}
+	if err := h.publishCore(ctx, subject.SubscriptionUpdate(account), data); err != nil {
+		slog.Error("subscription update publish failed", "error", err, "account", account)
+	}
+	return data, nil
 }
 
 func (h *Handler) natsAddMembers(m otelnats.Msg) {
@@ -1870,19 +1918,8 @@ func (h *Handler) handleMuteToggle(ctx context.Context, subj string, _ []byte) (
 
 	now := time.Now().UTC()
 
-	subEvt := model.SubscriptionUpdateEvent{
-		UserID:       sub.User.ID,
-		Subscription: *sub,
-		Action:       "mute_toggled",
-		Timestamp:    now.UnixMilli(),
-	}
-	subEvtData, err := json.Marshal(subEvt)
-	if err != nil {
-		return nil, fmt.Errorf("marshal subscription update event: %w", err)
-	}
-	if err := h.publishCore(ctx, subject.SubscriptionUpdate(account), subEvtData); err != nil {
-		slog.Error("subscription update publish failed", "error", err, "account", account)
-		// Non-fatal — the DB write is the source of truth; clients will reconcile on next refetch.
+	if _, err := h.publishSubscriptionUpdate(ctx, account, "mute_toggled", sub, now); err != nil {
+		return nil, err
 	}
 
 	// Canonical room-stream event consumed by notification-worker for cache invalidation.
@@ -1973,19 +2010,8 @@ func (h *Handler) handleFavoriteToggle(ctx context.Context, subj string, _ []byt
 
 	now := time.Now().UTC()
 
-	subEvt := model.SubscriptionUpdateEvent{
-		UserID:       sub.User.ID,
-		Subscription: *sub,
-		Action:       "favorite_toggled",
-		Timestamp:    now.UnixMilli(),
-	}
-	subEvtData, err := json.Marshal(subEvt)
-	if err != nil {
-		return nil, fmt.Errorf("marshal subscription update event: %w", err)
-	}
-	if err := h.publishCore(ctx, subject.SubscriptionUpdate(account), subEvtData); err != nil {
-		slog.Error("subscription update publish failed", "error", err, "account", account)
-		// Non-fatal — the DB write is the source of truth; clients will reconcile on next refetch.
+	if _, err := h.publishSubscriptionUpdate(ctx, account, "favorite_toggled", sub, now); err != nil {
+		return nil, err
 	}
 
 	userSiteID, err := h.store.GetUserSiteID(ctx, account)
@@ -2088,7 +2114,7 @@ func (h *Handler) buildTabURL(tmpl, roomID string) (string, bool) {
 	return joined.String(), true
 }
 
-func (h *Handler) handleGetRoomAppTabs(ctx context.Context, subj string, _ []byte) (model.GetRoomAppTabsResponse, error) {
+func (h *Handler) handleGetRoomAppTabs(ctx context.Context, subj string) (model.GetRoomAppTabsResponse, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
@@ -2141,7 +2167,7 @@ func (h *Handler) handleGetRoomAppTabs(ctx context.Context, subj string, _ []byt
 	return model.GetRoomAppTabsResponse{Apps: out}, nil
 }
 
-func (h *Handler) handleGetRoomAppCommandMenu(ctx context.Context, subj string, _ []byte) (model.GetRoomAppCommandMenuResponse, error) {
+func (h *Handler) handleGetRoomAppCommandMenu(ctx context.Context, subj string) (model.GetRoomAppCommandMenuResponse, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
@@ -2206,7 +2232,7 @@ func (h *Handler) natsGetRoomAppCommandMenu(m otelnats.Msg) {
 		errnats.Reply(ctx, m.Msg, err)
 		return
 	}
-	resp, err := h.handleGetRoomAppCommandMenu(ctx, m.Msg.Subject, m.Msg.Data)
+	resp, err := h.handleGetRoomAppCommandMenu(ctx, m.Msg.Subject)
 	if err != nil {
 		errnats.Reply(ctx, m.Msg, err)
 		return
@@ -2220,7 +2246,7 @@ func (h *Handler) natsGetRoomAppTabs(m otelnats.Msg) {
 		errnats.Reply(ctx, m.Msg, err)
 		return
 	}
-	resp, err := h.handleGetRoomAppTabs(ctx, m.Msg.Subject, m.Msg.Data)
+	resp, err := h.handleGetRoomAppTabs(ctx, m.Msg.Subject)
 	if err != nil {
 		errnats.Reply(ctx, m.Msg, err)
 		return

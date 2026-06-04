@@ -402,6 +402,21 @@ func (mr *MockRoomStoreMockRecorder) MinSubscriptionLastSeenByRoomID(ctx, roomID
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MinSubscriptionLastSeenByRoomID", reflect.TypeOf((*MockRoomStore)(nil).MinSubscriptionLastSeenByRoomID), ctx, roomID)
 }
 
+// SetOwnerRole mocks base method.
+func (m *MockRoomStore) SetOwnerRole(ctx context.Context, roomID, account string, makeOwner bool) (*model.Subscription, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "SetOwnerRole", ctx, roomID, account, makeOwner)
+	ret0, _ := ret[0].(*model.Subscription)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// SetOwnerRole indicates an expected call of SetOwnerRole.
+func (mr *MockRoomStoreMockRecorder) SetOwnerRole(ctx, roomID, account, makeOwner any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetOwnerRole", reflect.TypeOf((*MockRoomStore)(nil).SetOwnerRole), ctx, roomID, account, makeOwner)
+}
+
 // ToggleSubscriptionFavorite mocks base method.
 func (m *MockRoomStore) ToggleSubscriptionFavorite(ctx context.Context, roomID, account string) (*model.Subscription, error) {
 	m.ctrl.T.Helper()

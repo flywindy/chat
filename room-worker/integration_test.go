@@ -268,56 +268,25 @@ func TestMongoStore_GetOrgMembersWithIndividualStatus_Integration(t *testing.T) 
 	assert.False(t, statusMap["bob"])
 }
 
-func TestMongoStore_AddRole_RemoveRole_Integration(t *testing.T) {
+func TestMongoStore_RemoveRole_Integration(t *testing.T) {
 	db := setupMongo(t)
 	store := NewMongoStore(db)
 	ctx := context.Background()
 
 	_, err := db.Collection("subscriptions").InsertOne(ctx, model.Subscription{
 		ID: "s1", User: model.SubscriptionUser{ID: "u1", Account: "alice"},
-		RoomID: "r1", Roles: []model.Role{model.RoleMember},
+		RoomID: "r1", Roles: []model.Role{model.RoleMember, model.RoleOwner},
 	})
 	if err != nil {
 		t.Fatalf("seed subscription: %v", err)
 	}
 
-	// Promote: add owner role
-	err = store.AddRole(ctx, "alice", "r1", model.RoleOwner)
-	if err != nil {
-		t.Fatalf("AddRole: %v", err)
-	}
-
-	sub, err := store.GetSubscription(ctx, "alice", "r1")
-	if err != nil {
-		t.Fatalf("GetSubscription after promote: %v", err)
-	}
-	if !slices.Contains(sub.Roles, model.RoleOwner) {
-		t.Errorf("roles after promote = %v, want to contain owner", sub.Roles)
-	}
-	if !slices.Contains(sub.Roles, model.RoleMember) {
-		t.Errorf("roles after promote = %v, want to still contain member", sub.Roles)
-	}
-
-	// AddRole is idempotent ($addToSet)
-	err = store.AddRole(ctx, "alice", "r1", model.RoleOwner)
-	if err != nil {
-		t.Fatalf("AddRole idempotent: %v", err)
-	}
-	sub, err = store.GetSubscription(ctx, "alice", "r1")
-	if err != nil {
-		t.Fatalf("GetSubscription after idempotent add: %v", err)
-	}
-	if len(sub.Roles) != 2 {
-		t.Errorf("roles after idempotent add = %v, want exactly 2", sub.Roles)
-	}
-
-	// Demote: remove owner role
-	err = store.RemoveRole(ctx, "alice", "r1", model.RoleOwner)
-	if err != nil {
+	// Demote: remove owner role, leaving member.
+	if err := store.RemoveRole(ctx, "alice", "r1", model.RoleOwner); err != nil {
 		t.Fatalf("RemoveRole: %v", err)
 	}
 
-	sub, err = store.GetSubscription(ctx, "alice", "r1")
+	sub, err := store.GetSubscription(ctx, "alice", "r1")
 	if err != nil {
 		t.Fatalf("GetSubscription after demote: %v", err)
 	}
@@ -326,6 +295,18 @@ func TestMongoStore_AddRole_RemoveRole_Integration(t *testing.T) {
 	}
 	if !slices.Contains(sub.Roles, model.RoleMember) {
 		t.Errorf("roles after demote = %v, want to contain member", sub.Roles)
+	}
+
+	// RemoveRole is idempotent ($pull) — removing again leaves member intact.
+	if err := store.RemoveRole(ctx, "alice", "r1", model.RoleOwner); err != nil {
+		t.Fatalf("RemoveRole idempotent: %v", err)
+	}
+	sub, err = store.GetSubscription(ctx, "alice", "r1")
+	if err != nil {
+		t.Fatalf("GetSubscription after idempotent remove: %v", err)
+	}
+	if len(sub.Roles) != 1 || !slices.Contains(sub.Roles, model.RoleMember) {
+		t.Errorf("roles after idempotent remove = %v, want exactly [member]", sub.Roles)
 	}
 }
 

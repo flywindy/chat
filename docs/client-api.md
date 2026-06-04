@@ -510,7 +510,7 @@ A `member_left` / `member_removed` system message also flows through the message
 
 - `{siteID}` must be the room's **origin `siteID`** (the site that owns the room), not the caller's own site.
 
-This is an **async-job RPC**. The synchronous reply confirms acceptance; the actual role change runs in `room-worker` and emits the event below. Unlike Add Members and Remove Member, `room-worker` does **not** publish an `AsyncJobResult` event for role updates — there is no `chat.user.{requesterAccount}.response.{requestID}` event for this RPC.
+This is a **synchronous RPC**. `room-service` validates the request, applies the role change atomically, emits the event below, and only then returns the reply. There is no async job, no `AsyncJobResult`, and no `chat.user.{requesterAccount}.response.{requestID}` event for this RPC.
 
 ##### Request body
 
@@ -530,15 +530,15 @@ The `timestamp` field on the Go `UpdateRoleRequest` is server-set — the client
 
 | Field    | Type   | Notes |
 |----------|--------|-------|
-| `status` | string | Always `"accepted"`. Confirms the request passed authorization and was queued for processing. |
+| `status` | string | Always `"ok"`. Confirms the role change was applied. |
 
 ```json
-{ "status": "accepted" }
+{ "status": "ok" }
 ```
 
 ##### Error response
 
-See [Error envelope](#6-error-envelope-reference). Returned synchronously when validation or authorization fails. Common errors include:
+See [Error envelope](#6-error-envelope-reference). Returned synchronously when validation, authorization, or the role mutation fails. Common errors include:
 
 - Requester is not an owner of the room.
 - Target account is not a member of the room.
@@ -575,7 +575,7 @@ See [Error envelope](#6-error-envelope-reference). Returned synchronously when v
 
 ##### Triggered events — error path
 
-When the synchronous reply is an error envelope, no events follow. The async job has no separate failure event for role updates — failures inside the worker are logged but no client-visible signal is emitted.
+When the reply is an error envelope, no events follow. All validation and the role mutation happen synchronously in `room-service`, so any failure is surfaced directly in the error reply — there is no deferred worker step and no separate failure event.
 
 ---
 

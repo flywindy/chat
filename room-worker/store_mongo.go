@@ -147,19 +147,6 @@ func (s *MongoStore) GetSubscription(ctx context.Context, account, roomID string
 	return &sub, nil
 }
 
-func (s *MongoStore) AddRole(ctx context.Context, account, roomID string, role model.Role) error {
-	filter := bson.M{"u.account": account, "roomId": roomID}
-	update := bson.M{"$addToSet": bson.M{"roles": role}}
-	res, err := s.subscriptions.UpdateOne(ctx, filter, update)
-	if err != nil {
-		return fmt.Errorf("add role %q for %q in room %q: %w", role, account, roomID, err)
-	}
-	if res.MatchedCount == 0 {
-		return fmt.Errorf("subscription not found for %q in room %q", account, roomID)
-	}
-	return nil
-}
-
 func (s *MongoStore) RemoveRole(ctx context.Context, account, roomID string, role model.Role) error {
 	filter := bson.M{"u.account": account, "roomId": roomID}
 	update := bson.M{"$pull": bson.M{"roles": role}}

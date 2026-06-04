@@ -76,7 +76,6 @@ type SubscriptionStore interface {
 	// ErrSubscriptionNotFound if the room does not have exactly two
 	// matching subs or if requesterAccount is not among them.
 	FindDMSubscriptionPair(ctx context.Context, roomID, requesterAccount string) (*model.Subscription, *model.Subscription, error)
-	AddRole(ctx context.Context, account, roomID string, role model.Role) error
 	RemoveRole(ctx context.Context, account, roomID string, role model.Role) error
 
 	// --- aggregation pipelines (remove flow) ---

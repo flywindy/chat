@@ -2240,6 +2240,70 @@ func TestMongoStore_ToggleSubscriptionFavorite(t *testing.T) {
 	assert.ErrorIs(t, err, model.ErrSubscriptionNotFound)
 }
 
+func TestMongoStore_SetOwnerRole_Integration(t *testing.T) {
+	db := testutil.MongoDB(t, "room-svc-role")
+	store := NewMongoStore(db)
+	ctx := context.Background()
+
+	sub := &model.Subscription{
+		ID:       idgen.GenerateUUIDv7(),
+		User:     model.SubscriptionUser{ID: "u1", Account: "alice"},
+		RoomID:   "r1",
+		RoomType: model.RoomTypeChannel,
+		SiteID:   "site-a",
+		Roles:    []model.Role{model.RoleMember},
+		JoinedAt: time.Now().UTC(),
+	}
+	mustInsertSub(t, db, sub)
+
+	// Promote: owner appended, member retained, order preserved.
+	got, err := store.SetOwnerRole(ctx, "r1", "alice", true)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, []model.Role{model.RoleMember, model.RoleOwner}, got.Roles)
+
+	persisted, err := store.GetSubscription(ctx, "alice", "r1")
+	require.NoError(t, err)
+	assert.Equal(t, []model.Role{model.RoleMember, model.RoleOwner}, persisted.Roles)
+
+	// Promote again is idempotent — no duplicate owner.
+	got, err = store.SetOwnerRole(ctx, "r1", "alice", true)
+	require.NoError(t, err)
+	assert.Equal(t, []model.Role{model.RoleMember, model.RoleOwner}, got.Roles)
+
+	// Demote: owner removed, member retained.
+	got, err = store.SetOwnerRole(ctx, "r1", "alice", false)
+	require.NoError(t, err)
+	assert.Equal(t, []model.Role{model.RoleMember}, got.Roles)
+
+	// Demote again is idempotent.
+	got, err = store.SetOwnerRole(ctx, "r1", "alice", false)
+	require.NoError(t, err)
+	assert.Equal(t, []model.Role{model.RoleMember}, got.Roles)
+
+	// Channel-creator parity: an owner seeded WITHOUT member (roles ["owner"], as
+	// processCreateRoom assigns the creator) must demote to ["member"], never [].
+	creator := &model.Subscription{
+		ID:       idgen.GenerateUUIDv7(),
+		User:     model.SubscriptionUser{ID: "u2", Account: "carol"},
+		RoomID:   "r1",
+		RoomType: model.RoomTypeChannel,
+		SiteID:   "site-a",
+		Roles:    []model.Role{model.RoleOwner},
+		JoinedAt: time.Now().UTC(),
+	}
+	mustInsertSub(t, db, creator)
+
+	got, err = store.SetOwnerRole(ctx, "r1", "carol", false)
+	require.NoError(t, err)
+	assert.Equal(t, []model.Role{model.RoleMember}, got.Roles, "demoting an owner-only creator must yield [member], never []")
+
+	// Missing subscription → ErrSubscriptionNotFound (wrapped).
+	gotNil, err := store.SetOwnerRole(ctx, "missing", "alice", true)
+	assert.Nil(t, gotNil)
+	assert.ErrorIs(t, err, model.ErrSubscriptionNotFound)
+}
+
 // TestMongoStore_ListRoomMembers_OrgDisplay_DeptFirst_Integration verifies that
 // when an org member's id matches both a user's deptId and another user's
 // sectId, the dept branch wins and the combined "name tcName" string is

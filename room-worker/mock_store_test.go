@@ -42,20 +42,6 @@ func (m *MockSubscriptionStore) EXPECT() *MockSubscriptionStoreMockRecorder {
 	return m.recorder
 }
 
-// AddRole mocks base method.
-func (m *MockSubscriptionStore) AddRole(ctx context.Context, account, roomID string, role model.Role) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "AddRole", ctx, account, roomID, role)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// AddRole indicates an expected call of AddRole.
-func (mr *MockSubscriptionStoreMockRecorder) AddRole(ctx, account, roomID, role any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AddRole", reflect.TypeOf((*MockSubscriptionStore)(nil).AddRole), ctx, account, roomID, role)
-}
-
 // BulkCreateRoomMembers mocks base method.
 func (m *MockSubscriptionStore) BulkCreateRoomMembers(ctx context.Context, members []*model.RoomMember) error {
 	m.ctrl.T.Helper()
