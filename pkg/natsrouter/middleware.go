@@ -41,6 +41,35 @@ func RequestID() HandlerFunc {
 	}
 }
 
+// RequireRequestID is the strict variant of RequestID: a missing/non-UUID
+// X-Request-ID is rejected (BadRequest, reason RequestIDRequired) and aborts; never mints.
+func RequireRequestID() HandlerFunc {
+	return func(c *Context) {
+		var (
+			headers nats.Header
+			subj    string
+		)
+		if c.Msg != nil {
+			headers = c.Msg.Header
+			subj = c.Msg.Subject
+		}
+		ctx, id, err := natsutil.RequireRequestID(c.ctx, headers, subj)
+		if err != nil {
+			// c.Msg is always set in production (acquireContext); guard so a
+			// nil-Msg test context aborts cleanly instead of panicking in Respond.
+			if c.Msg != nil {
+				errnats.Reply(c, c.Msg, err)
+			}
+			c.Abort()
+			return
+		}
+		c.Set(requestIDKey, id)
+		c.SetContext(ctx)
+		c.WithLogValues("request_id", id)
+		c.Next()
+	}
+}
+
 // requestAttrs returns common log attributes including the request ID if present.
 func requestAttrs(c *Context) []any {
 	var attrs []any

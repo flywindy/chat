@@ -146,11 +146,11 @@ func TestRepository_AddReaction_Pinned(t *testing.T) {
 		msgID, roomID, createdAt, sender, "pinned msg", "", pinnedAt,
 	).Exec())
 	require.NoError(t, repo.session.Query(
-		`INSERT INTO messages_by_room (room_id, bucket, created_at, message_id, sender, msg, thread_parent_id, pinned_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		roomID, bucketSizer.Of(createdAt), createdAt, msgID, sender, "pinned msg", "", pinnedAt,
+		`INSERT INTO messages_by_room (room_id, bucket, created_at, message_id, sender, msg, thread_parent_id) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		roomID, bucketSizer.Of(createdAt), createdAt, msgID, sender, "pinned msg", "",
 	).Exec())
 	require.NoError(t, repo.session.Query(
-		`INSERT INTO pinned_messages_by_room (room_id, created_at, message_id, sender, msg) VALUES (?, ?, ?, ?, ?)`,
+		`INSERT INTO pinned_messages_by_room (room_id, pinned_at, message_id, sender, msg) VALUES (?, ?, ?, ?, ?)`,
 		roomID, pinnedAt, msgID, sender, "pinned msg",
 	).Exec())
 
@@ -176,7 +176,7 @@ func TestRepository_AddReaction_Pinned(t *testing.T) {
 	// default (no UPDATE issued by AddReaction).
 	var pinnedUpdatedAt time.Time
 	err := repo.session.Query(
-		`SELECT updated_at FROM pinned_messages_by_room WHERE room_id = ? AND created_at = ? AND message_id = ?`,
+		`SELECT updated_at FROM pinned_messages_by_room WHERE room_id = ? AND pinned_at = ? AND message_id = ?`,
 		roomID, pinnedAt, msgID,
 	).Scan(&pinnedUpdatedAt)
 	require.NoError(t, err)
@@ -294,11 +294,11 @@ func TestRepository_RemoveReaction_Pinned(t *testing.T) {
 		msgID, roomID, createdAt, sender, "pinned msg", "", pinnedAt,
 	).Exec())
 	require.NoError(t, repo.session.Query(
-		`INSERT INTO messages_by_room (room_id, bucket, created_at, message_id, sender, msg, thread_parent_id, pinned_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		roomID, bucketSizer.Of(createdAt), createdAt, msgID, sender, "pinned msg", "", pinnedAt,
+		`INSERT INTO messages_by_room (room_id, bucket, created_at, message_id, sender, msg, thread_parent_id) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		roomID, bucketSizer.Of(createdAt), createdAt, msgID, sender, "pinned msg", "",
 	).Exec())
 	require.NoError(t, repo.session.Query(
-		`INSERT INTO pinned_messages_by_room (room_id, created_at, message_id, sender, msg) VALUES (?, ?, ?, ?, ?)`,
+		`INSERT INTO pinned_messages_by_room (room_id, pinned_at, message_id, sender, msg) VALUES (?, ?, ?, ?, ?)`,
 		roomID, pinnedAt, msgID, sender, "pinned msg",
 	).Exec())
 
@@ -323,7 +323,7 @@ func TestRepository_RemoveReaction_Pinned(t *testing.T) {
 	// pinned_messages_by_room.updated_at must NOT have been touched.
 	var pinnedUpdatedAt time.Time
 	require.NoError(t, repo.session.Query(
-		`SELECT updated_at FROM pinned_messages_by_room WHERE room_id = ? AND created_at = ? AND message_id = ?`,
+		`SELECT updated_at FROM pinned_messages_by_room WHERE room_id = ? AND pinned_at = ? AND message_id = ?`,
 		roomID, pinnedAt, msgID,
 	).Scan(&pinnedUpdatedAt))
 	assert.True(t, pinnedUpdatedAt.IsZero() || pinnedUpdatedAt.Before(removedAt),

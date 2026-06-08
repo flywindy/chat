@@ -3278,3 +3278,28 @@ func TestPresenceSnapshotReply_RoundTrip(t *testing.T) {
 	require.NoError(t, json.Unmarshal(data, &out))
 	assert.Equal(t, in, out)
 }
+
+func TestStatusReply_RoundTrip(t *testing.T) {
+	roundTrip(t, &model.StatusReply{Status: "ok"}, &model.StatusReply{})
+	roundTrip(t, &model.StatusReply{Status: "accepted"}, &model.StatusReply{})
+}
+
+func TestStatusWithRequestReply_RoundTrip(t *testing.T) {
+	roundTrip(t, &model.StatusWithRequestReply{Status: "accepted", RequestID: "01970a4f-8c2d-7c9a-abcd-e0123456789f"}, &model.StatusWithRequestReply{})
+}
+
+func TestRoomRenameRequest_RoundTrip(t *testing.T) {
+	roundTrip(t, &model.RoomRenameRequest{NewName: "New Name"}, &model.RoomRenameRequest{})
+}
+
+func TestStatusReply_JSONShape(t *testing.T) {
+	b, err := json.Marshal(model.StatusReply{Status: "accepted"})
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"status":"accepted"}`, string(b))
+}
+
+func TestStatusWithRequestReply_JSONShape(t *testing.T) {
+	b, err := json.Marshal(model.StatusWithRequestReply{Status: "ok", RequestID: "rid"})
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"status":"ok","requestId":"rid"}`, string(b))
+}

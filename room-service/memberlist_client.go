@@ -54,9 +54,8 @@ func (c *natsMemberListClient) ListMembers(ctx context.Context, requester string
 	reqCtx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
-	// natsutil.NewMsg forwards the X-Request-ID from ctx; the remote
-	// room-service.handleListMembers uses RequireRequestID (strict) and would
-	// reject a header-less call with bad_request.
+	// natsutil.NewMsg forwards the X-Request-ID from ctx; the remote member.list
+	// endpoint's RequireRequestID middleware rejects a header-less call.
 	out := natsutil.NewMsg(reqCtx, subject.MemberList(requester, ch.RoomID, ch.SiteID), body)
 	reply, err := c.nc.RequestMsgWithContext(reqCtx, out)
 	if err != nil {

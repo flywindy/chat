@@ -1,6 +1,7 @@
 package subject_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -818,4 +819,34 @@ func TestParseSubscriptionUpdateAccount(t *testing.T) {
 
 	_, ok = subject.ParseSubscriptionUpdateAccount("chat.user.*.event.subscription.update")
 	assert.False(t, ok) // wildcard token rejected
+}
+
+func TestRoomPatternsMatchWildcards(t *testing.T) {
+	const site = "site-a"
+	repl := strings.NewReplacer("{account}", "*", "{roomID}", "*", "{orgID}", "*")
+	cases := []struct{ name, pattern, wildcard string }{
+		{"create", subject.RoomCreatePattern(site), subject.RoomCreateWildcard(site)},
+		{"role-update", subject.MemberRoleUpdatePattern(site), subject.MemberRoleUpdateWildcard(site)},
+		{"remove", subject.MemberRemovePattern(site), subject.MemberRemoveWildcard(site)},
+		{"add", subject.MemberAddPattern(site), subject.MemberAddWildcard(site)},
+		{"list", subject.MemberListPattern(site), subject.MemberListWildcard(site)},
+		{"member-statuses", subject.MemberStatusesPattern(site), subject.MemberStatusesWildcard(site)},
+		{"mentionable", subject.MentionableSubscriptionsPattern(site), subject.MentionableSubscriptionsWildcard(site)},
+		{"org-members", subject.OrgMembersPattern(site), subject.OrgMembersWildcard(site)},
+		{"message-read", subject.MessageReadPattern(site), subject.MessageReadWildcard(site)},
+		{"read-receipt", subject.MessageReadReceiptPattern(site), subject.MessageReadReceiptWildcard(site)},
+		{"thread-read", subject.MessageThreadReadPattern(site), subject.MessageThreadReadWildcard(site)},
+		{"key-get", subject.RoomKeyGetPattern(site), subject.RoomKeyGetWildcard(site)},
+		{"mute", subject.MuteTogglePattern(site), subject.MuteToggleWildcard(site)},
+		{"favorite", subject.FavoriteTogglePattern(site), subject.FavoriteToggleWildcard(site)},
+		{"rename", subject.RoomRenamePattern(site), subject.RoomRenameWildcard(site)},
+		{"app-tabs", subject.RoomAppTabsPattern(site), subject.RoomAppTabsWildcard(site)},
+		{"app-cmd-menu", subject.RoomAppCmdMenuPattern(site), subject.RoomAppCmdMenuWildcard(site)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.wildcard, repl.Replace(tc.pattern),
+				"pattern with params replaced by * must equal the existing wildcard subscription subject")
+		})
+	}
 }

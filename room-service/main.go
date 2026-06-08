@@ -16,6 +16,7 @@ import (
 	"github.com/hmchangw/chat/pkg/atrest"
 	"github.com/hmchangw/chat/pkg/cassutil"
 	"github.com/hmchangw/chat/pkg/mongoutil"
+	"github.com/hmchangw/chat/pkg/natsrouter"
 	"github.com/hmchangw/chat/pkg/natsutil"
 	"github.com/hmchangw/chat/pkg/otelutil"
 	"github.com/hmchangw/chat/pkg/roomkeystore"
@@ -179,14 +180,14 @@ func main() {
 	)
 	handler.dekProvisioner = dekProvisioner
 
-	if err := handler.RegisterCRUD(nc); err != nil {
-		slog.Error("register CRUD handlers failed", "error", err)
-		os.Exit(1)
-	}
+	router := natsrouter.New(nc, "room-service")
+	router.Use(natsrouter.Recovery(), natsrouter.RequireRequestID(), natsrouter.Logging())
+	handler.Register(router)
 
 	slog.Info("room-service running", "site", cfg.SiteID)
 
 	shutdown.Wait(ctx, 25*time.Second,
+		func(ctx context.Context) error { return router.Shutdown(ctx) },
 		func(ctx context.Context) error { return nc.Drain() },
 		func(ctx context.Context) error { return tracerShutdown(ctx) },
 		func(ctx context.Context) error {

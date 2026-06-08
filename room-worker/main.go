@@ -16,6 +16,7 @@ import (
 	"github.com/hmchangw/chat/pkg/atrest"
 	"github.com/hmchangw/chat/pkg/idgen"
 	"github.com/hmchangw/chat/pkg/mongoutil"
+	"github.com/hmchangw/chat/pkg/natsrouter"
 	"github.com/hmchangw/chat/pkg/natsutil"
 	"github.com/hmchangw/chat/pkg/otelutil"
 	"github.com/hmchangw/chat/pkg/roomkeysender"
@@ -113,7 +114,7 @@ func main() {
 	keySender := roomkeysender.NewSender(nc.NatsConn())
 
 	// Eager at-rest DEK provisioning for synchronously-created DM rooms (the
-	// handleSyncCreateDM path bypasses room-service's create-room flow). nil when
+	// serverCreateDM path bypasses room-service's create-room flow). nil when
 	// disabled; message-worker's lazy creation remains the fallback.
 	var vaultWrapper atrest.KeyWrapperCloser
 	var dekProvisioner DEKProvisioner
@@ -149,10 +150,9 @@ func main() {
 	handler.SetKeyFanoutWorkers(cfg.KeyFanoutWorkers)
 	handler.dekProvisioner = dekProvisioner
 
-	if _, err := nc.QueueSubscribe(subject.RoomCreateDMSync(cfg.SiteID), "room-worker", handler.natsServerCreateDM); err != nil {
-		slog.Error("subscribe sync DM endpoint failed", "error", err)
-		os.Exit(1)
-	}
+	router := natsrouter.New(nc, "room-worker")
+	router.Use(natsrouter.Recovery(), natsrouter.RequireRequestID(), natsrouter.Logging())
+	natsrouter.Register(router, subject.RoomCreateDMSync(cfg.SiteID), handler.serverCreateDM)
 
 	cons, err := js.CreateOrUpdateConsumer(ctx, streamCfg.Name, buildConsumerConfig(cfg.Consumer))
 	if err != nil {
@@ -211,6 +211,7 @@ func main() {
 				return fmt.Errorf("worker drain timed out: %w", ctx.Err())
 			}
 		},
+		func(ctx context.Context) error { return router.Shutdown(ctx) },
 		func(ctx context.Context) error { return nc.Drain() },
 		func(ctx context.Context) error { mongoutil.Disconnect(ctx, mongoClient); return nil },
 		func(ctx context.Context) error { return keyStore.Close() },

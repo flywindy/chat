@@ -508,3 +508,22 @@ type RoomRestrictedOutboxPayload struct {
 	OwnerAccount   string `json:"ownerAccount,omitempty" bson:"ownerAccount,omitempty"`
 	Timestamp      int64  `json:"timestamp"              bson:"timestamp"`
 }
+
+// StatusReply is the response for fire-and-forget RPCs that only confirm
+// acceptance. Status is "ok" or "accepted" depending on the endpoint.
+type StatusReply struct {
+	Status string `json:"status"`
+}
+
+// StatusWithRequestReply is StatusReply plus the echoed request ID, for RPCs
+// whose clients correlate the async result by request ID (rename, restricted).
+type StatusWithRequestReply struct {
+	Status    string `json:"status"`
+	RequestID string `json:"requestId"`
+}
+
+// RoomRenameRequest is the rename RPC body. NewName-only: roomID is taken from
+// the subject, never the body.
+type RoomRenameRequest struct {
+	NewName string `json:"newName"`
+}

@@ -605,6 +605,76 @@ func SearchUsersPattern(siteID string) string {
 	return fmt.Sprintf("chat.user.{account}.request.search.%s.users", siteID)
 }
 
+// --- room-service natsrouter pattern builders (siteID baked in) ---
+
+func RoomCreatePattern(siteID string) string {
+	return fmt.Sprintf("chat.user.{account}.request.room.%s.create", siteID)
+}
+
+func MemberRoleUpdatePattern(siteID string) string {
+	return fmt.Sprintf("chat.user.{account}.request.room.{roomID}.%s.member.role-update", siteID)
+}
+
+func MemberRemovePattern(siteID string) string {
+	return fmt.Sprintf("chat.user.{account}.request.room.{roomID}.%s.member.remove", siteID)
+}
+
+func MemberAddPattern(siteID string) string {
+	return fmt.Sprintf("chat.user.{account}.request.room.{roomID}.%s.member.add", siteID)
+}
+
+func MemberListPattern(siteID string) string {
+	return fmt.Sprintf("chat.user.{account}.request.room.{roomID}.%s.member.list", siteID)
+}
+
+func MemberStatusesPattern(siteID string) string {
+	return fmt.Sprintf("chat.user.{account}.request.room.{roomID}.%s.member.statuses", siteID)
+}
+
+func MentionableSubscriptionsPattern(siteID string) string {
+	return fmt.Sprintf("chat.user.{account}.request.room.{roomID}.%s.subscription.mentionable", siteID)
+}
+
+func OrgMembersPattern(siteID string) string {
+	return fmt.Sprintf("chat.user.{account}.request.orgs.{orgID}.%s.members", siteID)
+}
+
+func MessageReadPattern(siteID string) string {
+	return fmt.Sprintf("chat.user.{account}.request.room.{roomID}.%s.message.read", siteID)
+}
+
+func MessageReadReceiptPattern(siteID string) string {
+	return fmt.Sprintf("chat.user.{account}.request.room.{roomID}.%s.message.read-receipt", siteID)
+}
+
+func MessageThreadReadPattern(siteID string) string {
+	return fmt.Sprintf("chat.user.{account}.request.room.{roomID}.%s.message.thread.read", siteID)
+}
+
+func RoomKeyGetPattern(siteID string) string {
+	return fmt.Sprintf("chat.user.{account}.request.room.{roomID}.%s.key.get", siteID)
+}
+
+func MuteTogglePattern(siteID string) string {
+	return fmt.Sprintf("chat.user.{account}.request.room.{roomID}.%s.mute.toggle", siteID)
+}
+
+func FavoriteTogglePattern(siteID string) string {
+	return fmt.Sprintf("chat.user.{account}.request.room.{roomID}.%s.favorite.toggle", siteID)
+}
+
+func RoomRenamePattern(siteID string) string {
+	return fmt.Sprintf("chat.user.{account}.request.room.{roomID}.%s.room.rename", siteID)
+}
+
+func RoomAppTabsPattern(siteID string) string {
+	return fmt.Sprintf("chat.user.{account}.request.room.{roomID}.%s.app.tabs", siteID)
+}
+
+func RoomAppCmdMenuPattern(siteID string) string {
+	return fmt.Sprintf("chat.user.{account}.request.room.{roomID}.%s.app.cmd-menu", siteID)
+}
+
 // isValidAccountToken rejects empty tokens and tokens containing NATS wildcard
 // characters ('*' or '>'). Subject parsers use it as the boundary guard for the
 // account token so wildcard semantics never leak into identity parsing.

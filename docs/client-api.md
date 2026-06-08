@@ -261,7 +261,7 @@ The creator's account and the site come from the subject (`chat.user.{account}.r
 
 See [Error envelope](#6-error-envelope-reference). Returned synchronously on validation/authorization failure:
 
-- `"missing X-Request-ID header"` / `"invalid X-Request-ID format"`
+- `"X-Request-ID header is required …"` (`bad_request`, reason `request_id_required`) — the `X-Request-ID` header is absent or not a valid hyphenated UUID
 - `"request must include at least one of users, orgs, channels, or name"`
 - `"channel name is required"` / `"channel name must be at most 100 characters"`
 - `"cannot create a DM with yourself"`
@@ -619,9 +619,8 @@ See [Error envelope](#6-error-envelope-reference). Returned synchronously when v
 - `"room not found"` — no room matches the subject `{roomID}`.
 - `"rename is only allowed in channel rooms"` — the room is a DM, botDM, or discussion.
 - `"only owners or platform admins can rename a channel"` — the requester is not a platform admin and does not hold the `owner` role in the room.
-- `"invalid request"` — body is malformed.
-- `"missing X-Request-ID header"` — the NATS header is absent.
-- `"invalid X-Request-ID format"` — the header value is not a valid hyphenated UUID.
+- `"invalid request payload"` — body is malformed (returned as `bad_request` by the router; previously surfaced as an internal error).
+- `"X-Request-ID header is required …"` — `bad_request` (reason `request_id_required`); the `X-Request-ID` header is absent or not a valid hyphenated UUID.
 
 ```json
 { "error": "rename is only allowed in channel rooms" }
@@ -2995,6 +2994,8 @@ Every error response — NATS reply subjects, JetStream async results, and HTTP 
 | `too_many_requests`  | 429  | Per-caller rate limit / quota exceeded. |
 | `unavailable`        | 503  | Transient server saturation/timeout (admission, expand timeout). |
 | `internal`           | 500  | Unclassified server-side fault. The real cause is logged server-side only and never sent to the client. |
+
+> **Malformed request bodies.** Any room request/reply RPC whose payload is not valid JSON for its schema is rejected uniformly with `code: bad_request` and the message `"invalid request payload"` — the transport layer rejects it before the handler runs. Treat this as a generic encoding error; do not pattern-match the message text.
 
 ### `reason` catalog (present today)
 

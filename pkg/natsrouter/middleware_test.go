@@ -5,8 +5,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/hmchangw/chat/pkg/natsutil"
 )
 
 func TestHandlerTimeout_SetsDeadline(t *testing.T) {
@@ -68,4 +71,78 @@ func TestHandlerTimeout_DoesNotCancelParentContext(t *testing.T) {
 		t.Fatal("parent context must not be cancelled by HandlerTimeout")
 	default:
 	}
+}
+
+func TestRequireRequestID_ValidPasses(t *testing.T) {
+	const id = "01970a4f-8c2d-7c9a-abcd-e0123456789f"
+	c := &Context{
+		ctx:   context.Background(),
+		Msg:   &nats.Msg{Subject: "x", Header: nats.Header{natsutil.RequestIDHeader: []string{id}}},
+		chain: &chainState{index: -1},
+	}
+	var ran bool
+	c.chain.handlers = []HandlerFunc{
+		RequireRequestID(),
+		func(c *Context) { ran = true },
+	}
+	c.Next()
+
+	require.True(t, ran, "handler must run when request ID is a valid UUID")
+	got, ok := c.Get(requestIDKey)
+	require.True(t, ok)
+	assert.Equal(t, id, got)
+	assert.Equal(t, id, natsutil.RequestIDFromContext(c))
+}
+
+func TestRequireRequestID_MissingAborts(t *testing.T) {
+	c := &Context{
+		ctx:   context.Background(),
+		Msg:   &nats.Msg{Subject: "x", Header: nats.Header{}},
+		chain: &chainState{index: -1},
+	}
+	var ran bool
+	c.chain.handlers = []HandlerFunc{
+		RequireRequestID(),
+		func(c *Context) { ran = true },
+	}
+	c.Next()
+
+	assert.False(t, ran, "handler must NOT run when request ID is missing")
+	assert.True(t, c.IsAborted())
+	_, stamped := c.Get(requestIDKey)
+	assert.False(t, stamped, "request ID must not be stamped on the abort path")
+}
+
+func TestRequireRequestID_InvalidAborts(t *testing.T) {
+	c := &Context{
+		ctx:   context.Background(),
+		Msg:   &nats.Msg{Subject: "x", Header: nats.Header{natsutil.RequestIDHeader: []string{"not-a-uuid"}}},
+		chain: &chainState{index: -1},
+	}
+	var ran bool
+	c.chain.handlers = []HandlerFunc{
+		RequireRequestID(),
+		func(c *Context) { ran = true },
+	}
+	c.Next()
+
+	assert.False(t, ran, "handler must NOT run when request ID is malformed")
+	assert.True(t, c.IsAborted())
+	_, stamped := c.Get(requestIDKey)
+	assert.False(t, stamped, "request ID must not be stamped on the abort path")
+}
+
+func TestRequireRequestID_NilMsgAborts(t *testing.T) {
+	// NewContext-style test context leaves Msg nil; the middleware must abort
+	// cleanly (no panic in errnats.Reply) rather than dereference a nil Msg.
+	c := &Context{ctx: context.Background(), chain: &chainState{index: -1}}
+	var ran bool
+	c.chain.handlers = []HandlerFunc{
+		RequireRequestID(),
+		func(c *Context) { ran = true },
+	}
+	c.Next()
+
+	assert.False(t, ran, "handler must NOT run when Msg (and thus request ID) is absent")
+	assert.True(t, c.IsAborted())
 }

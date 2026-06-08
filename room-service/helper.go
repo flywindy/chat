@@ -4,14 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"regexp"
 	"time"
 
-	"github.com/nats-io/nats.go"
-
 	"github.com/hmchangw/chat/pkg/errcode"
-	"github.com/hmchangw/chat/pkg/errcode/errnats"
 	"github.com/hmchangw/chat/pkg/model"
 )
 
@@ -92,7 +88,6 @@ var (
 	errRenameChannelOnly        = errcode.BadRequest("rename is only allowed in channel rooms", errcode.WithReason(errcode.RoomNonChannelOperation))
 	errRestrictedChannelOnly    = errcode.BadRequest("restricted change is only allowed in channel rooms", errcode.WithReason(errcode.RoomNonChannelOperation))
 	errRoomNotFound             = errcode.NotFound("room not found")
-	errInvalidRenameSubject     = errcode.BadRequest("invalid rename subject")
 	errInvalidRestrictedSubject = errcode.BadRequest("invalid restricted subject")
 	// App-read RPC sentinels (app.tabs / app.cmd-menu). Forbidden when the
 	// caller is neither a room member nor a platform admin; Internal when a
@@ -223,19 +218,13 @@ func (h *Handler) marshalBounded(v any) ([]byte, error) {
 	return body, nil
 }
 
-// replyBoundedJSON sends v on msg's reply subject, enforcing the negotiated
-// NATS max_payload. nats* handlers use this in place of natsutil.ReplyJSON
-// when a response payload could exceed max_payload; an oversize payload is
-// surfaced to the caller via errnats.Reply rather than silently dropped.
-func (h *Handler) replyBoundedJSON(ctx context.Context, msg *nats.Msg, v any) {
-	body, err := h.marshalBounded(v)
-	if err != nil {
-		errnats.Reply(ctx, msg, err)
-		return
+// boundedReply size-checks resp against maxResponseBytes and returns it for the
+// router to marshal, or errResponseTooLarge if it would overflow the payload.
+func boundedReply[T any](h *Handler, resp *T) (*T, error) {
+	if _, err := h.marshalBounded(resp); err != nil {
+		return nil, err
 	}
-	if err := msg.Respond(body); err != nil {
-		slog.ErrorContext(ctx, "reply failed", "error", err)
-	}
+	return resp, nil
 }
 
 // isURLSafeIDToken reports whether s is safe to inline into a URL

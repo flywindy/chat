@@ -11,8 +11,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Marz32onE/instrumentation-go/otel-nats/otelnats"
-	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.opentelemetry.io/otel/attribute"
@@ -20,9 +18,9 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/hmchangw/chat/pkg/errcode"
-	"github.com/hmchangw/chat/pkg/errcode/errnats"
 	"github.com/hmchangw/chat/pkg/idgen"
 	"github.com/hmchangw/chat/pkg/model"
+	"github.com/hmchangw/chat/pkg/natsrouter"
 	"github.com/hmchangw/chat/pkg/natsutil"
 	"github.com/hmchangw/chat/pkg/roomkeymetrics"
 	"github.com/hmchangw/chat/pkg/roomkeysender"
@@ -1578,20 +1576,12 @@ var (
 	errRoomIDCollision = permanent(errcode.Conflict("room id collision (existing room metadata mismatch)"))
 )
 
-// handleSyncCreateDM creates a DM, self-DM, or botDM room and returns the requester's subscription.
-// Errors flow through the centralized errcode.Classify path (the legacy
-// sanitizeSyncDMError helper was retired by the errcode migration).
-func (h *Handler) handleSyncCreateDM(ctx context.Context, data []byte) (*model.SyncCreateDMReply, error) {
+// serverCreateDM creates a DM, self-DM, or botDM room and returns the requester's
+// subscription; the router unmarshals req and supplies the request ID.
+func (h *Handler) serverCreateDM(c *natsrouter.Context, req model.SyncCreateDMRequest) (*model.SyncCreateDMReply, error) {
+	var ctx context.Context = c
 	requestID := natsutil.RequestIDFromContext(ctx)
 
-	var req model.SyncCreateDMRequest
-	if err := json.Unmarshal(data, &req); err != nil {
-		// Single %w on the errcode sentinel preserves errors.Is identity;
-		// the json.Unmarshal error text is folded in as %v so it surfaces in
-		// Classify's server-side log line without adding a second errcode to
-		// the chain (the semgrep no-multi-%w rule trips on two %w verbs).
-		return nil, fmt.Errorf("%w: %v", errInvalidSyncDMRequest, err)
-	}
 	if err := validateSyncCreateDMShape(&req); err != nil {
 		return nil, err
 	}
@@ -1731,7 +1721,7 @@ func (h *Handler) createSelfDM(ctx context.Context, requester *model.User, reque
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
-	// Provision the at-rest DEK before persisting the room (see handleSyncCreateDM).
+	// Provision the at-rest DEK before persisting the room (see serverCreateDM).
 	if h.dekProvisioner != nil {
 		if err := h.dekProvisioner.EnsureDEK(ctx, room.ID); err != nil {
 			return nil, fmt.Errorf("provision at-rest DEK for self-DM room %s: %w", room.ID, err)
@@ -1953,31 +1943,6 @@ func (h *Handler) publishSyncDMOutbox(ctx context.Context, room *model.Room, req
 		eData,
 		natsutil.OutboxDedupID(ctx, other.SiteID, payloadSeed),
 	)
-}
-
-// requireDedupRequestID is the strict X-Request-ID gate used by sync entry
-// points (natsServerCreateDM) whose downstream pipeline derives JetStream
-// Nats-Msg-Id and message-ID dedup keys from the request ID. Silently minting
-// would break client-retry dedup; see docs/error-handling.md §3a. Thin wrapper
-// over natsutil.RequireRequestID so the test sits in the same package.
-func requireDedupRequestID(ctx context.Context, headers nats.Header, subject string) (context.Context, string, error) {
-	return natsutil.RequireRequestID(ctx, headers, subject)
-}
-
-// natsServerCreateDM is the NATS entry point for chat.server.request.room.{siteID}.create.dm.
-func (h *Handler) natsServerCreateDM(m otelnats.Msg) {
-	ctx, id, err := requireDedupRequestID(m.Context(), m.Msg.Header, m.Msg.Subject)
-	if err != nil {
-		errnats.Reply(errcode.WithLogValues(m.Context(), "subject", m.Msg.Subject), m.Msg, err)
-		return
-	}
-	ctx = errcode.WithLogValues(ctx, "request_id", id, "subject", m.Msg.Subject)
-	reply, err := h.handleSyncCreateDM(ctx, m.Msg.Data)
-	if err != nil {
-		errnats.Reply(ctx, m.Msg, err)
-		return
-	}
-	natsutil.ReplyJSON(m.Msg, reply)
 }
 
 // fanOutRoomKeyToSurvivors sends the already-fetched room key to every survivor

@@ -16,7 +16,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/Marz32onE/instrumentation-go/otel-nats/otelnats"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
@@ -25,9 +24,9 @@ import (
 
 	"github.com/hmchangw/chat/pkg/displayfmt"
 	"github.com/hmchangw/chat/pkg/errcode"
-	"github.com/hmchangw/chat/pkg/errcode/errnats"
 	"github.com/hmchangw/chat/pkg/idgen"
 	"github.com/hmchangw/chat/pkg/model"
+	"github.com/hmchangw/chat/pkg/natsrouter"
 	"github.com/hmchangw/chat/pkg/natsutil"
 	"github.com/hmchangw/chat/pkg/roomkeymetrics"
 	"github.com/hmchangw/chat/pkg/roomkeystore"
@@ -74,117 +73,34 @@ func NewHandler(store RoomStore, keyStore RoomKeyStore, memberListClient MemberL
 	}
 }
 
-// wrappedCtx validates the inbound X-Request-ID via natsutil.RequireRequestID
-// (strict mode) and returns m.Context() seeded with the id for the centralized
-// errcode.Classify log line. Missing/malformed headers return an
-// errcode.BadRequest that the caller must reply to via errnats.Reply.
-//
-// Strict mode is required here — not the mint-on-missing default — because
-// room-service handlers fan out to room-worker, whose JetStream publishes
-// derive Nats-Msg-Id / message IDs from this request ID (OutboxDedupID,
-// messageDedupSeed, idgen.MessageIDFromRequestID). A silently-minted server-
-// side ID would break dedup across client retries. See docs/error-handling.md
-// §3a.
-func wrappedCtx(m otelnats.Msg) (context.Context, error) {
-	ctx, id, err := natsutil.RequireRequestID(m.Context(), m.Msg.Header, m.Msg.Subject)
-	if err != nil {
-		return m.Context(), err
-	}
-	return errcode.WithLogValues(ctx, "request_id", id), nil
+// Register wires every room-service RPC onto the natsrouter Router.
+// Register/RegisterNoBody panic on subscription failure (fatal at startup).
+func (h *Handler) Register(r *natsrouter.Router) {
+	natsrouter.RegisterNoBody(r, subject.MuteTogglePattern(h.siteID), h.muteToggle)
+	natsrouter.RegisterNoBody(r, subject.FavoriteTogglePattern(h.siteID), h.favoriteToggle)
+	natsrouter.RegisterNoBody(r, subject.RoomAppTabsPattern(h.siteID), h.getRoomAppTabs)
+	natsrouter.RegisterNoBody(r, subject.RoomAppCmdMenuPattern(h.siteID), h.getRoomAppCommandMenu)
+	natsrouter.RegisterNoBody(r, subject.OrgMembersPattern(h.siteID), h.listOrgMembers)
+	natsrouter.RegisterNoBody(r, subject.MemberListPattern(h.siteID), h.listMembers)
+	natsrouter.RegisterNoBody(r, subject.MemberStatusesPattern(h.siteID), h.listMemberStatuses)
+	natsrouter.RegisterNoBody(r, subject.MentionableSubscriptionsPattern(h.siteID), h.listMentionableSubscriptions)
+	natsrouter.RegisterNoBody(r, subject.RoomKeyGetPattern(h.siteID), h.getRoomKey)
+	natsrouter.RegisterNoBody(r, subject.MessageReadPattern(h.siteID), h.messageRead)
+	natsrouter.Register(r, subject.MessageReadReceiptPattern(h.siteID), h.messageReadReceipt)
+	natsrouter.Register(r, subject.MessageThreadReadPattern(h.siteID), h.messageThreadRead)
+	natsrouter.Register(r, subject.MemberRoleUpdatePattern(h.siteID), h.updateRole)
+	natsrouter.Register(r, subject.MemberRemovePattern(h.siteID), h.removeMember)
+	natsrouter.Register(r, subject.MemberAddPattern(h.siteID), h.addMembers)
+	natsrouter.Register(r, subject.RoomRenamePattern(h.siteID), h.roomRename)
+	natsrouter.Register(r, subject.RoomRestricted(h.siteID), h.roomRestricted)
+	natsrouter.Register(r, subject.RoomsInfoBatchSubscribe(h.siteID), h.roomsInfoBatch)
+	natsrouter.Register(r, subject.RoomKeyEnsure(h.siteID), h.ensureRoomKey)
+	natsrouter.Register(r, subject.RoomCreatePattern(h.siteID), h.createRoom)
 }
 
-// RegisterCRUD registers NATS request/reply handlers for room CRUD with queue group.
-func (h *Handler) RegisterCRUD(nc *otelnats.Conn) error {
-	const queue = "room-service"
-	if _, err := nc.QueueSubscribe(subject.RoomCreateWildcard(h.siteID), queue, h.natsCreateRoom); err != nil {
-		return fmt.Errorf("subscribe room.create: %w", err)
-	}
-	if _, err := nc.QueueSubscribe(subject.RoomsInfoBatchSubscribe(h.siteID), queue, h.natsRoomsInfoBatch); err != nil {
-		return err
-	}
-	if _, err := nc.QueueSubscribe(subject.MemberRoleUpdateWildcard(h.siteID), queue, h.natsUpdateRole); err != nil {
-		return fmt.Errorf("subscribe member role update: %w", err)
-	}
-	if _, err := nc.QueueSubscribe(subject.MemberRemoveWildcard(h.siteID), queue, h.NatsHandleRemoveMember); err != nil {
-		return fmt.Errorf("subscribe member remove: %w", err)
-	}
-	if _, err := nc.QueueSubscribe(subject.MemberAddWildcard(h.siteID), queue, h.natsAddMembers); err != nil {
-		return fmt.Errorf("subscribe member add: %w", err)
-	}
-	if _, err := nc.QueueSubscribe(subject.MessageReadWildcard(h.siteID), queue, h.natsMessageRead); err != nil {
-		return fmt.Errorf("subscribe message read: %w", err)
-	}
-	if _, err := nc.QueueSubscribe(subject.MessageReadReceiptWildcard(h.siteID), queue, h.natsMessageReadReceipt); err != nil {
-		return fmt.Errorf("subscribe message read-receipt: %w", err)
-	}
-	if _, err := nc.QueueSubscribe(subject.MessageThreadReadWildcard(h.siteID), queue, h.natsMessageThreadRead); err != nil {
-		return fmt.Errorf("subscribe message thread read: %w", err)
-	}
-	if _, err := nc.QueueSubscribe(subject.MemberListWildcard(h.siteID), queue, h.natsListMembers); err != nil {
-		return fmt.Errorf("subscribe member list: %w", err)
-	}
-	if _, err := nc.QueueSubscribe(subject.OrgMembersWildcard(h.siteID), queue, h.natsListOrgMembers); err != nil {
-		return fmt.Errorf("subscribe org members: %w", err)
-	}
-	if _, err := nc.QueueSubscribe(subject.RoomKeyEnsure(h.siteID), queue, h.NatsHandleEnsureRoomKey); err != nil {
-		return fmt.Errorf("subscribe room key ensure: %w", err)
-	}
-	if _, err := nc.QueueSubscribe(subject.RoomKeyGetWildcard(h.siteID), queue, h.natsGetRoomKey); err != nil {
-		return fmt.Errorf("subscribe room key get: %w", err)
-	}
-	if _, err := nc.QueueSubscribe(subject.MuteToggleWildcard(h.siteID), queue, h.natsMuteToggle); err != nil {
-		return fmt.Errorf("subscribe mute toggle: %w", err)
-	}
-	if _, err := nc.QueueSubscribe(subject.FavoriteToggleWildcard(h.siteID), queue, h.natsFavoriteToggle); err != nil {
-		return fmt.Errorf("subscribe favorite toggle: %w", err)
-	}
-	if _, err := nc.QueueSubscribe(subject.RoomRenameWildcard(h.siteID), queue, h.natsRoomRename); err != nil {
-		return fmt.Errorf("subscribe room rename: %w", err)
-	}
-	if _, err := nc.QueueSubscribe(subject.RoomRestricted(h.siteID), queue, h.natsRoomRestricted); err != nil {
-		return fmt.Errorf("subscribe room restricted: %w", err)
-	}
-	if _, err := nc.QueueSubscribe(subject.RoomAppTabsWildcard(h.siteID), queue, h.natsGetRoomAppTabs); err != nil {
-		return fmt.Errorf("subscribe app tabs: %w", err)
-	}
-	if _, err := nc.QueueSubscribe(subject.RoomAppCmdMenuWildcard(h.siteID), queue, h.natsGetRoomAppCommandMenu); err != nil {
-		return fmt.Errorf("subscribe app cmd-menu: %w", err)
-	}
-	if _, err := nc.QueueSubscribe(subject.MemberStatusesWildcard(h.siteID), queue, h.natsListMemberStatuses); err != nil {
-		return fmt.Errorf("subscribe member statuses: %w", err)
-	}
-	if _, err := nc.QueueSubscribe(subject.MentionableSubscriptionsWildcard(h.siteID), queue, h.natsListMentionableSubscriptions); err != nil {
-		return fmt.Errorf("subscribe mentionable subscriptions: %w", err)
-	}
-	return nil
-}
-
-func (h *Handler) natsCreateRoom(m otelnats.Msg) {
-	ctx, err := wrappedCtx(m)
-	if err != nil {
-		errnats.Reply(ctx, m.Msg, err)
-		return
-	}
-	resp, err := h.handleCreateRoom(ctx, m.Msg.Subject, m.Msg.Data)
-	if err != nil {
-		errnats.Reply(ctx, m.Msg, err)
-		return
-	}
-	if err := m.Msg.Respond(resp); err != nil {
-		slog.Error("failed to respond to create-room", "error", err)
-	}
-}
-
-func (h *Handler) handleCreateRoom(ctx context.Context, subj string, data []byte) ([]byte, error) {
-	requesterAccount, ok := subject.ParseRoomCreateSubject(subj)
-	if !ok {
-		return nil, fmt.Errorf("invalid create-room subject: %s", subj)
-	}
-
-	var req model.CreateRoomRequest
-	if err := json.Unmarshal(data, &req); err != nil {
-		return nil, errcode.BadRequest("invalid request")
-	}
+func (h *Handler) createRoom(c *natsrouter.Context, req model.CreateRoomRequest) (*model.CreateRoomReply, error) { //nolint:gocritic // hugeParam: req is passed by value to satisfy the natsrouter.Register handler signature
+	var ctx context.Context = c
+	requesterAccount := c.Param("account")
 
 	roomType, err := classifyAndValidate(&req, requesterAccount)
 	if err != nil {
@@ -261,7 +177,7 @@ func classifyAndValidate(req *model.CreateRoomRequest, requesterAccount string) 
 // maxChannelNameRunes caps the rune length of a client-supplied channel name.
 const maxChannelNameRunes = 100
 
-func (h *Handler) handleCreateRoomDMOrBotDM(ctx context.Context, req *model.CreateRoomRequest, requester *model.User, roomType model.RoomType) ([]byte, error) {
+func (h *Handler) handleCreateRoomDMOrBotDM(ctx context.Context, req *model.CreateRoomRequest, requester *model.User, roomType model.RoomType) (*model.CreateRoomReply, error) {
 	otherAccount := req.Users[0]
 	other, err := h.store.GetUser(ctx, otherAccount)
 	if err != nil {
@@ -289,10 +205,10 @@ func (h *Handler) handleCreateRoomDMOrBotDM(ctx context.Context, req *model.Crea
 		// DM already exists: this is a success ("open-or-create"), not an error.
 		// Return the existing room ID so the client opens it. RoomType is left
 		// empty on this branch, matching the prior error-reply behaviour.
-		return json.Marshal(model.CreateRoomReply{
+		return &model.CreateRoomReply{
 			Status: model.CreateRoomStatusExists,
 			RoomID: existing.RoomID,
-		})
+		}, nil
 	}
 	if err != nil && !errors.Is(err, model.ErrSubscriptionNotFound) {
 		return nil, fmt.Errorf("dm dedup check: %w", err)
@@ -314,7 +230,7 @@ func (h *Handler) handleCreateRoomDMOrBotDM(ctx context.Context, req *model.Crea
 	return h.publishCreateRoom(ctx, req, requester, roomType)
 }
 
-func (h *Handler) handleCreateRoomChannel(ctx context.Context, req *model.CreateRoomRequest, requester *model.User, requesterAccount string, roomType model.RoomType) ([]byte, error) {
+func (h *Handler) handleCreateRoomChannel(ctx context.Context, req *model.CreateRoomRequest, requester *model.User, requesterAccount string, roomType model.RoomType) (*model.CreateRoomReply, error) {
 	channelOrgIDs, channelAccounts, err := h.expandChannelRefs(ctx, requester.Account, req.Channels)
 	if err != nil {
 		return nil, fmt.Errorf("expand channels: %w", err)
@@ -329,7 +245,7 @@ func (h *Handler) handleCreateRoomChannel(ctx context.Context, req *model.Create
 	}
 
 	// Reject phantom orgs and users before sizing/publishing (run concurrently),
-	// same reason as handleAddMembers: the worker writes room_members + sys-msg
+	// same reason as addMembers: the worker writes room_members + sys-msg
 	// without rechecking validity.
 	if err := h.validateMembershipRefs(ctx, allOrgs, allUsers); err != nil {
 		return nil, err
@@ -366,7 +282,7 @@ func (h *Handler) handleCreateRoomChannel(ctx context.Context, req *model.Create
 	return h.publishCreateRoom(ctx, req, requester, roomType)
 }
 
-func (h *Handler) publishCreateRoom(ctx context.Context, req *model.CreateRoomRequest, requester *model.User, roomType model.RoomType) ([]byte, error) {
+func (h *Handler) publishCreateRoom(ctx context.Context, req *model.CreateRoomRequest, requester *model.User, roomType model.RoomType) (*model.CreateRoomReply, error) {
 	req.RequesterID = requester.ID
 	req.RequesterAccount = requester.Account
 	req.Timestamp = time.Now().UTC().UnixMilli()
@@ -407,131 +323,66 @@ func (h *Handler) publishCreateRoom(ctx context.Context, req *model.CreateRoomRe
 	if err := h.publishToStream(ctx, subject.RoomCanonical(h.siteID, "create"), payload, ""); err != nil {
 		return nil, fmt.Errorf("publish canonical: %w", err)
 	}
-	return json.Marshal(model.CreateRoomReply{
+	return &model.CreateRoomReply{
 		Status:   model.CreateRoomReplyAccepted,
 		RoomID:   req.RoomID,
 		RoomType: string(roomType),
-	})
+	}, nil
 }
 
-// NatsHandleRemoveMember handles remove-member authorization requests.
-func (h *Handler) NatsHandleRemoveMember(m otelnats.Msg) {
-	ctx, err := wrappedCtx(m)
-	if err != nil {
-		errnats.Reply(ctx, m.Msg, err)
-		return
-	}
-	resp, err := h.handleRemoveMember(ctx, m.Msg.Subject, m.Msg.Data)
-	if err != nil {
-		errnats.Reply(ctx, m.Msg, err)
-		return
-	}
-	if err := m.Msg.Respond(resp); err != nil {
-		slog.Error("failed to respond to message", "error", err)
-	}
-}
-
-func (h *Handler) natsListMembers(m otelnats.Msg) {
-	ctx, err := wrappedCtx(m)
-	if err != nil {
-		errnats.Reply(ctx, m.Msg, err)
-		return
-	}
-	resp, err := h.handleListMembers(ctx, m.Msg.Subject, m.Msg.Data)
-	if err != nil {
-		errnats.Reply(ctx, m.Msg, err)
-		return
-	}
-	natsutil.ReplyJSON(m.Msg, resp)
-}
-
-func (h *Handler) natsListOrgMembers(m otelnats.Msg) {
-	ctx, err := wrappedCtx(m)
-	if err != nil {
-		errnats.Reply(ctx, m.Msg, err)
-		return
-	}
-	resp, err := h.handleListOrgMembers(ctx, m.Msg.Subject)
-	if err != nil {
-		errnats.Reply(ctx, m.Msg, err)
-		return
-	}
-	natsutil.ReplyJSON(m.Msg, resp)
-}
-
-func (h *Handler) handleListOrgMembers(ctx context.Context, subj string) (model.ListOrgMembersResponse, error) {
-	orgID, _, ok := subject.ParseOrgMembersSubject(subj)
-	if !ok {
-		return model.ListOrgMembersResponse{}, fmt.Errorf("invalid org-members subject")
-	}
+func (h *Handler) listOrgMembers(c *natsrouter.Context) (*model.ListOrgMembersResponse, error) {
+	var ctx context.Context = c
+	orgID := c.Param("orgID")
 	members, err := h.store.ListOrgMembers(ctx, orgID)
 	if err != nil {
 		if errcode.HasReason(err, errcode.RoomInvalidOrg) {
-			return model.ListOrgMembersResponse{}, errcode.BadRequest("invalid org", errcode.WithReason(errcode.RoomInvalidOrg))
+			return nil, errcode.BadRequest("invalid org", errcode.WithReason(errcode.RoomInvalidOrg))
 		}
-		return model.ListOrgMembersResponse{}, fmt.Errorf("get org members: %w", err)
+		return nil, fmt.Errorf("get org members: %w", err)
 	}
-	return model.ListOrgMembersResponse{Members: members}, nil
+	return &model.ListOrgMembersResponse{Members: members}, nil
 }
 
-func (h *Handler) handleListMembers(ctx context.Context, subj string, data []byte) (model.ListRoomMembersResponse, error) {
-	requesterAccount, roomID, ok := subject.ParseUserRoomSubject(subj)
-	if !ok {
-		return model.ListRoomMembersResponse{}, fmt.Errorf("invalid list-members subject")
-	}
+func (h *Handler) listMembers(c *natsrouter.Context) (*model.ListRoomMembersResponse, error) {
+	var ctx context.Context = c
+	requesterAccount := c.Param("account")
+	roomID := c.Param("roomID")
 
 	_, err := h.store.GetSubscription(ctx, requesterAccount, roomID)
 	switch {
 	case errors.Is(err, model.ErrSubscriptionNotFound):
-		return model.ListRoomMembersResponse{}, errNotRoomMember
+		return nil, errNotRoomMember
 	case err != nil:
-		return model.ListRoomMembersResponse{}, fmt.Errorf("check room membership: %w", err)
+		return nil, fmt.Errorf("check room membership: %w", err)
 	}
 
 	var req model.ListRoomMembersRequest
-	if len(data) > 0 {
-		if err := json.Unmarshal(data, &req); err != nil {
-			return model.ListRoomMembersResponse{}, errcode.BadRequest("invalid request")
+	if c.Msg != nil && len(c.Msg.Data) > 0 {
+		if err := json.Unmarshal(c.Msg.Data, &req); err != nil {
+			return nil, errcode.BadRequest("invalid request")
 		}
 	}
 	if req.Limit != nil && *req.Limit <= 0 {
-		return model.ListRoomMembersResponse{}, errListLimitInvalid
+		return nil, errListLimitInvalid
 	}
 	if req.Offset != nil && *req.Offset < 0 {
-		return model.ListRoomMembersResponse{}, errListOffsetInvalid
+		return nil, errListOffsetInvalid
 	}
 
 	members, err := h.store.ListRoomMembers(ctx, roomID, req.Limit, req.Offset, req.Enrich)
 	if err != nil {
-		return model.ListRoomMembersResponse{}, fmt.Errorf("get room members: %w", err)
+		return nil, fmt.Errorf("get room members: %w", err)
 	}
-	return model.ListRoomMembersResponse{Members: members}, nil
+	return &model.ListRoomMembersResponse{Members: members}, nil
 }
 
-func (h *Handler) natsGetRoomKey(m otelnats.Msg) {
-	ctx, err := wrappedCtx(m)
-	if err != nil {
-		errnats.Reply(ctx, m.Msg, err)
-		return
-	}
-	resp, err := h.handleGetRoomKey(ctx, m.Msg.Subject, m.Msg.Data)
-	if err != nil {
-		errnats.Reply(ctx, m.Msg, err)
-		return
-	}
-	if err := m.Msg.Respond(resp); err != nil {
-		slog.Error("failed to respond to get room key", "error", err)
-	}
-}
-
-func (h *Handler) handleGetRoomKey(ctx context.Context, subj string, data []byte) ([]byte, error) {
+func (h *Handler) getRoomKey(c *natsrouter.Context) (*model.RoomKeyGetResponse, error) {
+	var ctx context.Context = c
 	if h.keyStore == nil {
 		return nil, fmt.Errorf("get room key: key store not configured")
 	}
-	requesterAccount, roomID, ok := subject.ParseUserRoomSubject(subj)
-	if !ok {
-		return nil, fmt.Errorf("invalid get-room-key subject")
-	}
+	requesterAccount := c.Param("account")
+	roomID := c.Param("roomID")
 
 	_, err := h.store.GetSubscription(ctx, requesterAccount, roomID)
 	switch {
@@ -542,8 +393,8 @@ func (h *Handler) handleGetRoomKey(ctx context.Context, subj string, data []byte
 	}
 
 	var req model.RoomKeyGetRequest
-	if len(data) > 0 {
-		if err := json.Unmarshal(data, &req); err != nil {
+	if c.Msg != nil && len(c.Msg.Data) > 0 {
+		if err := json.Unmarshal(c.Msg.Data, &req); err != nil {
 			return nil, errcode.BadRequest("invalid request")
 		}
 	}
@@ -557,11 +408,11 @@ func (h *Handler) handleGetRoomKey(ctx context.Context, subj string, data []byte
 			return nil, errRoomKeyAbsent
 		}
 		// #nosec G117 -- RoomKeyGetResponse.PrivateKey is the intended payload: on-demand key delivery to the authorized room member over an auth-callout-gated per-user NATS subject, not a leak
-		return json.Marshal(model.RoomKeyGetResponse{
+		return &model.RoomKeyGetResponse{
 			RoomID:     roomID,
 			Version:    existing.Version,
 			PrivateKey: existing.KeyPair.PrivateKey,
-		})
+		}, nil
 	}
 
 	pair, err := h.keyStore.GetByVersion(ctx, roomID, *req.Version)
@@ -572,31 +423,17 @@ func (h *Handler) handleGetRoomKey(ctx context.Context, subj string, data []byte
 		return nil, errRoomKeyAbsent
 	}
 	// #nosec G117 -- RoomKeyGetResponse.PrivateKey is the intended payload: on-demand key delivery to the authorized room member over an auth-callout-gated per-user NATS subject, not a leak
-	return json.Marshal(model.RoomKeyGetResponse{
+	return &model.RoomKeyGetResponse{
 		RoomID:     roomID,
 		Version:    *req.Version,
 		PrivateKey: pair.PrivateKey,
-	})
+	}, nil
 }
 
 const (
 	defaultMemberStatusesLimit = 3
 	defaultMentionableLimit    = 3
 )
-
-func (h *Handler) natsListMemberStatuses(m otelnats.Msg) {
-	ctx, err := wrappedCtx(m)
-	if err != nil {
-		errnats.Reply(ctx, m.Msg, err)
-		return
-	}
-	resp, err := h.handleListMemberStatuses(ctx, m.Msg.Subject, m.Msg.Data)
-	if err != nil {
-		errnats.Reply(ctx, m.Msg, err)
-		return
-	}
-	natsutil.ReplyJSON(m.Msg, resp)
-}
 
 // requireMembershipAndGetRoom checks the requester's room membership and
 // loads the room document in parallel — both reads are independent and the
@@ -636,11 +473,10 @@ func (h *Handler) requireMembershipAndGetRoom(ctx context.Context, account, room
 	return room, nil
 }
 
-func (h *Handler) handleListMemberStatuses(ctx context.Context, subj string, data []byte) (model.ListMemberStatusesResponse, error) {
-	requesterAccount, roomID, ok := subject.ParseUserRoomSubject(subj)
-	if !ok {
-		return model.ListMemberStatusesResponse{}, errcode.BadRequest("invalid member-statuses subject")
-	}
+func (h *Handler) listMemberStatuses(c *natsrouter.Context) (*model.ListMemberStatusesResponse, error) {
+	var ctx context.Context = c
+	requesterAccount := c.Param("account")
+	roomID := c.Param("roomID")
 	if span := trace.SpanFromContext(ctx); span.IsRecording() {
 		span.SetAttributes(
 			attribute.String("room.id", roomID),
@@ -649,59 +485,43 @@ func (h *Handler) handleListMemberStatuses(ctx context.Context, subj string, dat
 	}
 
 	var req model.ListMemberStatusesRequest
-	if len(data) > 0 {
-		if err := json.Unmarshal(data, &req); err != nil {
-			return model.ListMemberStatusesResponse{}, errcode.BadRequest("invalid request")
+	if c.Msg != nil && len(c.Msg.Data) > 0 {
+		if err := json.Unmarshal(c.Msg.Data, &req); err != nil {
+			return nil, errcode.BadRequest("invalid request")
 		}
 	}
 
 	room, err := h.requireMembershipAndGetRoom(ctx, requesterAccount, roomID)
 	if err != nil {
-		return model.ListMemberStatusesResponse{}, err
+		return nil, err
 	}
 
-	// Clamp the default to the room cap so a small room with a no-limit
-	// request doesn't trip the explicit-limit guard. Client-supplied values
-	// remain strictly validated.
+	// Clamp the default to the room cap so a small no-limit room doesn't trip
+	// the explicit-limit guard. Client-supplied values stay strictly validated.
 	var limit int
 	if req.Limit == nil {
 		if room.UserCount == 0 {
-			return model.ListMemberStatusesResponse{Members: []model.MemberStatus{}}, nil
+			return &model.ListMemberStatusesResponse{Members: []model.MemberStatus{}}, nil
 		}
 		limit = min(defaultMemberStatusesLimit, room.UserCount)
 	} else {
 		limit = *req.Limit
 		if limit <= 0 || limit > room.UserCount {
-			return model.ListMemberStatusesResponse{}, errMemberStatusesLimitInvalid
+			return nil, errMemberStatusesLimitInvalid
 		}
 	}
 
 	members, err := h.store.ListMemberStatuses(ctx, roomID, limit)
 	if err != nil {
-		return model.ListMemberStatusesResponse{}, fmt.Errorf("list member statuses: %w", err)
+		return nil, fmt.Errorf("list member statuses: %w", err)
 	}
-	return model.ListMemberStatusesResponse{Members: members}, nil
+	return &model.ListMemberStatusesResponse{Members: members}, nil
 }
 
-func (h *Handler) natsListMentionableSubscriptions(m otelnats.Msg) {
-	ctx, err := wrappedCtx(m)
-	if err != nil {
-		errnats.Reply(ctx, m.Msg, err)
-		return
-	}
-	resp, err := h.handleListMentionableSubscriptions(ctx, m.Msg.Subject, m.Msg.Data)
-	if err != nil {
-		errnats.Reply(ctx, m.Msg, err)
-		return
-	}
-	natsutil.ReplyJSON(m.Msg, resp)
-}
-
-func (h *Handler) handleListMentionableSubscriptions(ctx context.Context, subj string, data []byte) (model.MentionableSubscriptionsResponse, error) {
-	requesterAccount, roomID, ok := subject.ParseUserRoomSubject(subj)
-	if !ok {
-		return model.MentionableSubscriptionsResponse{}, errcode.BadRequest("invalid mentionable-subscriptions subject")
-	}
+func (h *Handler) listMentionableSubscriptions(c *natsrouter.Context) (*model.MentionableSubscriptionsResponse, error) {
+	var ctx context.Context = c
+	requesterAccount := c.Param("account")
+	roomID := c.Param("roomID")
 	if span := trace.SpanFromContext(ctx); span.IsRecording() {
 		span.SetAttributes(
 			attribute.String("room.id", roomID),
@@ -710,28 +530,28 @@ func (h *Handler) handleListMentionableSubscriptions(ctx context.Context, subj s
 	}
 
 	var req model.MentionableSubscriptionsRequest
-	if len(data) > 0 {
-		if err := json.Unmarshal(data, &req); err != nil {
-			return model.MentionableSubscriptionsResponse{}, errcode.BadRequest("invalid request")
+	if c.Msg != nil && len(c.Msg.Data) > 0 {
+		if err := json.Unmarshal(c.Msg.Data, &req); err != nil {
+			return nil, errcode.BadRequest("invalid request")
 		}
 	}
 
 	room, err := h.requireMembershipAndGetRoom(ctx, requesterAccount, roomID)
 	if err != nil {
-		return model.MentionableSubscriptionsResponse{}, err
+		return nil, err
 	}
 
 	mentionableCap := room.UserCount + room.AppCount
 	var limit int
 	if req.Limit == nil {
 		if mentionableCap == 0 {
-			return model.MentionableSubscriptionsResponse{Subscriptions: []model.MentionableSubscription{}}, nil
+			return &model.MentionableSubscriptionsResponse{Subscriptions: []model.MentionableSubscription{}}, nil
 		}
 		limit = min(defaultMentionableLimit, mentionableCap)
 	} else {
 		limit = *req.Limit
 		if limit <= 0 || limit > mentionableCap {
-			return model.MentionableSubscriptionsResponse{}, errMentionableLimitInvalid
+			return nil, errMentionableLimitInvalid
 		}
 	}
 
@@ -741,21 +561,15 @@ func (h *Handler) handleListMentionableSubscriptions(ctx context.Context, subj s
 
 	subs, err := h.store.ListMentionableSubscriptions(ctx, roomID, requesterAccount, escapedFilter, limit)
 	if err != nil {
-		return model.MentionableSubscriptionsResponse{}, fmt.Errorf("list mentionable subscriptions: %w", err)
+		return nil, fmt.Errorf("list mentionable subscriptions: %w", err)
 	}
-	return model.MentionableSubscriptionsResponse{Subscriptions: subs}, nil
+	return &model.MentionableSubscriptionsResponse{Subscriptions: subs}, nil
 }
 
-func (h *Handler) handleRemoveMember(ctx context.Context, subj string, data []byte) ([]byte, error) {
-	requesterAccount, roomID, ok := subject.ParseUserRoomSubject(subj)
-	if !ok {
-		return nil, fmt.Errorf("invalid remove-member subject: %s", subj)
-	}
-
-	var req model.RemoveMemberRequest
-	if err := json.Unmarshal(data, &req); err != nil {
-		return nil, errcode.BadRequest("invalid request")
-	}
+func (h *Handler) removeMember(c *natsrouter.Context, req model.RemoveMemberRequest) (*model.StatusReply, error) { //nolint:gocritic // hugeParam: req is passed by value to satisfy the natsrouter.Register handler signature
+	var ctx context.Context = c
+	requesterAccount := c.Param("account")
+	roomID := c.Param("roomID")
 
 	if req.RoomID != "" && req.RoomID != roomID {
 		return nil, errRoomIDMismatch
@@ -824,7 +638,7 @@ func (h *Handler) handleRemoveMember(ctx context.Context, subj string, data []by
 	req.Timestamp = time.Now().UTC().UnixMilli()
 
 	// Publish to ROOMS stream for room-worker processing.
-	data, err = json.Marshal(req)
+	data, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("marshal remove member request: %w", err)
 	}
@@ -832,34 +646,13 @@ func (h *Handler) handleRemoveMember(ctx context.Context, subj string, data []by
 		return nil, fmt.Errorf("publish to stream: %w", err)
 	}
 
-	return json.Marshal(map[string]string{"status": "accepted"})
+	return &model.StatusReply{Status: "accepted"}, nil
 }
 
-func (h *Handler) natsUpdateRole(m otelnats.Msg) {
-	ctx, err := wrappedCtx(m)
-	if err != nil {
-		errnats.Reply(ctx, m.Msg, err)
-		return
-	}
-	resp, err := h.handleUpdateRole(ctx, m.Msg.Subject, m.Msg.Data)
-	if err != nil {
-		errnats.Reply(ctx, m.Msg, err)
-		return
-	}
-	if err := m.Msg.Respond(resp); err != nil {
-		slog.Error("failed to respond to update-role message", "error", err)
-	}
-}
-
-func (h *Handler) handleUpdateRole(ctx context.Context, subj string, data []byte) ([]byte, error) {
-	requester, roomID, ok := subject.ParseUserRoomSubject(subj)
-	if !ok {
-		return nil, fmt.Errorf("invalid subject: %s", subj)
-	}
-	var req model.UpdateRoleRequest
-	if err := json.Unmarshal(data, &req); err != nil {
-		return nil, errcode.BadRequest("invalid request")
-	}
+func (h *Handler) updateRole(c *natsrouter.Context, req model.UpdateRoleRequest) (*model.StatusReply, error) {
+	var ctx context.Context = c
+	requester := c.Param("account")
+	roomID := c.Param("roomID")
 	if req.RoomID != "" && req.RoomID != roomID {
 		return nil, errRoomIDMismatch
 	}
@@ -945,7 +738,7 @@ func (h *Handler) handleUpdateRole(ctx context.Context, subj string, data []byte
 		}
 	}
 
-	return json.Marshal(map[string]string{"status": "ok"})
+	return &model.StatusReply{Status: "ok"}, nil
 }
 
 // publishSubscriptionUpdate marshals a SubscriptionUpdateEvent for sub with the
@@ -970,28 +763,11 @@ func (h *Handler) publishSubscriptionUpdate(ctx context.Context, account, action
 	return data, nil
 }
 
-func (h *Handler) natsAddMembers(m otelnats.Msg) {
-	ctx, err := wrappedCtx(m)
-	if err != nil {
-		errnats.Reply(ctx, m.Msg, err)
-		return
-	}
-	resp, err := h.handleAddMembers(ctx, m.Msg.Subject, m.Msg.Data)
-	if err != nil {
-		errnats.Reply(ctx, m.Msg, err)
-		return
-	}
-	if err := m.Msg.Respond(resp); err != nil {
-		slog.Error("failed to respond to add-members", "error", err)
-	}
-}
-
-func (h *Handler) handleAddMembers(ctx context.Context, subj string, data []byte) ([]byte, error) {
-	// 1. Parse subject → requester, roomID
-	requester, roomID, ok := subject.ParseUserRoomSubject(subj)
-	if !ok {
-		return nil, fmt.Errorf("invalid add-members subject: %s", subj)
-	}
+func (h *Handler) addMembers(c *natsrouter.Context, req model.AddMembersRequest) (*model.StatusReply, error) { //nolint:gocritic // hugeParam: req is passed by value to satisfy the natsrouter.Register handler signature
+	var ctx context.Context = c
+	// 1. Subject params → requester, roomID
+	requester := c.Param("account")
+	roomID := c.Param("roomID")
 
 	// 2. Verify requester is in room. Distinguish "not a member" (typed
 	// forbidden — the user genuinely can't add members) from an infra failure
@@ -1016,11 +792,7 @@ func (h *Handler) handleAddMembers(ctx context.Context, subj string, data []byte
 		return nil, errOnlyOwnersCanAddToRes
 	}
 
-	// 4. Unmarshal request
-	var req model.AddMembersRequest
-	if err := json.Unmarshal(data, &req); err != nil {
-		return nil, errcode.BadRequest("invalid request")
-	}
+	// 4. Cross-check optional body roomID against the subject roomID.
 	if req.RoomID != "" && req.RoomID != roomID {
 		return nil, errRoomIDMismatch
 	}
@@ -1090,7 +862,7 @@ func (h *Handler) handleAddMembers(ctx context.Context, subj string, data []byte
 	}
 
 	// 10. Reply accepted
-	return json.Marshal(map[string]string{"status": "accepted"})
+	return &model.StatusReply{Status: "accepted"}, nil
 }
 
 // validateAccountsExist returns a RoomUserNotFound-reason errcode naming the
@@ -1242,28 +1014,9 @@ func (h *Handler) expandChannelRefs(ctx context.Context, requester string, refs 
 	return orgIDs, accounts, nil
 }
 
-func (h *Handler) natsRoomsInfoBatch(m otelnats.Msg) {
-	ctx, err := wrappedCtx(m)
-	if err != nil {
-		errnats.Reply(ctx, m.Msg, err)
-		return
-	}
-	resp, err := h.handleRoomsInfoBatch(ctx, m.Msg.Data)
-	if err != nil {
-		errnats.Reply(ctx, m.Msg, err)
-		return
-	}
-	if err := m.Msg.Respond(resp); err != nil {
-		slog.Error("failed to respond to message", "error", err)
-	}
-}
-
-func (h *Handler) handleRoomsInfoBatch(ctx context.Context, data []byte) ([]byte, error) {
+func (h *Handler) roomsInfoBatch(c *natsrouter.Context, req model.RoomsInfoBatchRequest) (*model.RoomsInfoBatchResponse, error) {
+	var ctx context.Context = c
 	start := time.Now()
-	var req model.RoomsInfoBatchRequest
-	if err := json.Unmarshal(data, &req); err != nil {
-		return nil, errcode.BadRequest("invalid request")
-	}
 	if len(req.RoomIDs) == 0 {
 		return nil, errcode.BadRequest("roomIds must not be empty")
 	}
@@ -1316,7 +1069,7 @@ func (h *Handler) handleRoomsInfoBatch(ctx context.Context, data []byte) ([]byte
 		"latency_ms", time.Since(start).Milliseconds(),
 	)
 
-	return json.Marshal(model.RoomsInfoBatchResponse{Rooms: infos})
+	return &model.RoomsInfoBatchResponse{Rooms: infos}, nil
 }
 
 func (h *Handler) aggregateRoomInfo(ids []string, rooms []model.Room, keys map[string]*roomkeystore.VersionedKeyPair) ([]model.RoomInfo, int, int) {
@@ -1380,28 +1133,10 @@ func chunkedGetKeys(ctx context.Context, ks RoomKeyStore, ids []string) (map[str
 	return merged, nil
 }
 
-func (h *Handler) natsMessageRead(m otelnats.Msg) {
-	ctx, err := wrappedCtx(m)
-	if err != nil {
-		errnats.Reply(ctx, m.Msg, err)
-		return
-	}
-	resp, err := h.handleMessageRead(ctx, m.Msg.Subject, m.Msg.Data)
-	if err != nil {
-		errnats.Reply(ctx, m.Msg, err)
-		return
-	}
-	if err := m.Msg.Respond(resp); err != nil {
-		slog.Error("failed to respond to message read", "error", err)
-	}
-}
-
-func (h *Handler) handleMessageRead(ctx context.Context, subj string, _ []byte) ([]byte, error) {
-
-	account, roomID, ok := subject.ParseUserRoomSubject(subj)
-	if !ok {
-		return nil, fmt.Errorf("invalid message-read subject: %s", subj)
-	}
+func (h *Handler) messageRead(c *natsrouter.Context) (*model.StatusReply, error) {
+	var ctx context.Context = c
+	account := c.Param("account")
+	roomID := c.Param("roomID")
 
 	sub, err := h.store.GetSubscription(ctx, account, roomID)
 	switch {
@@ -1477,10 +1212,10 @@ func (h *Handler) handleMessageRead(ctx context.Context, subj string, _ []byte) 
 	// Skip the room-floor recompute when the room has no content, or when
 	// this user already had a recorded read past the latest message
 	if room.LastMsgAt == nil {
-		return json.Marshal(map[string]string{"status": "accepted"})
+		return &model.StatusReply{Status: "accepted"}, nil
 	}
 	if sub.LastSeenAt != nil && sub.LastSeenAt.After(*room.LastMsgAt) {
-		return json.Marshal(map[string]string{"status": "accepted"})
+		return &model.StatusReply{Status: "accepted"}, nil
 	}
 
 	minTime, err := h.store.MinSubscriptionLastSeenByRoomID(ctx, roomID)
@@ -1498,35 +1233,14 @@ func (h *Handler) handleMessageRead(ctx context.Context, subj string, _ []byte) 
 		}
 	}
 
-	return json.Marshal(map[string]string{"status": "accepted"})
+	return &model.StatusReply{Status: "accepted"}, nil
 }
 
-func (h *Handler) natsMessageReadReceipt(m otelnats.Msg) {
-	ctx, err := wrappedCtx(m)
-	if err != nil {
-		errnats.Reply(ctx, m.Msg, err)
-		return
-	}
-	resp, err := h.handleMessageReadReceipt(ctx, m.Msg.Subject, m.Msg.Data)
-	if err != nil {
-		errnats.Reply(ctx, m.Msg, err)
-		return
-	}
-	if err := m.Msg.Respond(resp); err != nil {
-		slog.Error("failed to respond to message read-receipt", "error", err)
-	}
-}
+func (h *Handler) messageReadReceipt(c *natsrouter.Context, req model.ReadReceiptRequest) (*model.ReadReceiptResponse, error) {
+	var ctx context.Context = c
+	requesterAccount := c.Param("account")
+	roomID := c.Param("roomID")
 
-func (h *Handler) handleMessageReadReceipt(ctx context.Context, subj string, data []byte) ([]byte, error) {
-	requesterAccount, roomID, ok := subject.ParseUserRoomSubject(subj)
-	if !ok {
-		return nil, fmt.Errorf("invalid message-read-receipt subject: %s", subj)
-	}
-
-	var req model.ReadReceiptRequest
-	if err := json.Unmarshal(data, &req); err != nil {
-		return nil, errcode.BadRequest("invalid request")
-	}
 	if req.MessageID == "" {
 		return nil, errcode.BadRequest("invalid request: messageId is required")
 	}
@@ -1594,35 +1308,14 @@ func (h *Handler) handleMessageReadReceipt(ctx context.Context, subj string, dat
 		}
 	}
 
-	return json.Marshal(model.ReadReceiptResponse{Readers: entries})
+	return &model.ReadReceiptResponse{Readers: entries}, nil
 }
 
-func (h *Handler) natsMessageThreadRead(m otelnats.Msg) {
-	ctx, err := wrappedCtx(m)
-	if err != nil {
-		errnats.Reply(ctx, m.Msg, err)
-		return
-	}
-	resp, err := h.handleMessageThreadRead(ctx, m.Msg.Subject, m.Msg.Data)
-	if err != nil {
-		errnats.Reply(ctx, m.Msg, err)
-		return
-	}
-	if err := m.Msg.Respond(resp); err != nil {
-		slog.Error("failed to respond to message thread-read", "error", err)
-	}
-}
+func (h *Handler) messageThreadRead(c *natsrouter.Context, req model.MessageThreadReadRequest) (*model.StatusReply, error) {
+	var ctx context.Context = c
+	account := c.Param("account")
+	roomID := c.Param("roomID")
 
-func (h *Handler) handleMessageThreadRead(ctx context.Context, subj string, data []byte) ([]byte, error) {
-	account, roomID, ok := subject.ParseUserRoomSubject(subj)
-	if !ok {
-		return nil, fmt.Errorf("invalid message-thread-read subject: %s", subj)
-	}
-
-	var req model.MessageThreadReadRequest
-	if err := json.Unmarshal(data, &req); err != nil {
-		return nil, errcode.BadRequest("invalid request")
-	}
 	if strings.TrimSpace(req.ThreadID) == "" {
 		return nil, errInvalidThreadID
 	}
@@ -1723,43 +1416,20 @@ func (h *Handler) handleMessageThreadRead(ctx context.Context, subj string, data
 		}
 	}
 
-	return json.Marshal(map[string]string{"status": "accepted"})
+	return &model.StatusReply{Status: "accepted"}, nil
 }
 
-// NatsHandleEnsureRoomKey handles server-to-server requests to ensure a room
+// ensureRoomKey handles server-to-server requests to ensure a room
 // has an encryption key pair in Valkey. Generates and stores a new pair if
 // missing. The reply confirms the room and version but does not return key
 // bytes — encryption/decryption is performed by broadcast-worker and clients,
 // which read keys from Valkey directly.
-func (h *Handler) NatsHandleEnsureRoomKey(m otelnats.Msg) {
-	ctx, err := wrappedCtx(m)
-	if err != nil {
-		errnats.Reply(ctx, m.Msg, err)
-		return
-	}
-	resp, err := h.handleEnsureRoomKey(ctx, m.Msg.Data)
-	if err != nil {
-		errnats.Reply(ctx, m.Msg, err)
-		return
-	}
-	if err := m.Msg.Respond(resp); err != nil {
-		slog.Error("failed to respond to ensure room key", "error", err)
-	}
-}
-
-func (h *Handler) handleEnsureRoomKey(ctx context.Context, data []byte) ([]byte, error) {
+func (h *Handler) ensureRoomKey(c *natsrouter.Context, req model.RoomKeyEnsureRequest) (*model.RoomKeyEnsureResponse, error) {
+	var ctx context.Context = c
 	if h.keyStore == nil {
 		// Local Valkey disabled — surfaces to peer sites as a transient outage
 		// (symmetric with the timeout-class failures in :808/:819/:828).
 		return nil, errcode.Unavailable("room key store not configured")
-	}
-	var req model.RoomKeyEnsureRequest
-	if err := json.Unmarshal(data, &req); err != nil {
-		// Per doc.go and pkg/errcode logging contract: json.SyntaxError /
-		// UnmarshalTypeError strings embed the offending substring and field
-		// shape from an unauthenticated payload — never WithCause(err) here.
-		// Same shape as message-gatekeeper:173.
-		return nil, errcode.BadRequest("invalid ensure-room-key request")
 	}
 	if req.RoomID == "" {
 		return nil, errcode.BadRequest("roomId is required")
@@ -1770,10 +1440,10 @@ func (h *Handler) handleEnsureRoomKey(ctx context.Context, data []byte) ([]byte,
 		return nil, fmt.Errorf("ensure room key: get: %w", err)
 	}
 	if existing != nil {
-		return json.Marshal(model.RoomKeyEnsureResponse{
+		return &model.RoomKeyEnsureResponse{
 			RoomID:  req.RoomID,
 			Version: existing.Version,
-		})
+		}, nil
 	}
 
 	newPair, err := roomkeystore.GenerateKeyPair()
@@ -1784,51 +1454,27 @@ func (h *Handler) handleEnsureRoomKey(ctx context.Context, data []byte) ([]byte,
 	if err != nil {
 		return nil, fmt.Errorf("ensure room key: set: %w", err)
 	}
-	return json.Marshal(model.RoomKeyEnsureResponse{
+	return &model.RoomKeyEnsureResponse{
 		RoomID:  req.RoomID,
 		Version: ver,
-	})
+	}, nil
 }
 
-func (h *Handler) natsRoomRename(m otelnats.Msg) {
-	ctx, err := wrappedCtx(m)
-	if err != nil {
-		errnats.Reply(ctx, m.Msg, err)
-		return
-	}
-	resp, err := h.handleRoomRename(ctx, m.Msg.Subject, m.Msg.Data)
-	if err != nil {
-		errnats.Reply(ctx, m.Msg, err)
-		return
-	}
-	if err := m.Msg.Respond(resp); err != nil {
-		slog.Error("failed to respond to rename", "error", err)
-	}
-}
-
-func (h *Handler) handleRoomRename(ctx context.Context, subj string, data []byte) ([]byte, error) {
-	account, roomID, ok := subject.ParseUserRoomSubject(subj)
-	if !ok {
-		return nil, fmt.Errorf("%w: %s", errInvalidRenameSubject, subj)
-	}
-	requestID := natsutil.RequestIDFromContext(ctx)
+func (h *Handler) roomRename(c *natsrouter.Context, req model.RoomRenameRequest) (*model.StatusWithRequestReply, error) {
+	var ctx context.Context = c
+	account := c.Param("account")
+	roomID := c.Param("roomID")
+	requestID := natsutil.RequestIDFromContext(c)
 
 	// Client body carries only newName — roomID and account are taken from the
 	// subject (the authoritative identity), never from the wire body.
-	var body struct {
-		NewName string `json:"newName"`
-	}
-	if err := json.Unmarshal(data, &body); err != nil {
-		return nil, fmt.Errorf("invalid request: %w", err)
-	}
-
 	slog.Debug("processing room.rename",
 		"op", model.AsyncJobOpRoomRename,
 		"requester", account,
 		"roomID", roomID,
-		"requestID", requestID)
+		"request_id", requestID)
 
-	name := strings.TrimSpace(body.NewName)
+	name := strings.TrimSpace(req.NewName)
 	if name == "" || utf8.RuneCountInString(name) > 100 {
 		return nil, errInvalidName
 	}
@@ -1875,36 +1521,17 @@ func (h *Handler) handleRoomRename(ctx context.Context, subj string, data []byte
 	if err := h.publishToStream(ctx, subject.RoomCanonical(h.siteID, "room.rename"), out, ""); err != nil {
 		return nil, fmt.Errorf("publish to stream: %w", err)
 	}
-	return json.Marshal(map[string]string{"status": "accepted", "requestId": requestID})
+	return &model.StatusWithRequestReply{Status: "accepted", RequestID: requestID}, nil
 }
 
-func (h *Handler) natsRoomRestricted(m otelnats.Msg) {
-	ctx, err := wrappedCtx(m)
-	if err != nil {
-		errnats.Reply(ctx, m.Msg, err)
-		return
-	}
-	resp, err := h.handleRoomRestricted(ctx, m.Msg.Data)
-	if err != nil {
-		errnats.Reply(ctx, m.Msg, err)
-		return
-	}
-	if err := m.Msg.Respond(resp); err != nil {
-		slog.Error("failed to respond to restricted", "error", err)
-	}
-}
-
-// handleRoomRestricted is the sync chat.server.> RPC. Account in the body is
+// roomRestricted is the sync chat.server.> RPC. Account in the body is
 // the audit identity (no subject prefix authenticates the caller — this RPC
 // is server-side admin tooling). Mongo writes + sys-message publish + outbox
 // fan-out happen inline; caller retries safely via dedup IDs.
-func (h *Handler) handleRoomRestricted(ctx context.Context, data []byte) ([]byte, error) {
-	requestID := natsutil.RequestIDFromContext(ctx)
+func (h *Handler) roomRestricted(c *natsrouter.Context, req model.RoomRestrictedRequest) (*model.StatusWithRequestReply, error) {
+	var ctx context.Context = c
+	requestID := natsutil.RequestIDFromContext(c)
 
-	var req model.RoomRestrictedRequest
-	if err := json.Unmarshal(data, &req); err != nil {
-		return nil, fmt.Errorf("invalid request: %w", err)
-	}
 	if req.RoomID == "" || req.Account == "" {
 		return nil, fmt.Errorf("%w: roomId and account are required", errInvalidRestrictedSubject)
 	}
@@ -1913,7 +1540,7 @@ func (h *Handler) handleRoomRestricted(ctx context.Context, data []byte) ([]byte
 	slog.Info("processing room.restricted",
 		"requester", req.Account,
 		"roomID", req.RoomID,
-		"requestID", requestID)
+		"request_id", requestID)
 
 	requesterUser, getUserErr := h.store.GetUser(ctx, req.Account)
 	if getUserErr != nil && !errors.Is(getUserErr, ErrUserNotFound) {
@@ -2051,30 +1678,13 @@ func (h *Handler) handleRoomRestricted(ctx context.Context, data []byte) ([]byte
 		}
 	}
 
-	return json.Marshal(map[string]string{"status": "ok", "requestId": requestID})
+	return &model.StatusWithRequestReply{Status: "ok", RequestID: requestID}, nil
 }
 
-func (h *Handler) natsMuteToggle(m otelnats.Msg) {
-	ctx, err := wrappedCtx(m)
-	if err != nil {
-		errnats.Reply(ctx, m.Msg, err)
-		return
-	}
-	resp, err := h.handleMuteToggle(ctx, m.Msg.Subject, m.Msg.Data)
-	if err != nil {
-		errnats.Reply(ctx, m.Msg, err)
-		return
-	}
-	if err := m.Msg.Respond(resp); err != nil {
-		slog.Error("failed to respond to mute toggle", "error", err)
-	}
-}
-
-func (h *Handler) handleMuteToggle(ctx context.Context, subj string, _ []byte) ([]byte, error) {
-	account, roomID, ok := subject.ParseUserRoomSubject(subj)
-	if !ok {
-		return nil, fmt.Errorf("invalid mute-toggle subject: %s", subj)
-	}
+func (h *Handler) muteToggle(c *natsrouter.Context) (*model.MuteToggleResponse, error) {
+	var ctx context.Context = c
+	account := c.Param("account")
+	roomID := c.Param("roomID")
 
 	if span := trace.SpanFromContext(ctx); span.IsRecording() {
 		span.SetAttributes(
@@ -2143,30 +1753,13 @@ func (h *Handler) handleMuteToggle(ctx context.Context, subj string, _ []byte) (
 		}
 	}
 
-	return json.Marshal(model.MuteToggleResponse{Status: "ok", Muted: sub.Muted})
+	return &model.MuteToggleResponse{Status: "ok", Muted: sub.Muted}, nil
 }
 
-func (h *Handler) natsFavoriteToggle(m otelnats.Msg) {
-	ctx, err := wrappedCtx(m)
-	if err != nil {
-		errnats.Reply(ctx, m.Msg, err)
-		return
-	}
-	resp, err := h.handleFavoriteToggle(ctx, m.Msg.Subject, m.Msg.Data)
-	if err != nil {
-		errnats.Reply(ctx, m.Msg, err)
-		return
-	}
-	if err := m.Msg.Respond(resp); err != nil {
-		slog.Error("failed to respond to favorite toggle", "error", err)
-	}
-}
-
-func (h *Handler) handleFavoriteToggle(ctx context.Context, subj string, _ []byte) ([]byte, error) {
-	account, roomID, ok := subject.ParseUserRoomSubject(subj)
-	if !ok {
-		return nil, fmt.Errorf("invalid favorite-toggle subject: %s", subj)
-	}
+func (h *Handler) favoriteToggle(c *natsrouter.Context) (*model.FavoriteToggleResponse, error) {
+	var ctx context.Context = c
+	account := c.Param("account")
+	roomID := c.Param("roomID")
 
 	if span := trace.SpanFromContext(ctx); span.IsRecording() {
 		span.SetAttributes(
@@ -2220,7 +1813,7 @@ func (h *Handler) handleFavoriteToggle(ctx context.Context, subj string, _ []byt
 		}
 	}
 
-	return json.Marshal(model.FavoriteToggleResponse{Status: "ok", Favorite: sub.Favorite})
+	return &model.FavoriteToggleResponse{Status: "ok", Favorite: sub.Favorite}, nil
 }
 
 // authorizeRoomAppRead allows the request iff the caller has a
@@ -2289,14 +1882,12 @@ func (h *Handler) buildTabURL(tmpl, roomID string) (string, bool) {
 	return joined.String(), true
 }
 
-func (h *Handler) handleGetRoomAppTabs(ctx context.Context, subj string) (model.GetRoomAppTabsResponse, error) {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+func (h *Handler) getRoomAppTabs(c *natsrouter.Context) (*model.GetRoomAppTabsResponse, error) {
+	ctx, cancel := context.WithTimeout(c, 5*time.Second)
 	defer cancel()
 
-	account, roomID, ok := subject.ParseUserRoomSubject(subj)
-	if !ok {
-		return model.GetRoomAppTabsResponse{}, errcode.BadRequest("invalid request")
-	}
+	account := c.Param("account")
+	roomID := c.Param("roomID")
 
 	if span := trace.SpanFromContext(ctx); span.IsRecording() {
 		span.SetAttributes(
@@ -2307,12 +1898,12 @@ func (h *Handler) handleGetRoomAppTabs(ctx context.Context, subj string) (model.
 	}
 
 	if err := h.authorizeRoomAppRead(ctx, account, roomID); err != nil {
-		return model.GetRoomAppTabsResponse{}, err
+		return nil, err
 	}
 
 	apps, err := h.store.ListDefaultChannelTabApps(ctx)
 	if err != nil {
-		return model.GetRoomAppTabsResponse{}, fmt.Errorf("list default channel-tab apps: %w", err)
+		return nil, fmt.Errorf("list default channel-tab apps: %w", err)
 	}
 
 	out := make([]model.RoomApp, 0, len(apps))
@@ -2321,14 +1912,14 @@ func (h *Handler) handleGetRoomAppTabs(ctx context.Context, subj string) (model.
 		if app.ChannelTab == nil {
 			slog.Warn("skipping app with nil ChannelTab",
 				"appId", app.ID, "roomId", roomID,
-				"requestId", natsutil.RequestIDFromContext(ctx))
+				"request_id", natsutil.RequestIDFromContext(ctx))
 			continue
 		}
 		tabURL, ok := h.buildTabURL(app.ChannelTab.URL.Default, roomID)
 		if !ok {
 			slog.Warn("skipping app with empty or unparseable channelTab url",
 				"appId", app.ID, "roomId", roomID,
-				"requestId", natsutil.RequestIDFromContext(ctx))
+				"request_id", natsutil.RequestIDFromContext(ctx))
 			continue
 		}
 		out = append(out, model.RoomApp{
@@ -2339,17 +1930,15 @@ func (h *Handler) handleGetRoomAppTabs(ctx context.Context, subj string) (model.
 			AvatarURL: app.AvatarURL,
 		})
 	}
-	return model.GetRoomAppTabsResponse{Apps: out}, nil
+	return boundedReply(h, &model.GetRoomAppTabsResponse{Apps: out})
 }
 
-func (h *Handler) handleGetRoomAppCommandMenu(ctx context.Context, subj string) (model.GetRoomAppCommandMenuResponse, error) {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+func (h *Handler) getRoomAppCommandMenu(c *natsrouter.Context) (*model.GetRoomAppCommandMenuResponse, error) {
+	ctx, cancel := context.WithTimeout(c, 5*time.Second)
 	defer cancel()
 
-	account, roomID, ok := subject.ParseUserRoomSubject(subj)
-	if !ok {
-		return model.GetRoomAppCommandMenuResponse{}, errcode.BadRequest("invalid request")
-	}
+	account := c.Param("account")
+	roomID := c.Param("roomID")
 
 	if span := trace.SpanFromContext(ctx); span.IsRecording() {
 		span.SetAttributes(
@@ -2360,19 +1949,19 @@ func (h *Handler) handleGetRoomAppCommandMenu(ctx context.Context, subj string) 
 	}
 
 	if err := h.authorizeRoomAppRead(ctx, account, roomID); err != nil {
-		return model.GetRoomAppCommandMenuResponse{}, err
+		return nil, err
 	}
 
 	bots, err := h.store.ListRoomBotApps(ctx, roomID)
 	if err != nil {
-		return model.GetRoomAppCommandMenuResponse{}, fmt.Errorf("list room bot apps: %w", err)
+		return nil, fmt.Errorf("list room bot apps: %w", err)
 	}
 	if span := trace.SpanFromContext(ctx); span.IsRecording() {
 		span.SetAttributes(attribute.Int("bot.count", len(bots)))
 	}
 
 	if len(bots) == 0 {
-		return model.GetRoomAppCommandMenuResponse{
+		return &model.GetRoomAppCommandMenuResponse{
 			AppAssistants: make([]model.RoomAppAssistant, 0),
 		}, nil
 	}
@@ -2383,7 +1972,7 @@ func (h *Handler) handleGetRoomAppCommandMenu(ctx context.Context, subj string) 
 	}
 	menus, err := h.store.ListActiveCmdMenus(ctx, names)
 	if err != nil {
-		return model.GetRoomAppCommandMenuResponse{}, fmt.Errorf("list active cmd menus: %w", err)
+		return nil, fmt.Errorf("list active cmd menus: %w", err)
 	}
 	byName := make(map[string][]model.CmdBlock, len(menus))
 	for _, m := range menus {
@@ -2398,33 +1987,5 @@ func (h *Handler) handleGetRoomAppCommandMenu(ctx context.Context, subj string) 
 			CmdBlocks: byName[b.AssistantName],
 		})
 	}
-	return model.GetRoomAppCommandMenuResponse{AppAssistants: out}, nil
-}
-
-func (h *Handler) natsGetRoomAppCommandMenu(m otelnats.Msg) {
-	ctx, err := wrappedCtx(m)
-	if err != nil {
-		errnats.Reply(ctx, m.Msg, err)
-		return
-	}
-	resp, err := h.handleGetRoomAppCommandMenu(ctx, m.Msg.Subject)
-	if err != nil {
-		errnats.Reply(ctx, m.Msg, err)
-		return
-	}
-	h.replyBoundedJSON(ctx, m.Msg, resp)
-}
-
-func (h *Handler) natsGetRoomAppTabs(m otelnats.Msg) {
-	ctx, err := wrappedCtx(m)
-	if err != nil {
-		errnats.Reply(ctx, m.Msg, err)
-		return
-	}
-	resp, err := h.handleGetRoomAppTabs(ctx, m.Msg.Subject)
-	if err != nil {
-		errnats.Reply(ctx, m.Msg, err)
-		return
-	}
-	h.replyBoundedJSON(ctx, m.Msg, resp)
+	return boundedReply(h, &model.GetRoomAppCommandMenuResponse{AppAssistants: out})
 }
