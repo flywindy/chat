@@ -1483,6 +1483,51 @@ func TestAddMembers_CrossSiteTimeout(t *testing.T) {
 	assert.Equal(t, "timeout listing members of channel source@site-b", ee.Message)
 }
 
+// TestRoomsInfoBatchRPC_NoRequestID proves the relaxed posture: the base
+// middleware mints an X-Request-ID when absent (RequestID, not RequireRequestID),
+// so a header-less server-to-server call succeeds instead of being rejected. The
+// RoomsInfoBatch read RPC is the representative deterministic route; the minting
+// middleware applies to every room-service handler.
+func TestRoomsInfoBatchRPC_NoRequestID(t *testing.T) {
+	db := setupMongo(t)
+	keyStore := setupValkey(t)
+	natsURL := setupNATS(t)
+
+	store := NewMongoStore(db)
+
+	mustInsertRoom(t, db, &model.Room{ID: "r1", Name: "room-1", Type: model.RoomTypeChannel, SiteID: "site-a"})
+
+	otelNC, err := otelnats.Connect(natsURL)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = otelNC.Drain() })
+
+	handler := NewHandler(store, keyStore, nil, nil, "site-a", 1000, 500, 5*time.Second, 5, func(context.Context, string, []byte, string) error { return nil }, func(context.Context, string, []byte) error { return nil }, nil, 0)
+	router := natsrouter.New(otelNC, "room-service")
+	// Production-shaped base: mint, do not require.
+	router.Use(natsrouter.Recovery(), natsrouter.RequestID(), natsrouter.Logging())
+	handler.Register(router)
+	t.Cleanup(func() { _ = router.Shutdown(context.Background()) })
+	require.NoError(t, otelNC.NatsConn().Flush())
+
+	nc, err := nats.Connect(natsURL)
+	require.NoError(t, err)
+	t.Cleanup(func() { nc.Drain() })
+
+	ctxReq, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	// Header-less request succeeds — the middleware mints an ID instead of rejecting.
+	batchData, err := json.Marshal(model.RoomsInfoBatchRequest{RoomIDs: []string{"r1"}})
+	require.NoError(t, err)
+	msg, err := nc.RequestWithContext(ctxReq, subject.RoomsInfoBatch("site-a"), batchData)
+	require.NoError(t, err, "RoomsInfoBatch must answer a header-less request")
+	var resp model.RoomsInfoBatchResponse
+	require.NoError(t, json.Unmarshal(msg.Data, &resp))
+	require.Len(t, resp.Rooms, 1)
+	assert.Equal(t, "r1", resp.Rooms[0].RoomID)
+	assert.True(t, resp.Rooms[0].Found)
+}
+
 func TestRoomsInfoBatchRPC(t *testing.T) {
 	db := setupMongo(t)
 	keyStore := setupValkey(t)

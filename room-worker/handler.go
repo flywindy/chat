@@ -1934,14 +1934,17 @@ func (h *Handler) publishSyncDMOutbox(ctx context.Context, room *model.Room, req
 	if err != nil {
 		return fmt.Errorf("marshal outbox envelope: %w", err)
 	}
-	// Dedup seed keys on room.CreatedAt (stable across retries and re-subscribes)
-	// rather than joinedAt — botDM re-subscribes carry a fresh joinedAt that
-	// would otherwise defeat JetStream dedup on a NATS request retry.
+	// Dedup keys on intrinsic room identity (stable across retries and
+	// re-subscribes) plus the destination site, NOT the request ID — the router
+	// now mints a fresh X-Request-ID when absent, which must not change the
+	// dedup key. room.CreatedAt is the original creation time on a retry (the
+	// duplicate-key reconcile path resolves room to the existing record); using
+	// joinedAt would break dedup because botDM re-subscribes carry a fresh value.
 	payloadSeed := fmt.Sprintf("%s:%s:%d", room.ID, requester.Account, room.CreatedAt.UnixMilli())
 	return h.publish(ctx,
 		subject.Outbox(room.SiteID, other.SiteID, model.OutboxMemberAdded),
 		eData,
-		natsutil.OutboxDedupID(ctx, other.SiteID, payloadSeed),
+		payloadSeed+":"+other.SiteID,
 	)
 }
 

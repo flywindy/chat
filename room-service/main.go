@@ -181,7 +181,7 @@ func main() {
 	handler.dekProvisioner = dekProvisioner
 
 	router := natsrouter.New(nc, "room-service")
-	router.Use(natsrouter.Recovery(), natsrouter.RequireRequestID(), natsrouter.Logging())
+	router.Use(natsrouter.Recovery(), natsrouter.RequestID(), natsrouter.Logging())
 	handler.Register(router)
 
 	slog.Info("room-service running", "site", cfg.SiteID)

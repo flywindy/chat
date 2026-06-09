@@ -2864,7 +2864,9 @@ func TestHandleSyncCreateDM_CrossSite_EmitsOutbox(t *testing.T) {
 	requester := &model.User{ID: "u-alice", Account: "alice", SiteID: "site-a"}
 	other := &model.User{ID: "u-bob", Account: "bob", SiteID: "site-b"}
 	store.EXPECT().FindUsersByAccounts(gomock.Any(), gomock.Any()).Return([]model.User{*requester, *other}, nil)
-	store.EXPECT().CreateRoom(gomock.Any(), gomock.Any()).Return(nil)
+	var insertedRoom *model.Room
+	store.EXPECT().CreateRoom(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, r *model.Room) error { insertedRoom = r; return nil })
 	store.EXPECT().BulkCreateSubscriptions(gomock.Any(), gomock.Any()).Return(nil)
 	store.EXPECT().FindDMSubscriptionPair(gomock.Any(), gomock.Any(), "alice").Return(
 		&model.Subscription{User: model.SubscriptionUser{ID: "u-alice", Account: "alice"}},
@@ -2897,7 +2899,56 @@ func TestHandleSyncCreateDM_CrossSite_EmitsOutbox(t *testing.T) {
 	assert.Equal(t, "site-a", payload.SiteID)
 	assert.Equal(t, []string{"bob"}, payload.Accounts)
 	assert.Equal(t, "alice", payload.RequesterAccount)
-	assert.Equal(t, testRequestID+":site-b", outbox.msgID)
+	// Dedup ID is payload-derived (room identity + createdAt + dest), NOT the
+	// request ID — so a minted/absent X-Request-ID cannot break JetStream dedup.
+	require.NotNil(t, insertedRoom)
+	wantSeed := fmt.Sprintf("%s:%s:%d", insertedRoom.ID, "alice", insertedRoom.CreatedAt.UnixMilli())
+	assert.Equal(t, wantSeed+":site-b", outbox.msgID)
+	assert.NotContains(t, outbox.msgID, testRequestID, "dedup id must not embed the request ID")
+}
+
+// dmCtxNoID builds a sync-DM context with NO request ID — the relaxed,
+// post-mint-boundary case (room-worker's router now mints instead of rejecting).
+func dmCtxNoID() *natsrouter.Context {
+	c := natsrouter.NewContext(map[string]string{})
+	c.SetContext(context.Background())
+	return c
+}
+
+func TestHandleSyncCreateDM_CrossSite_NoRequestID_PayloadDerivedDedup(t *testing.T) {
+	h, store, capture := newSyncDMTestHandler(t)
+
+	requester := &model.User{ID: "u-alice", Account: "alice", SiteID: "site-a"}
+	other := &model.User{ID: "u-bob", Account: "bob", SiteID: "site-b"}
+	store.EXPECT().FindUsersByAccounts(gomock.Any(), gomock.Any()).Return([]model.User{*requester, *other}, nil)
+	var insertedRoom *model.Room
+	store.EXPECT().CreateRoom(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, r *model.Room) error { insertedRoom = r; return nil })
+	store.EXPECT().BulkCreateSubscriptions(gomock.Any(), gomock.Any()).Return(nil)
+	store.EXPECT().FindDMSubscriptionPair(gomock.Any(), gomock.Any(), "alice").Return(
+		&model.Subscription{User: model.SubscriptionUser{ID: "u-alice", Account: "alice"}},
+		&model.Subscription{User: model.SubscriptionUser{ID: "u-bob", Account: "bob"}},
+		nil)
+
+	req := model.SyncCreateDMRequest{RoomType: model.RoomTypeDM, RequesterAccount: "alice", OtherAccount: "bob"}
+	reply, err := h.serverCreateDM(dmCtxNoID(), req)
+	require.NoError(t, err, "serverCreateDM must succeed without an X-Request-ID")
+	require.NotNil(t, reply)
+	assert.True(t, reply.Success)
+
+	var outbox *dmCapturedPublish
+	for i := range capture.captured {
+		if capture.captured[i].subject == subject.Outbox("site-a", "site-b", model.OutboxMemberAdded) {
+			outbox = &capture.captured[i]
+			break
+		}
+	}
+	require.NotNil(t, outbox, "expected a member_added outbox publish to site-b")
+
+	require.NotNil(t, insertedRoom)
+	wantSeed := fmt.Sprintf("%s:%s:%d", insertedRoom.ID, "alice", insertedRoom.CreatedAt.UnixMilli())
+	assert.Equal(t, wantSeed+":site-b", outbox.msgID,
+		"dedup id must be payload-derived even when no request ID was supplied")
 }
 
 func TestHandleSyncCreateDM_SameSite_NoOutbox(t *testing.T) {

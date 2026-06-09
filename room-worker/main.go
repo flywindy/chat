@@ -151,7 +151,7 @@ func main() {
 	handler.dekProvisioner = dekProvisioner
 
 	router := natsrouter.New(nc, "room-worker")
-	router.Use(natsrouter.Recovery(), natsrouter.RequireRequestID(), natsrouter.Logging())
+	router.Use(natsrouter.Recovery(), natsrouter.RequestID(), natsrouter.Logging())
 	natsrouter.Register(router, subject.RoomCreateDMSync(cfg.SiteID), handler.serverCreateDM)
 
 	cons, err := js.CreateOrUpdateConsumer(ctx, streamCfg.Name, buildConsumerConfig(cfg.Consumer))
@@ -250,12 +250,14 @@ func runJobWithRecovery(msgCtx context.Context, handler jobProcessor, msg jetstr
 			}
 		}
 	}()
-	// Defensive mint: room-service rejects missing/malformed X-Request-ID at
-	// publish time (RequireRequestID), so by the time a message lands on the
-	// ROOMS stream the header should always be a valid UUID. If we end up
-	// minting here, that's an upstream contract violation worth an Error log —
-	// downstream OutboxDedupID / message-ID generation will derive dedup keys
-	// from the fresh mint, breaking client-retry dedup. See
+	// Defensive mint: room-service stamps an X-Request-ID at publish time (its
+	// RequestID middleware mints one when the client omits it), so by the time a
+	// message lands on the ROOMS stream the header should always be a valid UUID.
+	// If we end up minting here, room-service failed to stamp one — an anomaly
+	// worth an Error log, because downstream OutboxDedupID / message-ID generation
+	// derives dedup keys from the request ID. Note: clients that retry without a
+	// stable X-Request-ID still defeat dedup upstream (room-service mints a fresh
+	// ID each attempt); the boundary no longer rejects them. See
 	// docs/error-handling.md §3a.
 	inbound := ""
 	if h := msg.Headers(); h != nil {
@@ -263,7 +265,7 @@ func runJobWithRecovery(msgCtx context.Context, handler jobProcessor, msg jetstr
 	}
 	id, replaced := idgen.ResolveRequestID(inbound)
 	if replaced || inbound == "" {
-		slog.Error("ROOMS stream message missing or invalid X-Request-ID — minting defensively; upstream contract broken",
+		slog.Error("ROOMS stream message missing or invalid X-Request-ID — minting defensively; room-service should have stamped one",
 			"inbound", inbound, "subject", msg.Subject())
 	}
 	handlerCtx := natsutil.WithRequestID(msgCtx, id)

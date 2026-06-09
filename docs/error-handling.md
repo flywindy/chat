@@ -150,36 +150,47 @@ auth-service `requestIDMiddleware` calls `idgen.ResolveRequestID` directly.
 The `pkg/natsrouter` `RequestID()` middleware applies the default policy
 automatically.
 
-### Strict — reject missing/malformed (dedup-critical paths)
+### Request-ID minting and dedup safety (dedup-critical paths)
 
 Some handlers in **room-service** and **room-worker** fan out to JetStream
 publishes whose `Nats-Msg-Id` (via `natsutil.OutboxDedupID`,
 `natsutil.CanonicalDedupID`, and the in-package `messageDedupSeed` helper) and
 whose canonical message IDs (via `idgen.MessageIDFromRequestID`) are derived
-from the request ID. A server-side mint there would break client-retry
+from the request ID. A server-side mint there weakens client-retry
 deduplication: a client retrying without `X-Request-ID` (or with a malformed
-value) would get a fresh server-minted ID each attempt, produce a different
-dedup key each time, and silently duplicate outbox events and system
-messages.
+value) gets a fresh server-minted ID each attempt, produces a different dedup
+key each time, and can silently duplicate outbox events and system messages.
 
-These entry points use the **strict** helper instead:
+**Both services mint at the boundary** (`natsrouter.RequestID()`), so every
+handler always has a request ID for logging and no server-to-server call is
+rejected for a missing header. Dedup safety is preserved two ways:
 
-- **NATS**: `natsutil.RequireRequestID(ctx, headers, subject) (ctx, id, error)`
-  returns an `errcode.BadRequest` when the inbound header is missing or
-  malformed. The error flows through `errnats.Reply` as a normal envelope.
-- **Strict callers today**: every handler in `room-service` (via the
-  `wrappedCtx` helper, which now returns an error) and
-  `room-worker.natsServerCreateDM` (sync DM endpoint).
+- **Payload-derived dedup** (preferred): `room-worker.serverCreateDM`
+  (`chat.server.request.room.{siteID}.create.dm`) derives its cross-site OUTBOX
+  dedup key from a deterministic payload seed (`room.ID` + `requester.Account` +
+  `room.CreatedAt` in ms, suffixed with the destination site), independent of
+  the request ID. Retries dedup correctly even with a minted/absent header.
+- **Caller-supplied stable ID** (contract): handlers that still derive dedup or
+  canonical IDs from the request ID — notably `room-service.roomRestricted`
+  (`idgen.MessageIDFromRequestID` + `OutboxDedupID`) and the async ROOMS-stream
+  paths reached via `room-service` member RPCs — rely on the caller sending a
+  **stable** `X-Request-ID` across retries. This is a contract expectation, no
+  longer enforced at the boundary; a caller that omits it forfeits retry dedup.
 - **The room-worker JetStream consume loop** keeps the default mint policy
-  defensively — by the time a message lands on the ROOMS stream, room-service
-  validated the header at publish time. The consume loop logs an `slog.Error`
-  if it ever has to mint, because that indicates an upstream contract
-  violation (and downstream dedup will be broken for that message).
+  defensively. room-service stamps a request ID at publish time (minting one
+  when the client omits it), so ROOMS-stream messages should always carry a
+  valid UUID; the loop logs an `slog.Error` if it ever has to mint, because that
+  means room-service failed to stamp one.
 
-**Client contract**: any client calling room-service or room-worker MUST
+The strict `natsutil.RequireRequestID` / `natsrouter.RequireRequestID` helpers
+remain available for any future path that wants to *enforce* a caller-supplied
+ID, but no service installs them today.
+
+**Client contract**: any client calling room-service or room-worker SHOULD
 send a stable `X-Request-ID` header (a valid hyphenated UUIDv4 or v7) and
-reuse the same value across retries of the same logical operation. See
-`docs/client-api.md` for the wire-level contract.
+reuse the same value across retries of the same logical operation, to keep
+dedup-critical operations idempotent. See `docs/client-api.md` for the
+wire-level contract.
 
 Once stamped, `errcode.Classify(ctx, err)` and every `slog.…Context(ctx, ...)`
 call automatically carries `request_id` — handlers never need to pass it

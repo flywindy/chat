@@ -73,7 +73,11 @@ func NewHandler(store RoomStore, keyStore RoomKeyStore, memberListClient MemberL
 	}
 }
 
-// Register wires every room-service RPC onto the natsrouter Router.
+// Register wires every room-service RPC onto the natsrouter Router. The base
+// middleware mints an X-Request-ID when absent (RequestID), so every handler has
+// a request ID for logging without rejecting header-less server-to-server calls.
+// Handlers that derive dedup keys from the request ID (e.g. roomRestricted) rely
+// on callers sending a stable X-Request-ID across retries — see docs/client-api.md.
 // Register/RegisterNoBody panic on subscription failure (fatal at startup).
 func (h *Handler) Register(r *natsrouter.Router) {
 	natsrouter.RegisterNoBody(r, subject.MuteTogglePattern(h.siteID), h.muteToggle)
