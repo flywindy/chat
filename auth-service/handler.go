@@ -239,6 +239,15 @@ func (h *AuthHandler) signNATSJWT(userPubKey, account string) (string, error) {
 	uc.Sub.Allow.Add("chat.room.>")
 	uc.Sub.Allow.Add("_INBOX.>")
 
+	// Presence: read anyone's live state and publish batch queries. The state
+	// broadcast carries only the account (no siteID), so a single-token wildcard
+	// covers it. Writes (hello/ping/activity/bye/manual) live under the user's
+	// own chat.user.{account}.> namespace already granted above. Clients can read
+	// state but never publish it — the "state" vs "query" token keeps the query
+	// pub-rule from matching the state subject, so presence can't be forged.
+	uc.Sub.Allow.Add("chat.user.presence.state.*")
+	uc.Pub.Allow.Add("chat.user.presence.*.query.batch")
+
 	return uc.Encode(h.signingKey)
 }
 

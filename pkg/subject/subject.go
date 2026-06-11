@@ -426,6 +426,63 @@ func MsgThreadPattern(siteID string) string {
 	return fmt.Sprintf("chat.user.{account}.request.room.{roomID}.%s.msg.thread", siteID)
 }
 
+// --- presence ---
+
+// Presence write subjects carry the user's home siteID so the message routes
+// to the presence service that owns that user's state, regardless of which
+// site the client is connected to. {account} is the JWT-enforced self token;
+// the service registers each pattern with its own literal siteID.
+
+// PresenceHelloPattern is the natsrouter pattern for connection init.
+func PresenceHelloPattern(siteID string) string {
+	return fmt.Sprintf("chat.user.{account}.event.presence.%s.hello", siteID)
+}
+
+// PresencePingPattern is the natsrouter pattern for liveness pings (heartbeat).
+func PresencePingPattern(siteID string) string {
+	return fmt.Sprintf("chat.user.{account}.event.presence.%s.ping", siteID)
+}
+
+// PresenceActivityPattern is the natsrouter pattern for active/inactive updates.
+func PresenceActivityPattern(siteID string) string {
+	return fmt.Sprintf("chat.user.{account}.event.presence.%s.activity", siteID)
+}
+
+// PresenceByePattern is the natsrouter pattern for best-effort disconnects.
+func PresenceByePattern(siteID string) string {
+	return fmt.Sprintf("chat.user.{account}.event.presence.%s.bye", siteID)
+}
+
+// PresenceManualSetPattern is the natsrouter pattern for manual-override set/clear.
+func PresenceManualSetPattern(siteID string) string {
+	return fmt.Sprintf("chat.user.{account}.request.presence.%s.manual.set", siteID)
+}
+
+// PresenceQueryBatch is the concrete (per-site, literal) subject a client sends
+// a batch initial-state query to. The client targets its OWN local site; that
+// site resolves each account's home site and fans out to peers as needed.
+func PresenceQueryBatch(siteID string) string {
+	return fmt.Sprintf("chat.user.presence.%s.query.batch", siteID)
+}
+
+// PresenceQueryBatchPeer is the server-to-server request subject a presence
+// service uses to fetch presence for accounts homed on a remote site (the
+// fan-out leaf — local lookup only, no further fan-out). Mirrors RoomsInfoBatch.
+func PresenceQueryBatchPeer(siteID string) string {
+	return fmt.Sprintf("chat.server.request.presence.%s.query.batch", siteID)
+}
+
+// PresenceState is the live-state subject the owning site publishes a user's
+// effective status to; clients subscribe to it (possibly cross-site). It omits
+// siteID: the broadcast is a global per-user event, so a subscriber needs only
+// the account and does not have to resolve the user's home site first.
+// Callers pass a server-derived auth identity (the publishing handler's
+// JWT-pinned account), so the builder does not validate — panicking on a
+// server-side invariant would crash the process.
+func PresenceState(account string) string {
+	return fmt.Sprintf("chat.user.presence.state.%s", account)
+}
+
 // MsgHistory is the concrete-subject form clients publish on to invoke
 // LoadHistory. Pair with MsgHistoryPattern for the server-side registration.
 func MsgHistory(account, roomID, siteID string) string {

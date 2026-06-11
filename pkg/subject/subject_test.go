@@ -850,3 +850,14 @@ func TestRoomPatternsMatchWildcards(t *testing.T) {
 		})
 	}
 }
+
+func TestPresenceSubjects(t *testing.T) {
+	assert.Equal(t, "chat.user.{account}.event.presence.site-a.hello", subject.PresenceHelloPattern("site-a"))
+	assert.Equal(t, "chat.user.{account}.event.presence.site-a.ping", subject.PresencePingPattern("site-a"))
+	assert.Equal(t, "chat.user.{account}.event.presence.site-a.activity", subject.PresenceActivityPattern("site-a"))
+	assert.Equal(t, "chat.user.{account}.event.presence.site-a.bye", subject.PresenceByePattern("site-a"))
+	assert.Equal(t, "chat.user.{account}.request.presence.site-a.manual.set", subject.PresenceManualSetPattern("site-a"))
+	assert.Equal(t, "chat.user.presence.site-a.query.batch", subject.PresenceQueryBatch("site-a"))
+	assert.Equal(t, "chat.server.request.presence.site-a.query.batch", subject.PresenceQueryBatchPeer("site-a"))
+	assert.Equal(t, "chat.user.presence.state.alice", subject.PresenceState("alice"))
+}

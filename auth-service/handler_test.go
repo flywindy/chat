@@ -132,6 +132,13 @@ func TestHandleAuth_ValidToken(t *testing.T) {
 	assert.Contains(t, []string(claims.Sub.Allow), "chat.user.alice.>")
 	assert.Contains(t, []string(claims.Sub.Allow), "chat.room.>")
 	assert.Contains(t, []string(claims.Sub.Allow), "_INBOX.>")
+
+	// Presence: read anyone's live state; publish batch queries (but not state).
+	// Scoped to exactly the implemented subjects — no deeper subtopics.
+	assert.Contains(t, []string(claims.Sub.Allow), "chat.user.presence.state.*")
+	assert.Contains(t, []string(claims.Pub.Allow), "chat.user.presence.*.query.batch")
+	assert.NotContains(t, []string(claims.Pub.Allow), "chat.user.presence.state.*",
+		"clients must not be able to publish presence state")
 }
 
 func TestHandleAuth_ExpiredToken(t *testing.T) {

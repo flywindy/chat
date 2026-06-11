@@ -55,6 +55,7 @@ paths.
 4. [Message Send](#4-message-send)
 5. [Room Encryption](#5-room-encryption)
 6. [Error envelope reference](#6-error-envelope-reference)
+7. [Presence](#7-presence)
 
 ---
 
@@ -3517,3 +3518,187 @@ Every error response — NATS reply subjects, JetStream async results, and HTTP 
 ### Client branching guidance
 
 Compute the trigger as `reason ?? code` and branch on that. Use `code` for generic copy ("you don't have permission", "service unavailable, try again"), `reason` for endpoint-specific UX (open the "room is full" dialog on `max_room_size_reached`; redirect to re-login on `sso_token_expired`/`invalid_sso_token`; surface "join the room first" on `not_subscribed`). Never branch on the `error` text — message wording can change without notice.
+
+---
+
+## 7. Presence
+
+Served by **user-presence-service**. Tracks each user's effective presence —
+`online`, `away`, `busy`, `offline` — derived from live connections plus an
+optional manual override. Each site owns the presence of its local users; a
+user's home site is the site they connect to. Cross-site is transparent: for
+**live state** (§7.7) a watcher subscribes to the global per-user subject and
+the NATS gateway routes it; for **batch queries** (§7.6) the watcher sends a
+single request to its **own local site**, which resolves each account's home
+site and fans out to peer sites server-side.
+
+**Connection model.** A client mints one **client-generated** `connId` (e.g.
+`crypto.randomUUID()`) per connection — browser tab / SharedWorker / socket —
+when it comes up, reuses it for that connection's `hello`/`ping`/`activity`/`bye`,
+and discards it on close. The server never assigns it. Writes carry the user's
+**home `{siteID}`** so they route to the presence service that owns the user's
+state regardless of which site the client is connected to; `{account}` is
+JWT-pinned to the caller, so a client can only ever write its own presence.
+
+`online` vs `away` is derived from per-connection activity the client reports
+via `activity` (§7.3); the server has at least one **active** connection ⇒
+`online`, all connections **inactive** ⇒ `away`, none ⇒ `offline`.
+
+**Effective status resolution.** The server evaluates this precedence ladder
+top-down; the **first** matching rule wins (so a stale manual override never
+keeps a fully-disconnected user "present"):
+
+1. **No live connections → `offline`** — beats any manual override.
+2. Manual `appear_offline` → `offline`; manual `away` → `away`.
+3. Manual `online` → `online`; manual `busy` → `busy`.
+4. Any other manual override → that status.
+5. All live connections inactive → `away`.
+6. Otherwise → `online`.
+
+### 7.1 Hello — initialize a connection (publish, fire-and-forget)
+
+**Subject:** `chat.user.{account}.event.presence.{siteID}.hello`
+
+Sent once when a connection comes up, to register it (and bring the user
+`online`). No reply. A `ping` for an unseen `connId` also creates it, so a
+dropped `hello` self-heals on the next ping.
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `connId` | string | yes | Client-generated per connection (e.g. a UUID per browser/SharedWorker). |
+| `timestamp` | number | no | Millis since Unix epoch (UTC). |
+
+```json
+{ "connId": "1f0a-uuid", "timestamp": 1746518100000 }
+```
+
+### 7.2 Ping — liveness (publish, fire-and-forget)
+
+**Subject:** `chat.user.{account}.event.presence.{siteID}.ping`
+
+Published per connection roughly every **30 s** (no reply) to refresh liveness.
+A connection is considered live for ~**45 s** after its last ping; miss that
+window and the sweeper decays it toward `offline`. A ping does **not** change
+activity — use `activity` (§7.3) for that. Pinging a `connId` the server has not
+seen before creates it (offline→online), so an initial `hello` is optional.
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `connId` | string | yes | The connection being refreshed. |
+| `timestamp` | number | no | Millis since Unix epoch (UTC). |
+
+```json
+{ "connId": "1f0a-uuid", "timestamp": 1746518100000 }
+```
+
+### 7.3 Activity — active / inactive (publish, fire-and-forget)
+
+**Subject:** `chat.user.{account}.event.presence.{siteID}.activity`
+
+Published when the client's own idle detection (mouse/keyboard) flips a
+connection between active and inactive — not on every ping. The server
+aggregates across the user's connections: all inactive ⇒ `away`, any active ⇒
+`online`.
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `connId` | string | yes | The connection whose activity changed. |
+| `away` | boolean | yes | `true` marks the connection inactive, `false` active. |
+| `timestamp` | number | no | Millis since Unix epoch (UTC). |
+
+```json
+{ "connId": "1f0a-uuid", "away": true, "timestamp": 1746518103000 }
+```
+
+### 7.4 Disconnect (publish, best-effort)
+
+**Subject:** `chat.user.{account}.event.presence.{siteID}.bye`
+
+Sent best-effort on tab close (`beforeunload`) for instant offline instead of
+waiting for the liveness window to lapse. The sweeper is the backstop when it
+does not arrive.
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `connId` | string | yes | The connection being closed. |
+| `timestamp` | number | no | Millis since Unix epoch (UTC). |
+
+### 7.5 Set / clear manual override (request/reply)
+
+**Subject:** `chat.user.{account}.request.presence.{siteID}.manual.set`
+**Reply:** standard `_INBOX.>`.
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `status` | string | yes | One of `online`, `away`, `busy`, `appear_offline`, or `""` to clear. Any other value → `bad_request`. |
+| `timestamp` | number | no | Millis since Unix epoch (UTC). |
+
+**Success reply:**
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `account` | string | Echoes the caller. |
+| `status` | string | The override just set (or `""` when cleared). |
+| `setAt` | number | Server-assigned millis (UTC) the override was set. |
+| `effective` | string | The resolved effective status after applying the override. |
+
+```json
+{ "account": "alice", "status": "busy", "setAt": 1746518100000, "effective": "busy" }
+```
+
+### 7.6 Batch query — initial state (request/reply)
+
+**Subject:** `chat.user.presence.{siteID}.query.batch` — addressed to **your own
+local site**. You do **not** need to know or group accounts by their home site.
+**Reply:** standard `_INBOX.>`.
+
+Send one request with all the accounts you want, regardless of which site they
+live on. The local site resolves each account's home site, serves locally-homed
+accounts from its own store, and fans out **server-to-server in parallel** to
+the peer sites that own the rest (via the internal
+`chat.server.request.presence.{siteID}.query.batch` RPC), then aggregates. At
+most **100 accounts** per request (configurable server-side); more →
+`bad_request`.
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `accounts` | string[] | yes | ≤ 100 accounts, any mix of home sites. |
+
+**Success reply:**
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `states` | [PresenceState](#presencestate)[] | One per requested account, in request order. |
+| `timestamp` | number | Reply time, millis (UTC). |
+
+The query is
+best-effort for display: an account that is unknown to the directory, or whose
+home site does not respond within the per-peer timeout, reports `offline` (its
+`siteId` is still the resolved home site when known) rather than failing the
+whole request. Only a failure of the local site's own store surfaces as an error.
+
+### 7.7 Live state (subscribe)
+
+**Subject:** `chat.user.presence.state.{account}` — the owning site publishes a
+user's effective status (a [PresenceState](#presencestate)) here on every
+change. The subject omits `siteID`: it is a global per-user event, so you
+subscribe knowing only the account, without first resolving the user's home site
+(cross-site delivery is routed by the gateway). The home site is still reported
+in the `siteId` payload field.
+
+```json
+{ "account": "bob", "siteId": "site-b", "status": "away", "timestamp": 1746518105000 }
+```
+
+#### PresenceState
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `account` | string | The user. |
+| `siteId` | string | The user's home site. |
+| `status` | string | Effective status: `online` / `away` / `busy` / `offline`. |
+| `timestamp` | number | Millis since Unix epoch (UTC) of the change. |
+
+**Subscribe before you snapshot.** To avoid missing a transition between the
+snapshot and the subscription, subscribe to the state subject(s) **first**, then
+send the §7.6 batch query for current values.

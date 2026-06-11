@@ -19,3 +19,4 @@ include:
   - ../room-worker/deploy/docker-compose.yml
   - ../search-service/deploy/docker-compose.yml
   - ../search-sync-worker/deploy/docker-compose.yml
+  - ../user-presence-service/deploy/docker-compose.yml
