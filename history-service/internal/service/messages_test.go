@@ -284,6 +284,37 @@ func TestHistoryService_LoadHistory_RoomReadError_DegradesGracefully(t *testing.
 	assert.Nil(t, resp.MinUserLastSeenAt)
 }
 
+// TestHistoryService_LoadHistory_AccessErrorTakesPrecedence pins that when the
+// access check and the room-times resolve (run concurrently) both fail, the
+// access error wins and neither the page read nor the receipt read is reached.
+func TestHistoryService_LoadHistory_AccessErrorTakesPrecedence(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	msgs := mocks.NewMockMessageRepository(ctrl)
+	subs := mocks.NewMockSubscriptionRepository(ctrl)
+	rooms := mocks.NewMockRoomRepository(ctrl)
+	pub := mocks.NewMockEventPublisher(ctrl)
+	threadRooms := mocks.NewMockThreadRoomRepository(ctrl)
+	users := mocks.NewMockUserStore(ctrl)
+	customEmojis := mocks.NewMockCustomEmojiStore(ctrl)
+	cfg := &config.Config{
+		MessageHistoryFloorDays: 90,
+		LargeRoomThreshold:      500,
+		MaxPinnedPerRoom:        10,
+		PinEnabled:              true,
+	}
+	svc := service.New(msgs, subs, rooms, pub, threadRooms, users, customEmojis, cfg)
+	c := testContext()
+
+	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, false, errors.New("access db error"))
+	// Room-times may run in parallel and also fail; it must not change the result.
+	rooms.EXPECT().GetRoomTimes(gomock.Any(), "r1").Return(time.Time{}, time.Time{}, errors.New("mongo down")).AnyTimes()
+	// No page read or receipt read must be reached on access failure.
+
+	_, err := svc.LoadHistory(c, models.LoadHistoryRequest{})
+	require.Error(t, err)
+	assertInternalErr(t, err, "verifying room access")
+}
+
 func TestHistoryService_LoadNextMessages_DoesNotReadRoom(t *testing.T) {
 	svc, msgs, subs, rooms, _, _, _, _ := newServiceWithRoomMock(t)
 	c := testContext()

@@ -3,12 +3,44 @@ package service
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/hmchangw/chat/history-service/internal/cassrepo"
 	"github.com/hmchangw/chat/history-service/internal/models"
 	"github.com/hmchangw/chat/pkg/errcode"
 )
+
+// checkAccessAndRoomTimes runs the subscription access check and the room-times
+// resolve concurrently — both are independent Mongo reads on the read hot path.
+// Access errors take precedence over room-times errors so a "not subscribed"
+// 403 is never masked by a transient room-metadata failure.
+func (s *HistoryService) checkAccessAndRoomTimes(
+	ctx context.Context,
+	account, roomID string,
+	meta *models.RoomMeta,
+	now time.Time,
+) (accessSince *time.Time, lastMsgAt, createdAt time.Time, err error) {
+	var accessErr, rtErr error
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		accessSince, accessErr = s.getAccessSince(ctx, account, roomID)
+	}()
+	go func() {
+		defer wg.Done()
+		lastMsgAt, createdAt, rtErr = s.resolveRoomTimesOrError(ctx, roomID, meta, now)
+	}()
+	wg.Wait()
+	if accessErr != nil {
+		return nil, time.Time{}, time.Time{}, accessErr
+	}
+	if rtErr != nil {
+		return nil, time.Time{}, time.Time{}, rtErr
+	}
+	return accessSince, lastMsgAt, createdAt, nil
+}
 
 // getAccessSince checks subscription and returns the historySharedSince lower bound (nil = full access).
 func (s *HistoryService) getAccessSince(ctx context.Context, account, roomID string) (*time.Time, error) {

@@ -2,12 +2,30 @@ package cassrepo
 
 import (
 	"encoding/base64"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/gocql/gocql"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/hmchangw/chat/history-service/internal/models"
 )
+
+// BenchmarkBuildScanValues mirrors the per-row hot path: mapping the full
+// messages_by_room column set onto a fresh Message for every scanned row.
+func BenchmarkBuildScanValues(b *testing.B) {
+	cols := strings.Split(strings.ReplaceAll(baseColumns, " ", ""), ",")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		var m models.Message
+		if _, _, ok := buildScanValues(&m, cols); !ok {
+			b.Fatal("unexpected column miss")
+		}
+	}
+}
 
 func TestNewCursor_Empty(t *testing.T) {
 	c, err := NewCursor("")
@@ -181,6 +199,64 @@ func TestBuildScanValues_NonPointer(t *testing.T) {
 	assert.False(t, ok)
 	assert.Empty(t, missingCol)
 	assert.Nil(t, vals)
+}
+
+type scanRowA struct {
+	RoomID string `cql:"room_id"`
+	Msg    string `cql:"msg"`
+}
+
+type scanRowB struct {
+	ThreadID string `cql:"thread_id"`
+	Count    int64  `cql:"count"`
+}
+
+// TestBuildScanValues_WritesToCorrectFields verifies the returned pointers
+// address the right struct fields, and that interleaving distinct types does
+// not let a per-type field-index cache cross-contaminate.
+func TestBuildScanValues_WritesToCorrectFields(t *testing.T) {
+	var a scanRowA
+	valsA, _, okA := buildScanValues(&a, []string{"msg", "room_id"})
+	require.True(t, okA)
+	require.Len(t, valsA, 2)
+
+	var b scanRowB
+	valsB, _, okB := buildScanValues(&b, []string{"count", "thread_id"})
+	require.True(t, okB)
+	require.Len(t, valsB, 2)
+
+	// Write through A's pointers after B was processed — a type-keyed cache
+	// must still resolve A's columns to A's fields.
+	*(valsA[0].(*string)) = "hello"  // msg
+	*(valsA[1].(*string)) = "room-1" // room_id
+	*(valsB[0].(*int64)) = 7         // count
+	*(valsB[1].(*string)) = "thr-1"  // thread_id
+
+	assert.Equal(t, scanRowA{RoomID: "room-1", Msg: "hello"}, a)
+	assert.Equal(t, scanRowB{ThreadID: "thr-1", Count: 7}, b)
+}
+
+// TestBuildScanValues_ConcurrentDistinctTypes guards the shared field-index
+// cache against data races; run with -race.
+func TestBuildScanValues_ConcurrentDistinctTypes(t *testing.T) {
+	const goroutines = 32
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+	for i := 0; i < goroutines; i++ {
+		go func(i int) {
+			defer wg.Done()
+			if i%2 == 0 {
+				var a scanRowA
+				_, _, ok := buildScanValues(&a, []string{"room_id", "msg"})
+				assert.True(t, ok)
+			} else {
+				var b scanRowB
+				_, _, ok := buildScanValues(&b, []string{"thread_id", "count"})
+				assert.True(t, ok)
+			}
+		}(i)
+	}
+	wg.Wait()
 }
 
 func TestNewCursor_TooLong(t *testing.T) {

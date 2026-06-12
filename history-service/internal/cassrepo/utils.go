@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
+	"sync"
 
 	"github.com/gocql/gocql"
 )
@@ -94,6 +95,29 @@ func (b *QueryBuilder) WithPageSize(size int) *QueryBuilder {
 	return b
 }
 
+// cqlIndexCache memoizes the cql-tag → field-index mapping per struct type so
+// structScan doesn't rebuild it for every scanned row. Keyed by reflect.Type,
+// value is map[string]int.
+var cqlIndexCache sync.Map
+
+// cqlFieldIndex returns the cql-tag → field-index map for rt, building and
+// caching it on first use. Fields without a cql tag (or tagged "-") are omitted.
+func cqlFieldIndex(rt reflect.Type) map[string]int {
+	if cached, ok := cqlIndexCache.Load(rt); ok {
+		return cached.(map[string]int)
+	}
+	m := make(map[string]int, rt.NumField())
+	for i := 0; i < rt.NumField(); i++ {
+		tag := rt.Field(i).Tag.Get("cql")
+		if tag == "" || tag == "-" {
+			continue
+		}
+		m[tag] = i
+	}
+	actual, _ := cqlIndexCache.LoadOrStore(rt, m)
+	return actual.(map[string]int)
+}
+
 // buildScanValues maps colNames to addressable field pointers via cql struct tags, returning the slice for iter.Scan.
 // Separated from structScan so the column-matching logic is unit-testable without a live gocql iterator.
 func buildScanValues(dest any, colNames []string) (values []any, missingCol string, ok bool) {
@@ -102,25 +126,15 @@ func buildScanValues(dest any, colNames []string) (values []any, missingCol stri
 		return nil, "", false
 	}
 	rv = rv.Elem()
-	rt := rv.Type()
-
-	fieldByTag := make(map[string]reflect.Value, rt.NumField())
-	for i := 0; i < rt.NumField(); i++ {
-		field := rt.Field(i)
-		tag := field.Tag.Get("cql")
-		if tag == "" || tag == "-" {
-			continue
-		}
-		fieldByTag[tag] = rv.Field(i)
-	}
+	idxByTag := cqlFieldIndex(rv.Type())
 
 	vals := make([]any, len(colNames))
 	for i, name := range colNames {
-		fv, found := fieldByTag[name]
+		idx, found := idxByTag[name]
 		if !found {
 			return nil, name, false
 		}
-		vals[i] = fv.Addr().Interface()
+		vals[i] = rv.Field(idx).Addr().Interface()
 	}
 	return vals, "", true
 }

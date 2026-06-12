@@ -30,14 +30,13 @@ func (s *HistoryService) LoadHistory(c *natsrouter.Context, req models.LoadHisto
 	account := c.Param("account")
 	roomID := c.Param("roomID")
 	c.WithLogValues("account", account, "room_id", roomID)
-
-	accessSince, err := s.getAccessSince(c, account, roomID)
-	if err != nil {
-		return nil, err
-	}
-
 	now := time.Now().UTC()
-	lastMsgAt, createdAt, err := s.resolveRoomTimesOrError(c, roomID, req.Meta, now)
+
+	// The access check and room-times resolve are independent Mongo reads; run
+	// them concurrently so the worst-case latency is one RTT, not two. Access
+	// errors take precedence so a "not subscribed" 403 isn't masked by a
+	// transient room-times error.
+	accessSince, lastMsgAt, createdAt, err := s.checkAccessAndRoomTimes(c, account, roomID, req.Meta, now)
 	if err != nil {
 		return nil, err
 	}
@@ -114,14 +113,9 @@ func (s *HistoryService) LoadNextMessages(c *natsrouter.Context, req models.Load
 	account := c.Param("account")
 	roomID := c.Param("roomID")
 	c.WithLogValues("account", account, "room_id", roomID)
-
-	accessSince, err := s.getAccessSince(c, account, roomID)
-	if err != nil {
-		return nil, err
-	}
-
 	now := time.Now().UTC()
-	lastMsgAt, createdAt, err := s.resolveRoomTimesOrError(c, roomID, req.Meta, now)
+
+	accessSince, lastMsgAt, createdAt, err := s.checkAccessAndRoomTimes(c, account, roomID, req.Meta, now)
 	if err != nil {
 		return nil, err
 	}
