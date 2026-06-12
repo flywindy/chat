@@ -653,3 +653,59 @@ run:
 - `docs/superpowers/specs/2026-05-27-daily-im-load-scenario-design.md` — full spec (goal, scope, behavior model, fixture topology, receiver architecture, ramp protocol, SLO definitions, risks).
 - `docs/superpowers/plans/2026-05-27-daily-im-load-scenario.md` — implementation plan (file structure, task decomposition).
 - `tools/loadgen/daily.go`, `daily_pool.go`, `daily_actions.go`, `daily_verdict.go`, `daily_report.go`, `preset.go` — implementation.
+
+## Large-room bot scenario (max-room-size)
+
+Finds the largest room a bot can blast at a fixed send rate before an SLO
+signal breaks — gating on **notification-worker** consumer backlog as the
+headline O(N)-per-message signal (notification-worker is NOT exempt here,
+unlike the daily scenario).
+
+### Quick start
+
+```
+make -C tools/loadgen/deploy up
+make -C tools/loadgen/deploy seed-botroom PRESET=botroom-medium
+make -C tools/loadgen/deploy run-max-room-size PRESET=botroom-medium RATE=200
+```
+
+### Presets
+
+| preset          | sizes                      | rooms/size | users | use case          |
+|-----------------|----------------------------|------------|-------|-------------------|
+| `botroom-small` | 50, 100, 200               | 4          | 300   | smoke / dev       |
+| `botroom-medium`| 100, 500, 1000, 2000, 5000 | 4          | 5500  | default capacity  |
+
+### Flags
+
+`--rate` (required, bot msgs/sec split across the step's rooms), `--sizes`
+(default `100,500,1000,2000,5000`), `--rooms-per-size` (default 4), `--reads`
+(room-service read rate, default 0 = off), `--warmup`/`--hold`/`--cooldown`,
+`--stop-on-trip`, `--slo-p95`/`--slo-p99`/`--slo-error-rate`/`--slo-pending-growth`,
+`--rate-tolerance`, `--seed`, `--csv`.
+
+### Reading the output
+
+A per-step table (size, rooms, rate, e2 p50/p95/p99, err%, worst-pending, verdict)
+followed by `ANSWER: max room size = N` — the largest size where every SLO
+signal held — and a `Next limit:` line naming the first signal that tripped.
+
+### One room vs many
+
+`--rooms-per-size=1` concentrates the rate on a single room — probes the
+Cassandra hot-partition (`messages_by_room` key `(room_id, bucket)`) and the
+Mongo room-doc write contention (`UpdateRoomLastMessage`). The default `4`
+spreads the rate to measure aggregate fan-out plus member-list cache churn.
+
+### Add-path past 1000 members
+
+To test adding members to rooms larger than the old 1000 cap, the loadgen
+deploy sets room-service `MAX_ROOM_SIZE=6000` and ships a `members-capacity-xl`
+preset; run e.g. `make -C tools/loadgen/deploy run-capacity PRESET=members-capacity-xl TARGET_SIZE=5000`.
+
+### v2 follow-ups (not yet built)
+
+- Create-and-blast: bots create a ~100-member room and immediately send
+  (cold-cache penalty).
+- Live N-connection pool to measure NATS core delivery fan-out to real member
+  connections.

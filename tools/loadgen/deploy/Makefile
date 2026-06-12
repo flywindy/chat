@@ -11,7 +11,7 @@ STEPS            ?=
 # `ENCRYPTION_ENABLED=false make up` for a plaintext comparison run.
 export ENCRYPTION_ENABLED ?= true
 
-.PHONY: up stack-up overlay-up seed teardown run run-dashboards run-max-rps run-daily down logs seed-members teardown-members reset-members run-sustained run-capacity seed-roomread teardown-roomread
+.PHONY: up stack-up overlay-up seed teardown run run-dashboards run-max-rps run-daily down logs seed-members teardown-members reset-members run-sustained run-capacity seed-roomread teardown-roomread seed-botroom teardown-botroom run-max-room-size
 
 up: stack-up overlay-up
 
@@ -104,6 +104,26 @@ down:
 	$(COMPOSE) --profile dashboards down -v
 	docker compose -f $(SERVICES_COMPOSE) down
 	$(MAKE) -C $(ROOT) deps-down
+
+seed-botroom:
+	@test -n "$(PRESET)" || (echo "PRESET=<botroom-*> required" && exit 1)
+	$(COMPOSE) exec -T loadgen /loadgen seed --workload=botroom --preset=$(PRESET)
+
+teardown-botroom:
+	@test -n "$(PRESET)" || (echo "PRESET=<botroom-*> required" && exit 1)
+	$(COMPOSE) exec -T loadgen /loadgen teardown --workload=botroom --preset=$(PRESET)
+
+run-max-room-size: ## Ramp room size to find the largest a bot can blast (PRESET=.. RATE=.. SIZES=.. ROOMS_PER_SIZE=..)
+	@test -n "$(PRESET)" || (echo "PRESET=<botroom-*> required" && exit 1)
+	@test -n "$(RATE)" || (echo "RATE=<msgs/sec> required" && exit 1)
+	$(COMPOSE) exec -T loadgen /loadgen max-room-size \
+	    --preset=$(PRESET) \
+	    --rate=$(RATE) \
+	    $(if $(SIZES),--sizes=$(SIZES),) \
+	    --rooms-per-size=$(or $(ROOMS_PER_SIZE),4) \
+	    --reads=$(or $(READS),0) \
+	    --hold=$(or $(HOLD),180s) \
+	    --csv=/results/botroom-$(PRESET)-$$(date +%Y%m%d-%H%M%S).csv
 
 logs:
 	$(COMPOSE) logs -f loadgen

@@ -23,6 +23,11 @@ type Metrics struct {
 	MemberE1Latency     *prometheus.HistogramVec
 	MemberE2Latency     *prometheus.HistogramVec
 	MemberRoomSize      *prometheus.GaugeVec
+
+	BotRoomPublished     *prometheus.CounterVec
+	BotRoomPublishErrors *prometheus.CounterVec
+	BotRoomE2ELatency    *prometheus.HistogramVec
+	BotRoomReadLatency   *prometheus.HistogramVec
 }
 
 // NewMetrics constructs a dedicated Prometheus registry with all loadgen
@@ -84,12 +89,30 @@ func NewMetrics() *Metrics {
 		prometheus.GaugeOpts{Name: "loadgen_member_room_size", Help: "Current member count per room (capacity mode only)."},
 		[]string{"room_id"},
 	)
+	m.BotRoomPublished = prometheus.NewCounterVec(
+		prometheus.CounterOpts{Name: "loadgen_botroom_published_total", Help: "Bot messages published by preset/phase/size."},
+		[]string{"preset", "phase", "size"},
+	)
+	m.BotRoomPublishErrors = prometheus.NewCounterVec(
+		prometheus.CounterOpts{Name: "loadgen_botroom_publish_errors_total", Help: "Bot publish errors by reason (publish|marshal|gatekeeper|timeout|saturated|underrun)."},
+		[]string{"reason"},
+	)
+	m.BotRoomE2ELatency = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{Name: "loadgen_botroom_e2e_latency_seconds", Help: "Publish→broadcast latency by room size.", Buckets: buckets},
+		[]string{"size"},
+	)
+	m.BotRoomReadLatency = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{Name: "loadgen_botroom_read_latency_seconds", Help: "room-service read latency by room size.", Buckets: buckets},
+		[]string{"size"},
+	)
 	r.MustRegister(
 		m.Published, m.PublishErrors,
 		m.E1Latency, m.E2Latency,
 		m.ConsumerPending, m.ConsumerAckPending, m.ConsumerRedelivered,
 		m.MemberPublished, m.MemberPublishErrors,
 		m.MemberE1Latency, m.MemberE2Latency, m.MemberRoomSize,
+		m.BotRoomPublished, m.BotRoomPublishErrors,
+		m.BotRoomE2ELatency, m.BotRoomReadLatency,
 	)
 	return m
 }

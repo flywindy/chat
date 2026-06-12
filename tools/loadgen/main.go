@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -74,7 +75,7 @@ type config struct {
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: loadgen <seed|run|teardown|members-sustained|members-capacity|history-sustained|max-rps|daily> [flags]")
+		fmt.Fprintln(os.Stderr, "usage: loadgen <seed|run|teardown|members-sustained|members-capacity|history-sustained|max-rps|daily|max-room-size> [flags]")
 		os.Exit(2)
 	}
 	cfg, err := env.ParseAs[config]()
@@ -115,6 +116,8 @@ func dispatch(ctx context.Context, cfg *config) int {
 		return runMaxRPS(ctx, cfg, os.Args[2:])
 	case "daily":
 		return runDaily(ctx, cfg, os.Args[2:])
+	case "max-room-size":
+		return runMaxRoomSize(ctx, cfg, os.Args[2:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown subcommand: %s\n", os.Args[1])
 		return 2
@@ -123,7 +126,7 @@ func dispatch(ctx context.Context, cfg *config) int {
 
 func runSeed(ctx context.Context, cfg *config, args []string) int {
 	fs := flag.NewFlagSet("seed", flag.ExitOnError)
-	workload := fs.String("workload", "messages", "messages|members|history|read-receipt|room-read")
+	workload := fs.String("workload", "messages", "messages|members|history|read-receipt|room-read|botroom")
 	preset := fs.String("preset", "", "preset name")
 	seed := fs.Int64("seed", 42, "RNG seed")
 	readRatio := fs.Float64("read-ratio", 0.7, "read-receipt only: fraction of each room's subscribers to mark as readers")
@@ -149,6 +152,8 @@ func runSeed(ctx context.Context, cfg *config, args []string) int {
 		return runSeedReadReceipt(ctx, cfg, *preset, *seed, *readRatio)
 	case "room-read":
 		return runSeedRoomRead(ctx, cfg, *preset, *seed)
+	case "botroom":
+		return runSeedBotRoom(ctx, cfg, *preset, *seed)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown workload: %s\n", *workload)
 		return 2
@@ -221,9 +226,60 @@ func runSeedMembers(ctx context.Context, cfg *config, preset string, seed int64)
 	return 0
 }
 
+func runSeedBotRoom(ctx context.Context, cfg *config, preset string, seed int64) int {
+	p, ok := BuiltinBotRoomPreset(preset)
+	if !ok {
+		fmt.Fprintf(os.Stderr, "unknown botroom preset: %s\n", preset)
+		return 2
+	}
+	db, keyStore, cleanup, err := connectStores(ctx, cfg)
+	if err != nil {
+		return 1
+	}
+	defer cleanup()
+	fixtures, layout := BuildBotRoomFixtures(&p, seed, cfg.SiteID)
+	if err := Seed(ctx, db, &fixtures); err != nil {
+		slog.Error("seed", "error", err)
+		return 1
+	}
+	if err := SeedRoomKeys(ctx, keyStore, fixtures.RoomKeys); err != nil {
+		slog.Error("seed room keys", "error", err)
+		return 1
+	}
+	slog.Info("seed complete (botroom)",
+		"preset", p.Name, "users", len(fixtures.Users),
+		"rooms", len(fixtures.Rooms), "subs", len(fixtures.Subscriptions),
+		"sizes", layout.Sizes)
+	return 0
+}
+
+func runTeardownBotRoom(ctx context.Context, cfg *config, preset string, seed int64) int {
+	p, ok := BuiltinBotRoomPreset(preset)
+	if !ok {
+		fmt.Fprintf(os.Stderr, "unknown botroom preset: %s\n", preset)
+		return 2
+	}
+	db, keyStore, cleanup, err := connectStores(ctx, cfg)
+	if err != nil {
+		return 1
+	}
+	defer cleanup()
+	_, layout := BuildBotRoomFixtures(&p, seed, cfg.SiteID)
+	if err := Teardown(ctx, db); err != nil {
+		slog.Error("teardown", "error", err)
+		return 1
+	}
+	if err := TeardownRoomKeys(ctx, keyStore, botRoomRoomIDs(&layout)); err != nil {
+		slog.Error("teardown room keys", "error", err)
+		return 1
+	}
+	slog.Info("teardown complete (botroom)", "preset", p.Name)
+	return 0
+}
+
 func runTeardown(ctx context.Context, cfg *config, args []string) int {
 	fs := flag.NewFlagSet("teardown", flag.ExitOnError)
-	workload := fs.String("workload", "messages", "messages|members|history|room-read")
+	workload := fs.String("workload", "messages", "messages|members|history|room-read|botroom")
 	preset := fs.String("preset", "", "preset name (required to identify which room keys to delete)")
 	seed := fs.Int64("seed", 42, "RNG seed (must match the seed used at seed time)")
 	_ = fs.Parse(args)
@@ -240,6 +296,8 @@ func runTeardown(ctx context.Context, cfg *config, args []string) int {
 		return runTeardownHistory(ctx, cfg, *preset, *seed)
 	case "room-read":
 		return runTeardownRoomRead(ctx, cfg, *preset, *seed)
+	case "botroom":
+		return runTeardownBotRoom(ctx, cfg, *preset, *seed)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown workload: %s\n", *workload)
 		return 2
@@ -1139,4 +1197,153 @@ func counterValueLabeled(m *Metrics, name, labelName, labelValue string) float64
 		return 0
 	}
 	return gatheredCounterValue(mfs, name, labelName, labelValue)
+}
+
+func runMaxRoomSize(ctx context.Context, cfg *config, args []string) int {
+	fs := flag.NewFlagSet("max-room-size", flag.ExitOnError)
+	preset := fs.String("preset", "", "botroom preset name")
+	seed := fs.Int64("seed", 42, "RNG seed (must match seed-time)")
+	rate := fs.Int("rate", 0, "bot send rate (msgs/sec, split across the step's rooms) — required")
+	sizesFlag := fs.String("sizes", "100,500,1000,2000,5000", "comma-separated room sizes to ramp; k suffix = x1000")
+	roomsPerSize := fs.Int("rooms-per-size", 4, "rooms targeted per size step")
+	reads := fs.Int("reads", 0, "optional room-service read rate (msgs/sec); 0 = off")
+	warmup := fs.Duration("warmup", 60*time.Second, "per-step warmup (samples discarded)")
+	hold := fs.Duration("hold", 180*time.Second, "per-step measurement window")
+	cooldown := fs.Duration("cooldown", 30*time.Second, "per-step drain gap")
+	stopOnTrip := fs.Bool("stop-on-trip", true, "stop the ramp at the first TRIP")
+	sloP95 := fs.Duration("slo-p95", 500*time.Millisecond, "p95 latency SLO")
+	sloP99 := fs.Duration("slo-p99", 1000*time.Millisecond, "p99 latency SLO")
+	sloErr := fs.Float64("slo-error-rate", 0.001, "error-rate SLO (failed/attempted)")
+	sloPending := fs.Int64("slo-pending-growth", 1000, "per-durable num_pending growth SLO")
+	rateTol := fs.Float64("rate-tolerance", 0.05, "achieved-vs-target shortfall band for INCONCLUSIVE")
+	csvPath := fs.String("csv", "", "optional CSV output path")
+	_ = fs.Parse(args)
+
+	if *preset == "" {
+		fmt.Fprintln(os.Stderr, "--preset required")
+		return 2
+	}
+	if *rate <= 0 {
+		fmt.Fprintln(os.Stderr, "--rate required and must be > 0")
+		return 2
+	}
+	p, ok := BuiltinBotRoomPreset(*preset)
+	if !ok {
+		fmt.Fprintf(os.Stderr, "unknown botroom preset: %s\n", *preset)
+		return 2
+	}
+	sizes, err := parseRPSSteps(*sizesFlag)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "parse --sizes: %v\n", err)
+		return 2
+	}
+	if err := ValidateBotRoomSelection(&p, sizes, *roomsPerSize); err != nil {
+		fmt.Fprintln(os.Stderr, err.Error())
+		return 2
+	}
+
+	_, layout := BuildBotRoomFixtures(&p, *seed, cfg.SiteID)
+
+	nc, err := natsutil.Connect(cfg.NatsURL, cfg.NatsCredsFile)
+	if err != nil {
+		slog.Error("nats connect", "error", err)
+		return 1
+	}
+	js, err := jetstream.New(nc.NatsConn())
+	if err != nil {
+		slog.Error("jetstream init", "error", err)
+		return 1
+	}
+
+	metrics := NewMetrics()
+	metricsSrv := &http.Server{Addr: cfg.MetricsAddr, Handler: metrics.Handler(), ReadHeaderTimeout: 5 * time.Second}
+	go func() {
+		if err := metricsSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Warn("metrics server stopped", "error", err)
+		}
+	}()
+
+	collector := NewCollector(metrics, p.Name)
+	// E2 (broadcast) correlation via RoomEvent.LastMsgID — reuse newE2Handler.
+	// Botroom sends only to channel rooms, which broadcast on the room-event
+	// subject; no UserRoomEventWildcard (DM) subscription is needed.
+	e2Sub, err := nc.NatsConn().Subscribe(subject.RoomEventWildcard(), newE2Handler(collector))
+	if err != nil {
+		slog.Error("subscribe e2", "error", err)
+		return 1
+	}
+	defer func() { _ = e2Sub.Unsubscribe() }()
+
+	// E1 (gatekeeper reply) — count gatekeeper rejections as failed sends.
+	gkFailed := new(atomic.Int64)
+	e1Sub, err := nc.NatsConn().Subscribe(subject.UserResponseWildcard(), func(msg *nats.Msg) {
+		var payload struct {
+			Error string `json:"error"`
+		}
+		if json.Unmarshal(msg.Data, &payload) == nil && payload.Error != "" {
+			metrics.BotRoomPublishErrors.WithLabelValues("gatekeeper").Inc()
+			gkFailed.Add(1)
+		}
+	})
+	if err != nil {
+		slog.Error("subscribe e1", "error", err)
+		return 1
+	}
+	defer func() { _ = e1Sub.Unsubscribe() }()
+
+	// Observability samplers (verdict uses pollPending, these feed Grafana).
+	canonical := stream.MessagesCanonical(cfg.SiteID)
+	samplerCtx, cancelSamplers := context.WithCancel(ctx)
+	defer cancelSamplers()
+	var samplerWG sync.WaitGroup
+	for _, d := range botRoomGatedDurables {
+		s := NewConsumerSampler(js, canonical.Name, d, metrics, time.Second)
+		samplerWG.Add(1)
+		go func(s *ConsumerSampler) {
+			defer samplerWG.Done()
+			s.Run(samplerCtx)
+		}(s)
+	}
+
+	publisher := newNatsCorePublisher(nc.NatsConn(), InjectFrontdoor, nil)
+	th := BotRoomThresholds{
+		P95LatencyMs: float64(sloP95.Milliseconds()), P99LatencyMs: float64(sloP99.Milliseconds()),
+		ErrorRate: *sloErr, PendingGrowth: *sloPending,
+		GCPauseInconclusive: 50, RateTolerance: *rateTol,
+	}
+
+	var results []BotRoomStepResult
+	for _, size := range sizes {
+		if ctx.Err() != nil {
+			break
+		}
+		rooms := layout.RoomsBySize[size][:*roomsPerSize]
+		res := runBotRoomStep(ctx, botRoomStepConfig{
+			Preset: p.Name, SiteID: cfg.SiteID, BotAccount: layout.BotAccount,
+			Size: size, Rooms: rooms, Rate: *rate, Reads: *reads,
+			Warmup: *warmup, Hold: *hold, Cooldown: *cooldown,
+			MaxInFlight: cfg.MaxInFlight, JSZURL: cfg.NatsMonitoringURL,
+			Publisher: publisher, NC: nc.NatsConn(), Collector: collector,
+			Metrics: metrics, GKFailed: gkFailed, Thresholds: th,
+		})
+		results = append(results, res)
+		if *stopOnTrip && res.Tripped {
+			break
+		}
+	}
+
+	cancelSamplers()
+	samplerWG.Wait()
+	shutCtx, cancelShut := context.WithTimeout(context.Background(), 5*time.Second)
+	_ = metricsSrv.Shutdown(shutCtx)
+	cancelShut()
+	_ = nc.Drain()
+
+	renderBotRoomConsole(os.Stdout, results)
+	if *csvPath != "" {
+		if err := writeBotRoomCSV(*csvPath, results); err != nil {
+			slog.Error("csv export", "error", err)
+		}
+	}
+	return 0
 }

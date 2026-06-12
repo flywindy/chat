@@ -66,7 +66,7 @@ func TestValidateInjectShape(t *testing.T) {
 }
 
 func TestBuiltinMembersPreset(t *testing.T) {
-	cases := []string{"members-small", "members-medium", "members-capacity", "members-heavy"}
+	cases := []string{"members-small", "members-medium", "members-capacity", "members-capacity-xl", "members-heavy"}
 	for _, name := range cases {
 		t.Run(name, func(t *testing.T) {
 			p, ok := BuiltinMembersPreset(name)
@@ -164,4 +164,11 @@ func TestOwnersByRoom(t *testing.T) {
 		require.True(t, ok, "room %s missing owner", r.ID)
 		assert.NotEmpty(t, owner)
 	}
+}
+
+func TestBuiltinMembersPreset_CapacityXL(t *testing.T) {
+	p, ok := BuiltinMembersPreset("members-capacity-xl")
+	require.True(t, ok)
+	// baseline + pool must allow growth to ~5000.
+	assert.GreaterOrEqual(t, p.BaselineSize+p.CandidatePool, 5000)
 }
