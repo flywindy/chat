@@ -40,3 +40,19 @@ func IsPlatformAdmin(u *User) bool {
 	}
 	return false
 }
+
+// DisplayName renders the user's display label for Drive ownership metadata:
+// the account when either name is missing, the English name when both names are
+// identical, otherwise "<engName> <chineseName>".
+func (u *User) DisplayName() string {
+	switch {
+	case u == nil:
+		return ""
+	case u.EngName == "" || u.ChineseName == "":
+		return u.Account
+	case u.EngName == u.ChineseName:
+		return u.EngName
+	default:
+		return u.EngName + " " + u.ChineseName
+	}
+}

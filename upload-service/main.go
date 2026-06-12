@@ -1,0 +1,127 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"os"
+	"time"
+
+	"github.com/caarlos0/env/v11"
+	"github.com/gin-gonic/gin"
+
+	"github.com/hmchangw/chat/pkg/drive"
+	"github.com/hmchangw/chat/pkg/mongoutil"
+	pkgoidc "github.com/hmchangw/chat/pkg/oidc"
+	"github.com/hmchangw/chat/pkg/otelutil"
+	"github.com/hmchangw/chat/pkg/shutdown"
+)
+
+type config struct {
+	Port    string `env:"PORT"      envDefault:"8080"`
+	DevMode bool   `env:"DEV_MODE"  envDefault:"false"`
+	SiteID  string `env:"SITE_ID,required"`
+
+	MongoURI      string `env:"MONGO_URI,required"`
+	MongoDB       string `env:"MONGO_DB"        envDefault:"chat"`
+	MongoUsername string `env:"MONGO_USERNAME"  envDefault:""`
+	MongoPassword string `env:"MONGO_PASSWORD"  envDefault:""`
+
+	// MaxFiles caps the number of images per upload request.
+	MaxFiles int `env:"MAX_FILES" envDefault:"10"`
+	// MaxImageSizeBytes is the per-image upload ceiling (default 25 MiB).
+	MaxImageSizeBytes int64 `env:"MAX_IMAGE_SIZE_BYTES" envDefault:"26214400"`
+
+	OIDCIssuerURL string   `env:"OIDC_ISSUER_URL"`
+	OIDCAudiences []string `env:"OIDC_AUDIENCES" envSeparator:","`
+	TLSSkipVerify bool     `env:"TLS_SKIP_VERIFY" envDefault:"false"`
+
+	Drive drive.Config `envPrefix:"DRIVE_"`
+}
+
+func main() {
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
+	if err := run(); err != nil {
+		slog.Error("fatal error", "error", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
+	cfg, err := env.ParseAs[config]()
+	if err != nil {
+		return fmt.Errorf("parse config: %w", err)
+	}
+
+	ctx := context.Background()
+	cfg.Drive.LoadBaseURLs()
+
+	tracerShutdown, err := otelutil.InitTracer(ctx, "upload-service")
+	if err != nil {
+		return fmt.Errorf("init tracer: %w", err)
+	}
+
+	mongoClient, err := mongoutil.Connect(ctx, cfg.MongoURI, cfg.MongoUsername, cfg.MongoPassword)
+	if err != nil {
+		return fmt.Errorf("mongo connect: %w", err)
+	}
+	store := NewMongoStore(mongoClient.Database(cfg.MongoDB))
+	driveClient := drive.NewClient(&cfg.Drive)
+
+	var validator TokenValidator
+	if !cfg.DevMode {
+		if cfg.OIDCIssuerURL == "" || len(cfg.OIDCAudiences) == 0 {
+			return fmt.Errorf("OIDC_ISSUER_URL and OIDC_AUDIENCES are required when DEV_MODE is false")
+		}
+		v, err := pkgoidc.NewValidator(ctx, pkgoidc.Config{
+			IssuerURL:     cfg.OIDCIssuerURL,
+			Audiences:     cfg.OIDCAudiences,
+			TLSSkipVerify: cfg.TLSSkipVerify,
+		})
+		if err != nil {
+			return fmt.Errorf("create oidc validator: %w", err)
+		}
+		validator = v
+	}
+
+	handler := NewHandler(store, driveClient, cfg.MaxFiles, cfg.MaxImageSizeBytes)
+
+	gin.SetMode(gin.ReleaseMode)
+	r := gin.New()
+	r.Use(gin.Recovery())
+	r.Use(requestIDMiddleware())
+	r.Use(accessLogMiddleware())
+	registerRoutes(r, handler, validator, cfg.DevMode)
+
+	addr := fmt.Sprintf(":%s", cfg.Port)
+	srv := &http.Server{
+		Addr:         addr,
+		Handler:      r,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 5 * time.Minute, // downloads stream potentially-large bodies
+	}
+
+	srvErr := make(chan error, 1)
+	go func() {
+		slog.Info("upload service starting", "addr", addr, "site", cfg.SiteID)
+		srvErr <- srv.ListenAndServe()
+	}()
+
+	shutdownDone := make(chan struct{})
+	go func() {
+		defer close(shutdownDone)
+		shutdown.Wait(ctx, 25*time.Second,
+			func(ctx context.Context) error { return srv.Shutdown(ctx) },
+			func(ctx context.Context) error { return tracerShutdown(ctx) },
+			func(ctx context.Context) error { mongoutil.Disconnect(ctx, mongoClient); return nil },
+		)
+	}()
+
+	err = <-srvErr
+	if err != nil && err != http.ErrServerClosed {
+		return fmt.Errorf("listen upload server: %w", err)
+	}
+	<-shutdownDone
+	return nil
+}

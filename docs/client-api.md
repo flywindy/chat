@@ -39,6 +39,7 @@ paths.
 2. [Connection & Auth](#2-connection--auth)
    - [2.1 NATS connection](#21-nats-connection)
    - [2.2 HTTP — POST /auth](#22-http--post-auth)
+   - [2.3 HTTP — Protected image upload/download](#23-http--protected-image-uploaddownload)
 3. [Request/Reply Methods](#3-requestreply-methods)
    - [3.0 Shared schemas](#30-shared-schemas)
    - [3.1 room-service](#31-room-service)
@@ -205,6 +206,126 @@ The returned `natsJwt` has a server-configured lifetime (default 2h). Clients sh
 > so the request/response schema is identical to the initial login call. When
 > silent renewal fails (the SSO session has ended), the client performs a
 > graceful re-login redirect instead.
+
+#### Triggered events — success path
+
+`None — HTTP-only.`
+
+#### Triggered events — error path
+
+`None.`
+
+---
+
+### 2.3 HTTP — Protected image upload/download
+
+Two HTTP endpoints on `upload-service` for protected inline images, proxied
+to/from an internal Drive. Both require the `ssoToken` header (validated via
+OIDC) and that the caller is a member (has a subscription) of `:roomId`. Errors
+use the standard [§6](#6-error-envelope-reference) envelope `{ code, reason?, error }`.
+
+#### POST /api/v1/rooms/:roomId/upload/images
+
+**Endpoint:** `POST /api/v1/rooms/:roomId/upload/images`
+**Reply:** synchronous HTTP response
+
+Uploads one or more images for a room on behalf of the authenticated user. Each
+file is validated independently and the response reports per-file
+success/failure in a single `200` (partial success).
+
+#### Request
+
+`Content-Type: multipart/form-data`
+
+| Field | Source | Type | Required | Notes |
+|---|---|---|---|---|
+| `ssoToken` | header | string | yes | OIDC-issued SSO token; identifies the uploader. |
+| `roomId` | path | string | yes | Target room ID; the caller must be a member. |
+| `images` | form file | file[] | yes | One or more images (`.png`/`.jpeg`/`.jpg`/`.heic`), each ≤ `MAX_IMAGE_SIZE_BYTES` (default 25 MiB); at most `MAX_FILES` (default 10). Repeat the field once per file. |
+
+#### Success response
+
+`HTTP 200` — one `results` entry per submitted file (successes and failures together).
+
+| Field | Type | Notes |
+|---|---|---|
+| `results` | [UploadResult](#uploadresult)[] | Per-file outcome. |
+
+##### UploadResult
+
+| Field | Type | Notes |
+|---|---|---|
+| `name` | string | The file name. |
+| `status` | string | `Success` for an uploaded file, `failure` for a rejected one. |
+| `error` | string | Present on failure: `file size exceeds limit`, `file has an invalid file type`, or `failed to open file`. |
+| `relativePath` | string | Present on success: path to download the image via the GET endpoint below, including the `drive_host` query param. |
+
+```json
+{
+  "results": [
+    { "name": "pic1.png", "status": "Success", "relativePath": "api/v1/rooms/abc123/image/img-xyz?drive_host=https://drive.example.com" },
+    { "name": "big.exe", "status": "failure", "error": "file has an invalid file type" }
+  ]
+}
+```
+
+#### Error response
+
+A whole-request failure (not a per-file rejection) uses the
+[§6](#6-error-envelope-reference) envelope. HTTP statuses:
+
+| Status | `code` | `reason` | Example body |
+|---|---|---|---|
+| 400 | `bad_request` | — | `{ "code": "bad_request", "error": "too many files" }` — also `roomId is required`, `request must be multipart/form-data`. |
+| 401 | `unauthenticated` | `invalid_sso_token` / `sso_token_expired` / `missing_fields` | `{ "code": "unauthenticated", "reason": "invalid_sso_token", "error": "invalid sso token" }` |
+| 403 | `forbidden` | `not_room_member` | `{ "code": "forbidden", "reason": "not_room_member", "error": "user alice is not in room abc123" }` |
+| 404 | `not_found` | — | `{ "code": "not_found", "error": "room not found" }` |
+| 500 | `internal` | — | `{ "code": "internal", "error": "internal error" }` — user missing in context, no email on the account, or a Drive/store fault; real cause logged server-side only. |
+
+#### Triggered events — success path
+
+`None — HTTP-only.`
+
+#### Triggered events — error path
+
+`None.`
+
+---
+
+#### GET /api/v1/rooms/:roomId/image/:fileId
+
+**Endpoint:** `GET /api/v1/rooms/:roomId/image/:fileId`
+**Reply:** synchronous HTTP response (raw image bytes, not JSON)
+
+Downloads a protected image. The service proxies the bytes from Drive: it
+fetches a signed URL, streams the body, and pipes it straight back. Typically
+called with the `relativePath` returned by the upload endpoint.
+
+#### Request
+
+| Field | Source | Type | Required | Notes |
+|---|---|---|---|---|
+| `ssoToken` | header | string | yes | OIDC-issued SSO token. |
+| `roomId` | path | string | yes | Room the image belongs to; the caller must be a member. |
+| `fileId` | path | string | yes | Drive file ID (from the upload response). |
+| `drive_host` | query | string | yes | Drive base URL (from the upload response). |
+
+#### Success response
+
+`HTTP 200` — raw image binary streamed directly (not JSON), with the upstream
+`Content-Type` (defaulting to `application/octet-stream`).
+
+#### Error response
+
+See [Error envelope](#6-error-envelope-reference). HTTP statuses:
+
+| Status | `code` | `reason` | Example body |
+|---|---|---|---|
+| 400 | `bad_request` | — | `{ "code": "bad_request", "error": "drive_host is required" }` — also `roomId is required`, `fileId is required`. |
+| 401 | `unauthenticated` | `invalid_sso_token` / `sso_token_expired` / `missing_fields` | `{ "code": "unauthenticated", "reason": "invalid_sso_token", "error": "invalid sso token" }` |
+| 403 | `forbidden` | `not_room_member` | `{ "code": "forbidden", "reason": "not_room_member", "error": "user alice is not in room abc123" }` |
+| 500 | `internal` | — | `{ "code": "internal", "error": "internal error" }` — user missing in context. |
+| 503 | `unavailable` | — | `{ "code": "unavailable", "error": "failed to retrieve image" }` — Drive signer/download failure. |
 
 #### Triggered events — success path
 
@@ -3513,7 +3634,7 @@ Every error response — NATS reply subjects, JetStream async results, and HTTP 
 
 - **NATS sync replies** — on the reply subject for §3/§4 RPCs.
 - **JetStream async results** — `model.AsyncJobResult` carries the same `code` + `reason` fields when `status == "error"`, so a failed async job is surfaced the same way as a sync error.
-- **HTTP** — auth-service `POST /auth` writes the envelope as the response body with the matching HTTP status from the table above.
+- **HTTP** — auth-service `POST /auth` (§2.2) and upload-service's image endpoints (§2.3) write the envelope as the response body with the matching HTTP status from the table above.
 
 ### Client branching guidance
 
