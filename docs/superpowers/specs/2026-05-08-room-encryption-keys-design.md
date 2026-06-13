@@ -4,6 +4,15 @@
 **Status:** Shipped (Sprint 0 + Sprint 1)
 **Branch:** `claude/room-encryption-keys-5vlQ2`
 
+> **Storage amendment (2026-06-09):** Room keys moved from Valkey into the room's
+> document in the MongoDB `rooms` collection (`encKey` sub-document). Anywhere
+> below that says keys are stored in / read from Valkey, substitute "the room's
+> document in MongoDB". The key is also now provisioned by `room-worker` right
+> after it inserts the room (not pre-set by `room-service`), and the previous-key
+> grace window is an explicit `prevExpiresAt` timestamp. The encryption envelope,
+> versioning, rotation semantics, and fan-out are otherwise unchanged. See
+> `2026-06-09-room-keys-mongo-migration-design.md`.
+>
 > **Post-review amendment (2026-05-14):** Cross-site key replication has been
 > removed. A room only ever exists on its origin site, so the broadcast
 > pipeline runs there and reads the key from the origin's local Valkey only.

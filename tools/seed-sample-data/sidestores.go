@@ -1,4 +1,4 @@
-// Package main: Valkey write helpers.
+// Package main: room-key (MongoDB) and restricted-cache (Valkey) write helpers.
 package main
 
 import (
@@ -30,17 +30,17 @@ func restrictedCachePayload(e RestrictedCacheEntry) (string, error) {
 	return string(b), nil
 }
 
-// valkeyCounts captures the number of Valkey writes for the summary log.
-type valkeyCounts struct {
+// sideStoreCounts captures the number of room-key and cache writes for the summary log.
+type sideStoreCounts struct {
 	RoomKeys     int
 	CacheEntries int
 }
 
-// writeValkey writes every seeded room key (via roomkeystore.Set, which uses
-// the exact production hash format) and every restricted-rooms cache entry
-// (via valkeyutil.Client.Set with restrictedCacheTTL).
-func writeValkey(ctx context.Context, keys roomkeystore.RoomKeyStore, client valkeyutil.Client) (valkeyCounts, error) {
-	var c valkeyCounts
+// writeSideStores writes every seeded room key into its room document (via
+// roomkeystore.Set against MongoDB) and every restricted-rooms cache entry (via
+// valkeyutil.Client.Set with restrictedCacheTTL).
+func writeSideStores(ctx context.Context, keys roomkeystore.RoomKeyStore, client valkeyutil.Client) (sideStoreCounts, error) {
+	var c sideStoreCounts
 	for _, k := range BuildRoomKeys() {
 		if _, err := keys.Set(ctx, k.RoomID, k.KeyPair); err != nil {
 			return c, fmt.Errorf("set room key for %s: %w", k.RoomID, err)
@@ -60,10 +60,10 @@ func writeValkey(ctx context.Context, keys roomkeystore.RoomKeyStore, client val
 	return c, nil
 }
 
-// deleteValkey removes every key this seeder owns from Valkey.
-// Order: room keys first (current + previous slot via roomkeystore.Delete),
-// then cache entries via client.Del.
-func deleteValkey(ctx context.Context, keys roomkeystore.RoomKeyStore, client valkeyutil.Client) error {
+// deleteSideStores removes every artifact this seeder owns: room keys from their
+// room documents (via roomkeystore.Delete) first, then restricted-cache entries
+// from Valkey via client.Del.
+func deleteSideStores(ctx context.Context, keys roomkeystore.RoomKeyStore, client valkeyutil.Client) error {
 	for _, k := range BuildRoomKeys() {
 		if err := keys.Delete(ctx, k.RoomID); err != nil {
 			return fmt.Errorf("delete room key for %s: %w", k.RoomID, err)

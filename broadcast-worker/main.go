@@ -42,9 +42,10 @@ type config struct {
 	UserCacheTTL         time.Duration           `env:"USER_CACHE_TTL"            envDefault:"5m"`
 	RoomMetaCacheSize    int                     `env:"ROOM_META_CACHE_SIZE"      envDefault:"10000"`
 	RoomMetaCacheTTL     time.Duration           `env:"ROOM_META_CACHE_TTL"       envDefault:"2m"`
-	ValkeyAddrs          []string                `env:"VALKEY_ADDRS"              envSeparator:","`
-	ValkeyPassword       string                  `env:"VALKEY_PASSWORD"           envDefault:""`
-	ValkeyKeyGracePeriod time.Duration           `env:"VALKEY_KEY_GRACE_PERIOD" envDefault:"24h"`
+	RoomKeyGracePeriod   time.Duration           `env:"ROOM_KEY_GRACE_PERIOD"     envDefault:"24h"`
+	RoomKeyCacheTTL      time.Duration           `env:"ROOM_KEY_CACHE_TTL"        envDefault:"10m"`
+	RoomKeyCacheSize     int                     `env:"ROOM_KEY_CACHE_SIZE"       envDefault:"50000"`
+	RoomKeyCacheStats    time.Duration           `env:"ROOM_KEY_CACHE_STATS_INTERVAL" envDefault:"0"`
 	Consumer             stream.ConsumerSettings `envPrefix:"CONSUMER_"`
 	Bootstrap            bootstrapConfig         `envPrefix:"BOOTSTRAP_"`
 	Encryption           encryptionConfig        `envPrefix:"ENCRYPTION_"`
@@ -94,24 +95,12 @@ func main() {
 
 	var keyStore roomkeystore.RoomKeyStore
 	if cfg.Encryption.Enabled {
-		if len(cfg.ValkeyAddrs) == 0 {
-			slog.Error("encryption enabled but VALKEY_ADDRS is empty")
+		if cfg.RoomKeyGracePeriod <= 0 {
+			slog.Error("ROOM_KEY_GRACE_PERIOD must be a positive duration",
+				"room_key_grace_period", cfg.RoomKeyGracePeriod)
 			os.Exit(1)
 		}
-		if cfg.ValkeyKeyGracePeriod <= 0 {
-			slog.Error("VALKEY_KEY_GRACE_PERIOD must be a positive duration",
-				"valkey_key_grace_period", cfg.ValkeyKeyGracePeriod)
-			os.Exit(1)
-		}
-		keyStore, err = roomkeystore.NewValkeyClusterStore(roomkeystore.ClusterConfig{
-			Addrs:       cfg.ValkeyAddrs,
-			Password:    cfg.ValkeyPassword,
-			GracePeriod: cfg.ValkeyKeyGracePeriod,
-		})
-		if err != nil {
-			slog.Error("valkey connect failed", "error", err)
-			os.Exit(1)
-		}
+		keyStore = roomkeystore.NewMongoStore(db.Collection("rooms"), cfg.RoomKeyGracePeriod)
 	}
 
 	nc, err := natsutil.Connect(cfg.NatsURL, cfg.NatsCredsFile)
@@ -148,7 +137,31 @@ func main() {
 	go coalescer.Run(flushCtx, cfg.LastMsgFlushInterval, 5*time.Second)
 	slog.Info("last-msg coalescer enabled", "flush_interval", cfg.LastMsgFlushInterval)
 
-	handler := NewHandler(coalescer, us, publisher, keyStore, cfg.Encryption.Enabled)
+	var keyProvider RoomKeyProvider = keyStore
+	var keyCache *CachedKeyProvider
+	switch {
+	case !cfg.Encryption.Enabled:
+		// No encryption: the key provider is never consulted, leave it unwrapped.
+	case cfg.RoomKeyCacheTTL <= 0 || cfg.RoomKeyCacheSize <= 0:
+		slog.Info("room-key cache disabled", "ttl", cfg.RoomKeyCacheTTL, "size", cfg.RoomKeyCacheSize)
+	case !keyCacheTTLSafe(cfg.RoomKeyCacheTTL, cfg.RoomKeyGracePeriod):
+		// Caching beyond the grace period could serve a rotated-out key that
+		// clients can no longer decrypt; refuse to cache rather than risk it.
+		slog.Warn("room-key cache disabled: TTL must be below key grace period",
+			"ttl", cfg.RoomKeyCacheTTL, "grace_period", cfg.RoomKeyGracePeriod)
+	default:
+		keyCache = NewCachedKeyProvider(keyStore, cfg.RoomKeyCacheSize, cfg.RoomKeyCacheTTL)
+		keyProvider = keyCache
+		slog.Info("room-key cache enabled", "size", cfg.RoomKeyCacheSize, "ttl", cfg.RoomKeyCacheTTL)
+	}
+
+	statsCtx, stopStats := context.WithCancel(ctx)
+	if keyCache != nil && cfg.RoomKeyCacheStats > 0 {
+		go keyCache.RunStatsLogger(statsCtx, cfg.RoomKeyCacheStats)
+		slog.Info("room-key cache stats logger started", "interval", cfg.RoomKeyCacheStats)
+	}
+
+	handler := NewHandler(coalescer, us, publisher, keyProvider, cfg.Encryption.Enabled)
 
 	// Core-NATS queue subscriber for server-broadcast events (e.g. thread tcount badge).
 	// Fire-and-forget: errors are logged inside HandleServerBroadcast; no retry path.
@@ -225,6 +238,7 @@ func main() {
 			flushCancel()
 			return nil
 		},
+		func(_ context.Context) error { stopStats(); return nil },
 		func(ctx context.Context) error { return tracerShutdown(ctx) },
 		func(ctx context.Context) error { return nc.Drain() },
 	}

@@ -57,7 +57,8 @@ func envFromOS() map[string]string {
 }
 
 // dryRunSummary returns a multi-line human-readable plan: one line per
-// collection plus the two valkey domains, in `<key> <count>` format.
+// collection plus the two side-store domains (MongoDB room keys and the Valkey
+// restricted-rooms cache), in `<key> <count>` format.
 func dryRunSummary() string {
 	lines := []string{
 		fmt.Sprintf("users %d", len(BuildUsers())),
@@ -67,7 +68,7 @@ func dryRunSummary() string {
 		fmt.Sprintf("messages %d", len(BuildMessages())),
 		fmt.Sprintf("thread_rooms %d", len(BuildThreadRooms())),
 		fmt.Sprintf("thread_subscriptions %d", len(BuildThreadSubscriptions())),
-		fmt.Sprintf("valkey:roomKeys %d", len(BuildRoomKeys())),
+		fmt.Sprintf("mongo:roomKeys %d", len(BuildRoomKeys())),
 		fmt.Sprintf("valkey:restrictedCache %d", len(BuildRestrictedCache())),
 	}
 	return strings.Join(lines, "\n")
@@ -109,19 +110,9 @@ func run(reset bool) error {
 	defer mongoutil.Disconnect(ctx, mongoClient)
 	db := mongoClient.Database(cfg.MongoDB)
 
-	keyStore, err := roomkeystore.NewValkeyClusterStore(roomkeystore.ClusterConfig{
-		Addrs:       cfg.ValkeyAddrs,
-		Password:    cfg.ValkeyPassword,
-		GracePeriod: 5 * time.Minute,
-	})
-	if err != nil {
-		return fmt.Errorf("valkey roomkeystore connect: %w", err)
-	}
-	defer func() {
-		if cerr := keyStore.Close(); cerr != nil {
-			slog.Warn("valkey roomkeystore close", "error", cerr)
-		}
-	}()
+	// Room keys live in the rooms collection; upsertAll inserts the rooms before
+	// writeSideStores provisions their keys.
+	keyStore := roomkeystore.NewMongoStore(db.Collection("rooms"), 5*time.Minute)
 
 	valkeyClient, err := valkeyutil.ConnectCluster(ctx, cfg.ValkeyAddrs, cfg.ValkeyPassword)
 	if err != nil {
@@ -133,8 +124,8 @@ func run(reset bool) error {
 		if err := deleteAll(ctx, db); err != nil {
 			return fmt.Errorf("mongo reset: %w", err)
 		}
-		if err := deleteValkey(ctx, keyStore, valkeyClient); err != nil {
-			return fmt.Errorf("valkey reset: %w", err)
+		if err := deleteSideStores(ctx, keyStore, valkeyClient); err != nil {
+			return fmt.Errorf("side-store reset: %w", err)
 		}
 		slog.Info("seed reset complete")
 	}
@@ -144,9 +135,9 @@ func run(reset bool) error {
 		return fmt.Errorf("mongo upsert: %w", err)
 	}
 
-	vc, err := writeValkey(ctx, keyStore, valkeyClient)
+	vc, err := writeSideStores(ctx, keyStore, valkeyClient)
 	if err != nil {
-		return fmt.Errorf("valkey write: %w", err)
+		return fmt.Errorf("side-store write: %w", err)
 	}
 
 	slog.Info("seed complete",
@@ -157,8 +148,8 @@ func run(reset bool) error {
 		"messages", mc.Messages,
 		"threadRooms", mc.ThreadRooms,
 		"threadSubscriptions", mc.ThreadSubscriptions,
-		"valkeyRoomKeys", vc.RoomKeys,
-		"valkeyCacheEntries", vc.CacheEntries,
+		"mongoRoomKeys", vc.RoomKeys,
+		"valkeyRestrictedCacheEntries", vc.CacheEntries,
 	)
 	return nil
 }

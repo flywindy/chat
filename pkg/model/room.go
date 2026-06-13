@@ -35,7 +35,7 @@ type RoomsInfoBatchRequest struct {
 	RoomIDs []string `json:"roomIds"`
 }
 
-// RoomInfo is a single aggregated room record: Mongo metadata + Valkey key.
+// RoomInfo is a single aggregated room record: Mongo metadata + room key.
 type RoomInfo struct {
 	RoomID           string  `json:"roomId"`
 	Found            bool    `json:"found"`

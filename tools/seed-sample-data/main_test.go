@@ -40,7 +40,7 @@ func TestDryRunSummary_HasAllRowCounts(t *testing.T) {
 		"messages 23",
 		"thread_rooms 1",
 		"thread_subscriptions 2",
-		"valkey:roomKeys 6",
+		"mongo:roomKeys 6",
 		"valkey:restrictedCache 4",
 	} {
 		assert.Contains(t, got, want, "dry-run summary missing %q", want)

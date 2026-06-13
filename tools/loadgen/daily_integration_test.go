@@ -46,11 +46,10 @@ func TestRunDaily_Integration_TinyPresetPasses(t *testing.T) {
 	}
 
 	baseCfg := &config{
-		NatsURL:     natsURL,
-		MongoURI:    "mongodb://unused",
-		MongoDB:     "unused",
-		ValkeyAddrs: []string{"unused"},
-		SiteID:      "site-test",
+		NatsURL:  natsURL,
+		MongoURI: "mongodb://unused",
+		MongoDB:  "unused",
+		SiteID:   "site-test",
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

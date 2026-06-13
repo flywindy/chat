@@ -13,6 +13,7 @@ import (
 	"github.com/hmchangw/chat/pkg/model"
 	"github.com/hmchangw/chat/pkg/mongoutil"
 	"github.com/hmchangw/chat/pkg/pipelines"
+	"github.com/hmchangw/chat/pkg/roomkeystore"
 )
 
 type MongoStore struct {
@@ -99,11 +100,42 @@ func (s *MongoStore) GetUser(ctx context.Context, account string) (*model.User, 
 	return &u, nil
 }
 
-func (s *MongoStore) CreateRoom(ctx context.Context, room *model.Room) error {
-	if _, err := s.rooms.InsertOne(ctx, room); err != nil {
-		return fmt.Errorf("insert room: %w", err)
+func (s *MongoStore) CreateRoom(ctx context.Context, room *model.Room, key *roomkeystore.RoomKeyPair) (bool, error) {
+	// Marshal the room struct (honouring omitempty) into a document so an optional
+	// encKey field can be attached and the whole thing written in one upsert.
+	raw, err := bson.Marshal(room)
+	if err != nil {
+		return false, fmt.Errorf("marshal room: %w", err)
 	}
-	return nil
+	var doc bson.M
+	if err := bson.Unmarshal(raw, &doc); err != nil {
+		return false, fmt.Errorf("unmarshal room doc: %w", err)
+	}
+	// _id is supplied by the filter; $setOnInsert must not also set it.
+	delete(doc, "_id")
+	// Only encrypted (channel) rooms carry a key; DM/botDM rooms pass key=nil.
+	if key != nil {
+		doc["encKey"] = roomkeystore.InitialKeyDoc(*key)
+	}
+
+	// $setOnInsert makes redelivery idempotent: on a matching _id nothing is
+	// written, so an existing room keeps its original key (and the bytes clients
+	// already hold) rather than being overwritten with a freshly generated one.
+	res, err := s.rooms.UpdateOne(ctx,
+		bson.M{"_id": room.ID},
+		bson.M{"$setOnInsert": doc},
+		options.UpdateOne().SetUpsert(true),
+	)
+	if err != nil {
+		// A concurrent upsert can lose the insert race and surface E11000; the
+		// document now exists, so report it as a match (not inserted) and let the
+		// caller reconcile against the winner's document.
+		if mongo.IsDuplicateKeyError(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("upsert room: %w", err)
+	}
+	return res.UpsertedCount == 1, nil
 }
 
 func (s *MongoStore) ListNewMembersForNewRoom(ctx context.Context, orgIDs, accounts []string, excludeAccount string) ([]string, error) {

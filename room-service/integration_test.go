@@ -38,9 +38,9 @@ func setupMongo(t *testing.T) *mongo.Database {
 	return testutil.MongoDB(t, "room_service_test")
 }
 
-func setupValkey(t *testing.T) roomkeystore.RoomKeyStore {
+func setupKeyStore(t *testing.T, db *mongo.Database) roomkeystore.RoomKeyStore {
 	t.Helper()
-	return roomkeystore.NewValkeyClusterStoreFromClient(testutil.StartValkeyCluster(t), time.Hour)
+	return roomkeystore.NewMongoStore(db.Collection("rooms"), time.Hour)
 }
 
 func setupCassandra(t *testing.T) *gocql.Session {
@@ -1203,7 +1203,7 @@ func TestAddMembers_SameSiteChannel_RoomMembersPath(t *testing.T) {
 	}
 
 	db := setupMongo(t)
-	keyStore := setupValkey(t)
+	keyStore := setupKeyStore(t, db)
 	store := NewMongoStore(db)
 
 	ctx := context.Background()
@@ -1272,7 +1272,7 @@ func TestAddMembers_SameSiteChannel_SubscriptionsFallback(t *testing.T) {
 	}
 
 	db := setupMongo(t)
-	keyStore := setupValkey(t)
+	keyStore := setupKeyStore(t, db)
 	store := NewMongoStore(db)
 
 	ctx := context.Background()
@@ -1329,7 +1329,7 @@ func TestAddMembers_RequesterNotSubscribed_Rejected(t *testing.T) {
 	}
 
 	db := setupMongo(t)
-	keyStore := setupValkey(t)
+	keyStore := setupKeyStore(t, db)
 	store := NewMongoStore(db)
 
 	mustInsertRoom(t, db, &model.Room{ID: "target", Type: model.RoomTypeChannel, SiteID: "site-a"})
@@ -1358,7 +1358,7 @@ func TestAddMembers_TwoSiteEndToEnd(t *testing.T) {
 	dbA := testutil.MongoDB(t, "room_service_test_a")
 	dbB := testutil.MongoDB(t, "room_service_test_b")
 	natsURLb := setupNATS(t)
-	keyStore := setupValkey(t)
+	keyStore := setupKeyStore(t, dbA)
 
 	storeA := NewMongoStore(dbA)
 	storeB := NewMongoStore(dbB)
@@ -1444,7 +1444,7 @@ func TestAddMembers_CrossSiteTimeout(t *testing.T) {
 
 	db := setupMongo(t)
 	natsURL := setupNATS(t)
-	keyStore := setupValkey(t)
+	keyStore := setupKeyStore(t, db)
 	store := NewMongoStore(db)
 	otelNC, err := otelnats.Connect(natsURL)
 	require.NoError(t, err)
@@ -1490,7 +1490,7 @@ func TestAddMembers_CrossSiteTimeout(t *testing.T) {
 // middleware applies to every room-service handler.
 func TestRoomsInfoBatchRPC_NoRequestID(t *testing.T) {
 	db := setupMongo(t)
-	keyStore := setupValkey(t)
+	keyStore := setupKeyStore(t, db)
 	natsURL := setupNATS(t)
 
 	store := NewMongoStore(db)
@@ -1530,7 +1530,7 @@ func TestRoomsInfoBatchRPC_NoRequestID(t *testing.T) {
 
 func TestRoomsInfoBatchRPC(t *testing.T) {
 	db := setupMongo(t)
-	keyStore := setupValkey(t)
+	keyStore := setupKeyStore(t, db)
 	natsURL := setupNATS(t)
 
 	store := NewMongoStore(db)
@@ -1611,57 +1611,8 @@ func TestRoomsInfoBatchRPC(t *testing.T) {
 	assert.Nil(t, resp.Rooms[3].KeyVersion)
 }
 
-// TestIntegration_CreateRoom_PersistsKeyInValkey verifies that createRoom
-// generates and stores a room keypair in Valkey before publishing the canonical
-// event. This ensures room-worker's "key MUST exist" gate will always succeed
-// on the first delivery.
-func TestIntegration_CreateRoom_PersistsKeyInValkey(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test")
-	}
-
-	ctx := context.Background()
-	db := setupMongo(t)
-	store := NewMongoStore(db)
-	require.NoError(t, store.EnsureIndexes(ctx))
-
-	keyStore := setupValkey(t)
-
-	mustInsertUser(t, db, &model.User{
-		ID: "u_alice", Account: "alice", SiteID: "site-A",
-		EngName: "Alice", ChineseName: "爱丽丝",
-	})
-	mustInsertUser(t, db, &model.User{
-		ID: "u_bob", Account: "bob", SiteID: "site-A",
-		EngName: "Bob", ChineseName: "鲍勃",
-	})
-
-	h, _ := newRoomServiceHandler(t, store, keyStore, "site-A")
-
-	reqID := idgen.GenerateRequestID()
-	ctx = natsutil.WithRequestID(ctx, reqID)
-	c := natsrouter.NewContext(map[string]string{"account": "alice"})
-	c.SetContext(ctx)
-
-	reply, err := h.createRoom(c, model.CreateRoomRequest{
-		Name:  "crypto team",
-		Users: []string{"bob"},
-	})
-	require.NoError(t, err)
-	require.NotNil(t, reply)
-	assert.Equal(t, model.CreateRoomReplyAccepted, reply.Status)
-	assert.NotEmpty(t, reply.RoomID)
-
-	// Assert the keypair was persisted to Valkey before the canonical event was published.
-	pair, err := keyStore.Get(ctx, reply.RoomID)
-	require.NoError(t, err)
-	require.NotNil(t, pair, "room key must be stored in Valkey immediately after create")
-	assert.NotEmpty(t, pair.KeyPair.PrivateKey, "private key must be non-empty")
-	assert.Equal(t, 0, pair.Version, "freshly created room key must have version 0")
-}
-
 // TestIntegration_HandleGetRoomKey verifies the client-callable room key get
-// RPC end-to-end against real Mongo + Valkey: a member fetches both the current
+// RPC end-to-end against real Mongo: a member fetches both the current
 // and an explicit version of the key; a non-member is rejected via the
 // errNotRoomMember sentinel.
 func TestIntegration_HandleGetRoomKey(t *testing.T) {
@@ -1674,10 +1625,12 @@ func TestIntegration_HandleGetRoomKey(t *testing.T) {
 	store := NewMongoStore(db)
 	require.NoError(t, store.EnsureIndexes(ctx))
 
-	keyStore := setupValkey(t)
+	keyStore := setupKeyStore(t, db)
 	h, _ := newRoomServiceHandler(t, store, keyStore, "site-A")
 
 	const roomID = "room-int"
+	// The key is a field of the room document, so the room must exist first.
+	mustInsertRoom(t, db, &model.Room{ID: roomID, Type: model.RoomTypeChannel, SiteID: "site-A"})
 	// alice is a member; bob is not.
 	mustInsertSub(t, db, &model.Subscription{
 		ID:     idgen.GenerateUUIDv7(),
@@ -1778,7 +1731,7 @@ func TestCreateRoomChannelEndToEnd(t *testing.T) {
 	store := NewMongoStore(db)
 	require.NoError(t, store.EnsureIndexes(ctx))
 
-	keyStore := setupValkey(t)
+	keyStore := setupKeyStore(t, db)
 
 	mustInsertUser(t, db, &model.User{
 		ID: "u_alice", Account: "alice", SiteID: "site-A",
@@ -1824,7 +1777,7 @@ func TestCreateRoomDMAlreadyExists(t *testing.T) {
 	store := NewMongoStore(db)
 	require.NoError(t, store.EnsureIndexes(ctx))
 
-	keyStore := setupValkey(t)
+	keyStore := setupKeyStore(t, db)
 
 	mustInsertUser(t, db, &model.User{ID: "u_alice", Account: "alice",
 		EngName: "Alice", ChineseName: "爱丽丝", SiteID: "site-A"})
@@ -2791,7 +2744,7 @@ func TestIntegration_RoomRename(t *testing.T) {
 			return err
 		}
 
-		keyStore := setupValkey(t)
+		keyStore := setupKeyStore(t, db)
 		h := NewHandler(store, keyStore, nil, nil, siteID, 1000, 500, 5*time.Second, 5,
 			publishToStream, func(context.Context, string, []byte) error { return nil }, nil, 0)
 		router := natsrouter.New(handlerNC, "room-service")
@@ -2859,7 +2812,7 @@ func TestIntegration_RoomRename(t *testing.T) {
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = clientNC.Drain() })
 
-		keyStore := setupValkey(t)
+		keyStore := setupKeyStore(t, db)
 		h := NewHandler(store, keyStore, nil, nil, siteID, 1000, 500, 5*time.Second, 5,
 			func(context.Context, string, []byte, string) error { return nil },
 			func(context.Context, string, []byte) error { return nil }, nil, 0)
@@ -2937,7 +2890,7 @@ func TestIntegration_RoomRestricted(t *testing.T) {
 			return nil
 		}
 
-		keyStore := setupValkey(t)
+		keyStore := setupKeyStore(t, db)
 		h := NewHandler(store, keyStore, nil, nil, siteID, 1000, 500, 5*time.Second, 5,
 			publishToStream, func(context.Context, string, []byte) error { return nil }, nil, 0)
 		router := natsrouter.New(handlerNC, "room-service")
@@ -3028,7 +2981,7 @@ func TestIntegration_RoomRestricted(t *testing.T) {
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = clientNC.Drain() })
 
-		keyStore := setupValkey(t)
+		keyStore := setupKeyStore(t, db)
 		h := NewHandler(store, keyStore, nil, nil, siteID, 1000, 500, 5*time.Second, 5,
 			func(context.Context, string, []byte, string) error { return nil },
 			func(context.Context, string, []byte) error { return nil }, nil, 0)

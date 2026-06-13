@@ -173,7 +173,7 @@ func BuildHistoryFixtures(p *HistoryPreset, seed int64, siteID string, now time.
 		membersByRoom[i] = members
 	}
 
-	// Room keys for the Valkey seed step.
+	// Room keys for the room-key seed step.
 	roomKeys := make(map[string]roomkeystore.RoomKeyPair, len(rooms))
 	for i := range rooms {
 		roomKeys[rooms[i].ID] = deterministicRoomKeyPair(r)

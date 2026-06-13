@@ -3167,69 +3167,6 @@ func TestHandler_handleMessageReadReceipt(t *testing.T) {
 	}
 }
 
-func TestHandler_CreateRoom_WritesKeyBeforePublish(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	store := NewMockRoomStore(ctrl)
-	keyStore := NewMockRoomKeyStore(ctrl)
-
-	store.EXPECT().GetUser(gomock.Any(), "alice").Return(aliceUser(), nil)
-	expectAllAccountsExist(store)
-	store.EXPECT().CountNewMembers(gomock.Any(), gomock.Any(), gomock.Any(), "", "alice").
-		Return(1, nil)
-
-	var keyStored bool
-	var publishCalls int
-	keyStore.EXPECT().Set(gomock.Any(), gomock.Any(), gomock.Any()).
-		DoAndReturn(func(_ context.Context, roomID string, pair roomkeystore.RoomKeyPair) (int, error) {
-			assert.NotEmpty(t, roomID)
-			assert.Len(t, pair.PrivateKey, 32)
-			keyStored = true
-			return 0, nil
-		})
-
-	publish := func(_ context.Context, subj string, _ []byte, _ string) error {
-		// Write-before-publish invariant: room-worker reads the key on canonical
-		// arrival, so Set must complete before the create event is published.
-		assert.True(t, keyStored, "keyStore.Set must run before publishToStream")
-		publishCalls++
-		assert.Equal(t, "chat.room.canonical.site-a.create", subj)
-		return nil
-	}
-
-	h := &Handler{store: store, keyStore: keyStore, siteID: "site-a", maxRoomSize: 1000,
-		publishToStream: publish}
-
-	req := model.CreateRoomRequest{Name: "general", Users: []string{"bob"}}
-	_, err := h.createRoom(ctxParams(map[string]string{"account": "alice"}), req)
-	require.NoError(t, err)
-	assert.Equal(t, 1, publishCalls)
-}
-
-func TestHandler_CreateRoom_AbortsOnKeyStoreSetError(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	store := NewMockRoomStore(ctrl)
-	keyStore := NewMockRoomKeyStore(ctrl)
-
-	store.EXPECT().GetUser(gomock.Any(), "alice").Return(aliceUser(), nil)
-	expectAllAccountsExist(store)
-	store.EXPECT().CountNewMembers(gomock.Any(), gomock.Any(), gomock.Any(), "", "alice").
-		Return(1, nil)
-	keyStore.EXPECT().Set(gomock.Any(), gomock.Any(), gomock.Any()).
-		Return(0, fmt.Errorf("valkey down"))
-
-	h := &Handler{store: store, keyStore: keyStore, siteID: "site-a", maxRoomSize: 1000,
-		publishToStream: func(_ context.Context, _ string, _ []byte, _ string) error {
-			t.Fatal("publishToStream must not be called when Set fails")
-			return nil
-		},
-	}
-
-	req := model.CreateRoomRequest{Name: "general", Users: []string{"bob"}}
-	_, err := h.createRoom(ctxParams(map[string]string{"account": "alice"}), req)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "store room key")
-}
-
 func TestHandler_EnsureRoomKey_KeyExists(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	keyStore := NewMockRoomKeyStore(ctrl)
@@ -3277,7 +3214,7 @@ func TestHandler_EnsureRoomKey_KeyNotFound_SetsNew(t *testing.T) {
 	assert.Equal(t, "room-new", resp.RoomID)
 	assert.Equal(t, 0, resp.Version)
 
-	assert.Len(t, capturedPair.PrivateKey, 32, "room secret must be 32 bytes — stored in Valkey")
+	assert.Len(t, capturedPair.PrivateKey, 32, "room secret must be 32 bytes")
 	respJSON := mustJSON(t, resp)
 	assert.NotContains(t, string(respJSON), "publicKey", "response must not include public key bytes")
 	assert.NotContains(t, string(respJSON), "privateKey", "response must not include private key bytes")

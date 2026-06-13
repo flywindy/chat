@@ -21,7 +21,7 @@ import (
 	"github.com/hmchangw/chat/pkg/userstore"
 )
 
-// errNoCurrentKey is returned when a room has no encryption key in Valkey.
+// errNoCurrentKey is returned when a room has no encryption key in its room document.
 var errNoCurrentKey = errors.New("no current key")
 
 // Publisher abstracts NATS publishing so the handler is testable.

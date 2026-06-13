@@ -39,11 +39,8 @@ type config struct {
 	Consumer         stream.ConsumerSettings `envPrefix:"CONSUMER_"`
 	Bootstrap        bootstrapConfig         `envPrefix:"BOOTSTRAP_"`
 
-	// Required: room-worker reads/rotates the room key on every create/add/remove path.
-	ValkeyAddrs    []string `env:"VALKEY_ADDRS,required"     envSeparator:","`
-	ValkeyPassword string   `env:"VALKEY_PASSWORD"           envDefault:""`
-	// TTL on the :prev key slot after a rotation.
-	ValkeyKeyGracePeriod time.Duration `env:"VALKEY_KEY_GRACE_PERIOD"   envDefault:"24h"`
+	// Grace window during which a rotated-out previous key remains valid for decrypt.
+	RoomKeyGracePeriod time.Duration `env:"ROOM_KEY_GRACE_PERIOD" envDefault:"24h"`
 
 	// Atrest/Vault drive eager at-rest DEK provisioning for synchronously-created
 	// DM rooms. When Atrest.Enabled is false the DEK is created lazily by message-worker.
@@ -60,9 +57,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	if cfg.ValkeyKeyGracePeriod <= 0 {
-		slog.Error("VALKEY_KEY_GRACE_PERIOD must be a positive duration",
-			"valkey_key_grace_period", cfg.ValkeyKeyGracePeriod)
+	if cfg.RoomKeyGracePeriod <= 0 {
+		slog.Error("ROOM_KEY_GRACE_PERIOD must be a positive duration",
+			"room_key_grace_period", cfg.RoomKeyGracePeriod)
 		os.Exit(1)
 	}
 
@@ -102,15 +99,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	keyStore, err := roomkeystore.NewValkeyClusterStore(roomkeystore.ClusterConfig{
-		Addrs:       cfg.ValkeyAddrs,
-		Password:    cfg.ValkeyPassword,
-		GracePeriod: cfg.ValkeyKeyGracePeriod,
-	})
-	if err != nil {
-		slog.Error("valkey connect failed", "error", err)
-		os.Exit(1)
-	}
+	keyStore := roomkeystore.NewMongoStore(mongoClient.Database(cfg.MongoDB).Collection("rooms"), cfg.RoomKeyGracePeriod)
 	keySender := roomkeysender.NewSender(nc.NatsConn())
 
 	// Eager at-rest DEK provisioning for synchronously-created DM rooms (the

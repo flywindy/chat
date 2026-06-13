@@ -31,10 +31,10 @@ func (p *mockPublisher) publishCount() int {
 }
 
 // stubRoomKeyStore is a zero-config RoomKeyStore for tests that don't exercise
-// key behavior (production now requires Valkey via the VALKEY_ADDRS=required
-// gate, so the Handler can no longer be constructed with a nil keyStore).
-// Tests that DO exercise key behavior should build their own MockRoomKeyStore
-// with explicit EXPECTations rather than using this stub.
+// key behavior (production always wires a Mongo-backed key store, so the Handler
+// can no longer be constructed with a nil keyStore). Tests that DO exercise key
+// behavior should build their own MockRoomKeyStore with explicit EXPECTations
+// rather than using this stub.
 type stubRoomKeyStore struct{}
 
 // Get returns a synthetic version-0 `roomkeystore.VersionedKeyPair` whose

@@ -48,10 +48,9 @@ services:
       - SITE_ID=site-local
       - MONGO_URI=mongodb://mongodb:27017
       - MONGO_DB=chat
-      # Valkey cluster is required (room-worker refuses to start without VALKEY_ADDRS).
-      # Provided by docker-local/compose.deps.yaml; production deploys must supply it externally.
-      - VALKEY_ADDRS=valkey:6379
-      - VALKEY_KEY_GRACE_PERIOD=24h
+      # Room keys live in the MongoDB rooms collection; this grace window keeps a
+      # rotated-out previous key valid for decrypt.
+      - ROOM_KEY_GRACE_PERIOD=24h
       - BOOTSTRAP_STREAMS=true
       - ATREST_ENABLED=true
       - VAULT_ADDR=http://vault:8200

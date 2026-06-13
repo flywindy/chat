@@ -13,7 +13,7 @@ type stage struct {
 
 // messagesStageGraph describes the messages pipeline:
 // publish -> message-gatekeeper -> MESSAGES_CANONICAL -> {message-worker (Cassandra),
-// broadcast-worker (MongoDB membership + Valkey keys)}. E1 latency measures the
+// broadcast-worker (MongoDB membership + room keys)}. E1 latency measures the
 // gatekeeper front door; E2 is the end-to-end publish->broadcast time.
 func messagesStageGraph() []stage {
 	return []stage{

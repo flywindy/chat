@@ -17,7 +17,6 @@ import (
 
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/sync/errgroup"
 
@@ -27,14 +26,14 @@ import (
 	"github.com/hmchangw/chat/pkg/model"
 	"github.com/hmchangw/chat/pkg/natsrouter"
 	"github.com/hmchangw/chat/pkg/natsutil"
-	"github.com/hmchangw/chat/pkg/roomkeymetrics"
 	"github.com/hmchangw/chat/pkg/roomkeystore"
 	"github.com/hmchangw/chat/pkg/subject"
 )
 
 type Handler struct {
 	store RoomStore
-	// keyStore is set when VALKEY_ADDRS is configured (always in production; tests may pass nil).
+	// keyStore reads/writes room keys in the rooms collection (always wired in
+	// production; tests may pass nil).
 	keyStore RoomKeyStore
 	// dekProvisioner is set in main when ATREST_ENABLED; nil disables eager
 	// at-rest DEK creation at room-create time (message-worker's lazy create
@@ -297,17 +296,9 @@ func (h *Handler) publishCreateRoom(ctx context.Context, req *model.CreateRoomRe
 		)
 	}
 
-	// Generate and store room key BEFORE canonical event so worker's Get gate succeeds.
-	if h.keyStore != nil {
-		pair, err := roomkeystore.GenerateKeyPair()
-		if err != nil {
-			return nil, fmt.Errorf("generate room key: %w", err)
-		}
-		if _, err := h.keyStore.Set(ctx, req.RoomID, *pair); err != nil {
-			roomkeymetrics.ValkeyErrors.Add(ctx, 1, metric.WithAttributes(attribute.String("op", "Set")))
-			return nil, fmt.Errorf("store room key: %w", err)
-		}
-	}
+	// The room encryption key is a field of the room document and is provisioned
+	// by room-worker when it inserts the room, so room-service no longer
+	// pre-provisions it here.
 
 	// Provision the at-rest DEK BEFORE the canonical event so the first message
 	// write doesn't pay the create cost. Blocking, like the room key above;
@@ -1427,14 +1418,14 @@ func (h *Handler) messageThreadRead(c *natsrouter.Context, req model.MessageThre
 }
 
 // ensureRoomKey handles server-to-server requests to ensure a room
-// has an encryption key pair in Valkey. Generates and stores a new pair if
-// missing. The reply confirms the room and version but does not return key
-// bytes — encryption/decryption is performed by broadcast-worker and clients,
-// which read keys from Valkey directly.
+// has an encryption key pair stored in its room document. Generates and stores
+// a new pair if missing. The reply confirms the room and version but does not
+// return key bytes — encryption/decryption is performed by broadcast-worker and
+// clients, which read keys from the room store directly.
 func (h *Handler) ensureRoomKey(c *natsrouter.Context, req model.RoomKeyEnsureRequest) (*model.RoomKeyEnsureResponse, error) {
 	var ctx context.Context = c
 	if h.keyStore == nil {
-		// Local Valkey disabled — surfaces to peer sites as a transient outage
+		// Local key store disabled — surfaces to peer sites as a transient outage
 		// (symmetric with the timeout-class failures in :808/:819/:828).
 		return nil, errcode.Unavailable("room key store not configured")
 	}

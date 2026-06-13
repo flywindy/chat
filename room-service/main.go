@@ -35,9 +35,7 @@ type config struct {
 	MaxRoomSize              int             `env:"MAX_ROOM_SIZE"             envDefault:"1000"`
 	MaxBatchSize             int             `env:"MAX_BATCH_SIZE"            envDefault:"1000"`
 	MemberListTimeout        time.Duration   `env:"MEMBER_LIST_TIMEOUT"       envDefault:"5s"`
-	ValkeyAddrs              []string        `env:"VALKEY_ADDRS,required"     envSeparator:","`
-	ValkeyPassword           string          `env:"VALKEY_PASSWORD"           envDefault:""`
-	ValkeyGracePeriod        time.Duration   `env:"VALKEY_KEY_GRACE_PERIOD,required"`
+	RoomKeyGracePeriod       time.Duration   `env:"ROOM_KEY_GRACE_PERIOD"     envDefault:"24h"`
 	CassandraHosts           string          `env:"CASSANDRA_HOSTS,required"`
 	CassandraKeyspace        string          `env:"CASSANDRA_KEYSPACE"        envDefault:"chat"`
 	CassandraUsername        string          `env:"CASSANDRA_USERNAME"        envDefault:""`
@@ -101,15 +99,12 @@ func main() {
 	}
 	db := mongoClient.Database(cfg.MongoDB)
 
-	keyStore, err := roomkeystore.NewValkeyClusterStore(roomkeystore.ClusterConfig{
-		Addrs:       cfg.ValkeyAddrs,
-		Password:    cfg.ValkeyPassword,
-		GracePeriod: cfg.ValkeyGracePeriod,
-	})
-	if err != nil {
-		slog.Error("valkey connect failed", "error", err)
+	if cfg.RoomKeyGracePeriod <= 0 {
+		slog.Error("ROOM_KEY_GRACE_PERIOD must be a positive duration",
+			"room_key_grace_period", cfg.RoomKeyGracePeriod)
 		os.Exit(1)
 	}
+	keyStore := roomkeystore.NewMongoStore(db.Collection("rooms"), cfg.RoomKeyGracePeriod)
 
 	if err := bootstrapStreams(ctx, js, cfg.SiteID, cfg.Bootstrap.Enabled); err != nil {
 		slog.Error("bootstrap streams failed", "error", err)

@@ -4,6 +4,13 @@
 **Status:** Approved
 **Scope:** `pkg/roomkeystore` (new package)
 
+> **Superseded (2026-06-09):** Room keys no longer live in Valkey. They moved
+> into the room's document in the MongoDB `rooms` collection under an `encKey`
+> sub-document, and the Valkey-backed implementation was removed. The
+> `RoomKeyStore` interface is preserved. See
+> `2026-06-09-room-keys-mongo-migration-design.md`. The original Valkey design
+> below is retained as a historical record.
+
 ## Overview
 
 Introduce `pkg/roomkeystore` — a shared library for storing and retrieving room encryption key pairs (P-256 public + private keys) in Valkey as primary storage. The library is consumed by any service that needs to read or write room keys (e.g. `room-service` for key generation, `message-worker` for encryption).

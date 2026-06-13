@@ -1,28 +1,32 @@
-// Package roomkeystore stores room encryption secrets in Valkey.
+// Package roomkeystore stores room encryption secrets as an "encKey"
+// sub-document embedded in the room's document in the MongoDB rooms collection.
 //
 // # Versioning
 //
-// Set assigns version 0 to a fresh key. Rotate increments version and demotes the
-// current key into a per-room "previous" slot (room:<id>:key:prev) with a grace TTL.
-// GetByVersion serves either the current or previous slot, enabling decrypt of
+// Set assigns version 0 to a fresh key. Rotate increments the version and demotes
+// the current key into the encKey.prev* slot, stamping it with a grace-period
+// expiry (encKey.prevExpiresAt). GetByVersion serves either the current key or
+// the previous key while its grace window is still open, enabling decrypt of
 // messages encrypted under a recently-rotated key.
+//
+// # Lifecycle
+//
+// A room key is a field of its room, so it cannot exist without the room. Set and
+// SetWithVersion return ErrRoomNotFound when no room document exists; the room
+// must be created first (room-worker provisions the key immediately after
+// inserting the room document). Delete unsets the encKey sub-document.
 //
 // # Concurrency
 //
-// Rotate is atomic via a single Lua script. Concurrent Rotate calls for the same
-// room serialize at the Valkey server. Set and Get are not coordinated; readers
-// see Set's write atomically once HSET completes.
-//
-// # Topology requirement
-//
-// Single Valkey master per site. The Lua rotate script does not work across
-// Redis Cluster slots (room:<id>:key and room:<id>:key:prev are not hash-tagged).
-// Sentinel + single-master is fine.
+// Rotate runs as a single aggregation-pipeline update against one document, so
+// the current-to-previous transition and version bump are atomic; no concurrent
+// reader observes a partially-rotated key. Set and Get are not otherwise
+// coordinated; readers see Set's write atomically once the update completes.
 //
 // # Federation
 //
 // Site-local only. A room exists on its origin site, so the broadcast pipeline
 // that needs the key runs on that same site and reads from the origin's local
-// keystore. There is no cross-site key replication; inbox-worker on remote
-// sites replicates subscription/room metadata but never room keys.
+// rooms collection. There is no cross-site key replication; inbox-worker on
+// remote sites replicates subscription/room metadata but never room keys.
 package roomkeystore

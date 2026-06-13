@@ -4,6 +4,13 @@
 **Status:** Approved
 **Scope:** `pkg/roomkeystore` (modify existing package)
 
+> **Superseded storage (2026-06-09):** The rotation *semantics* below (versioned
+> current key + previous key with a grace window) still hold, but the backing
+> store moved from Valkey to the MongoDB `rooms` collection. Rotate is now a
+> single atomic aggregation-pipeline update instead of a Lua script, and the
+> previous-key grace window is an explicit `prevExpiresAt` timestamp rather than
+> a Valkey TTL. See `2026-06-09-room-keys-mongo-migration-design.md`.
+
 ## Overview
 
 Extend `pkg/roomkeystore` with two related changes:

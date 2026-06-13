@@ -43,18 +43,16 @@ type bottleneckConfig struct {
 }
 
 type config struct {
-	NatsURL        string   `env:"NATS_URL,required"`
-	NatsCredsFile  string   `env:"NATS_CREDS_FILE" envDefault:""`
-	SiteID         string   `env:"SITE_ID"         envDefault:"site-local"`
-	MongoURI       string   `env:"MONGO_URI,required"`
-	MongoDB        string   `env:"MONGO_DB"        envDefault:"chat"`
-	MongoUsername  string   `env:"MONGO_USERNAME"  envDefault:""`
-	MongoPassword  string   `env:"MONGO_PASSWORD"  envDefault:""`
-	MetricsAddr    string   `env:"METRICS_ADDR"    envDefault:":9099"`
-	MaxInFlight    int      `env:"MAX_IN_FLIGHT"   envDefault:"200"`
-	PProfAddr      string   `env:"PPROF_ADDR"      envDefault:""`
-	ValkeyAddrs    []string `env:"VALKEY_ADDRS,required" envSeparator:","`
-	ValkeyPassword string   `env:"VALKEY_PASSWORD"       envDefault:""`
+	NatsURL       string `env:"NATS_URL,required"`
+	NatsCredsFile string `env:"NATS_CREDS_FILE" envDefault:""`
+	SiteID        string `env:"SITE_ID"         envDefault:"site-local"`
+	MongoURI      string `env:"MONGO_URI,required"`
+	MongoDB       string `env:"MONGO_DB"        envDefault:"chat"`
+	MongoUsername string `env:"MONGO_USERNAME"  envDefault:""`
+	MongoPassword string `env:"MONGO_PASSWORD"  envDefault:""`
+	MetricsAddr   string `env:"METRICS_ADDR"    envDefault:":9099"`
+	MaxInFlight   int    `env:"MAX_IN_FLIGHT"   envDefault:"200"`
+	PProfAddr     string `env:"PPROF_ADDR"      envDefault:""`
 	// Cassandra is optional at startup so the existing messages/members
 	// workloads keep working with no extra env. The history-* subcommands
 	// fail-fast if CASSANDRA_HOSTS is empty.
@@ -818,33 +816,22 @@ func roomIDsOf(rooms []model.Room) []string {
 	return out
 }
 
-// connectStores opens Mongo and Valkey. cleanup disconnects both; the caller
-// must invoke it (typically via defer). On error, neither resource is leaked.
+// connectStores opens Mongo and the Mongo-backed room key store (keys live in
+// the rooms collection). cleanup disconnects Mongo; the caller must invoke it
+// (typically via defer). On error, no resource is leaked.
 func connectStores(ctx context.Context, cfg *config) (*mongo.Database, roomkeystore.RoomKeyStore, func(), error) {
 	client, err := mongoutil.Connect(ctx, cfg.MongoURI, cfg.MongoUsername, cfg.MongoPassword)
 	if err != nil {
 		slog.Error("mongo connect", "error", err)
 		return nil, nil, nil, err
 	}
-	keyStore, err := connectKeyStore(cfg)
-	if err != nil {
-		mongoutil.Disconnect(ctx, client)
-		slog.Error("valkey connect", "error", err)
-		return nil, nil, nil, err
-	}
+	db := client.Database(cfg.MongoDB)
+	keyStore := roomkeystore.NewMongoStore(db.Collection("rooms"), time.Hour)
 	cleanup := func() {
 		_ = keyStore.Close()
 		mongoutil.Disconnect(ctx, client)
 	}
-	return client.Database(cfg.MongoDB), keyStore, cleanup, nil
-}
-
-func connectKeyStore(cfg *config) (roomkeystore.RoomKeyStore, error) {
-	return roomkeystore.NewValkeyClusterStore(roomkeystore.ClusterConfig{
-		Addrs:       cfg.ValkeyAddrs,
-		Password:    cfg.ValkeyPassword,
-		GracePeriod: time.Hour,
-	})
+	return db, keyStore, cleanup, nil
 }
 
 func runRun(ctx context.Context, cfg *config, args []string) int {

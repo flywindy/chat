@@ -159,7 +159,7 @@ All commands are wrapped in the root Makefile. Always use `make` targets — nev
   - `testutil.NATS(t) string` — shared NATS URL with JetStream enabled
 - Valkey (cluster-mode — services use this in production):
   - `testutil.SharedValkeyCluster(t) *redis.ClusterClient` — process-shared cluster (started via `sync.Once`, reaped via `TerminateValkey`/`TerminateAll`). Per-test caller MUST register `t.Cleanup(func() { testutil.FlushValkey(t) })` so sibling tests start with a clean keyspace. Default choice.
-  - `testutil.StartValkeyCluster(t) *redis.ClusterClient` — per-test cluster (each test gets its own container via `t.Cleanup`). Use ONLY when the test asserts on cluster-routing state (e.g., `pkg/roomkeystore`'s `CLUSTER KEYSLOT` checks) or owns a store wrapper that calls `Close()` on the underlying client.
+  - `testutil.StartValkeyCluster(t) *redis.ClusterClient` — per-test cluster (each test gets its own container via `t.Cleanup`). Use ONLY when the test asserts on cluster-routing state (e.g. `CLUSTER KEYSLOT` checks) or owns a store wrapper that calls `Close()` on the underlying client.
 - **Every integration test package must have a `TestMain` that drives cleanup**:
   ```go
   //go:build integration

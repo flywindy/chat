@@ -51,8 +51,9 @@ services:
       - MONGO_DB=chat
       - MAX_ROOM_SIZE=1000
       - MAX_BATCH_SIZE=500
-      - VALKEY_ADDRS=valkey:6379
-      - VALKEY_KEY_GRACE_PERIOD=24h
+      # Room keys live in the MongoDB rooms collection; this grace window keeps a
+      # rotated-out previous key valid for decrypt.
+      - ROOM_KEY_GRACE_PERIOD=24h
       - CASSANDRA_HOSTS=cassandra
       - CASSANDRA_KEYSPACE=chat
       - BOOTSTRAP_STREAMS=true
