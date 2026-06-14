@@ -1,3 +1,5 @@
+// Package main fans out MESSAGES_CANONICAL room events with NAK-on-failure;
+// handleReacted also publishes the reaction author-notification with log-and-swallow.
 package main
 
 import (
@@ -542,18 +544,20 @@ func (h *Handler) handleReacted(ctx context.Context, evt *model.MessageEvent) er
 	msg := evt.Message
 	// Log-and-drop on malformed payloads: NAK would loop forever on a publisher contract violation.
 	if evt.ReactionDelta == nil {
-		slog.Error("reacted event missing ReactionDelta; dropping",
+		slog.ErrorContext(ctx, "reacted event missing ReactionDelta; dropping",
 			"messageID", msg.ID,
 			"roomID", msg.RoomID,
 			"siteID", evt.SiteID,
+			"request_id", natsutil.RequestIDFromContext(ctx),
 		)
 		return nil
 	}
 	if msg.UpdatedAt == nil {
-		slog.Error("reacted event missing UpdatedAt; dropping",
+		slog.ErrorContext(ctx, "reacted event missing UpdatedAt; dropping",
 			"messageID", msg.ID,
 			"roomID", msg.RoomID,
 			"siteID", evt.SiteID,
+			"request_id", natsutil.RequestIDFromContext(ctx),
 		)
 		return nil
 	}
@@ -576,7 +580,45 @@ func (h *Handler) handleReacted(ctx context.Context, evt *model.MessageEvent) er
 		ReactedAt:      *msg.UpdatedAt,
 		UpdatedAt:      *msg.UpdatedAt,
 	}
-	return h.publishMutation(ctx, room, model.RoomEventMessageReacted, msg.ID, &react)
+	if err := h.publishMutation(ctx, room, model.RoomEventMessageReacted, msg.ID, &react); err != nil {
+		return err
+	}
+
+	// Author notification: added + author != actor + non-empty author; publish failure swallowed.
+	if evt.ReactionDelta.Action != model.ReactionActionAdded {
+		return nil
+	}
+	authorAccount := msg.UserAccount
+	if authorAccount == "" || authorAccount == evt.ReactionDelta.Actor.Account {
+		return nil
+	}
+	notif := model.NotificationEvent{
+		Type:          "reaction",
+		RoomID:        msg.RoomID,
+		Message:       msg,
+		ReactionDelta: evt.ReactionDelta,
+		Timestamp:     time.Now().UTC().UnixMilli(),
+	}
+	data, marshalErr := json.Marshal(notif)
+	if marshalErr != nil {
+		slog.ErrorContext(ctx, "marshal reaction author notification failed",
+			"error", marshalErr,
+			"messageID", msg.ID,
+			"roomID", msg.RoomID,
+			"siteID", evt.SiteID,
+			"request_id", natsutil.RequestIDFromContext(ctx),
+		)
+	} else if pubErr := h.pub.Publish(ctx, subject.Notification(authorAccount), data); pubErr != nil {
+		slog.ErrorContext(ctx, "publish reaction author notification failed",
+			"error", pubErr,
+			"author", authorAccount,
+			"messageID", msg.ID,
+			"roomID", msg.RoomID,
+			"siteID", evt.SiteID,
+			"request_id", natsutil.RequestIDFromContext(ctx),
+		)
+	}
+	return nil
 }
 
 // publishMutation marshals a flattened edit/delete event and routes it by room

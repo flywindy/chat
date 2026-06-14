@@ -43,7 +43,7 @@ type MessageWriter interface {
 	// AddReaction writes one (emoji, user_account) map-cell to every mirror; idempotent.
 	AddReaction(ctx context.Context, msg *models.Message, key models.ReactionKey, reactor models.ReactorInfo) error
 	// RemoveReaction deletes one (emoji, user_account) map-cell from every mirror; idempotent on a miss.
-	RemoveReaction(ctx context.Context, msg *models.Message, key models.ReactionKey, updatedAt time.Time) error
+	RemoveReaction(ctx context.Context, msg *models.Message, key models.ReactionKey) error
 }
 
 // MessageRepository composes read and write access; satisfied by *cassrepo.Repository.
@@ -79,7 +79,7 @@ type ThreadRoomRepository interface {
 
 // UserStore resolves the calling user's full profile for ReactorInfo and the Participant on the canonical event.
 type UserStore interface {
-	FindUsersByAccounts(ctx context.Context, accounts []string) ([]pkgmodel.User, error)
+	FindUserByAccount(ctx context.Context, account string) (*pkgmodel.User, error)
 }
 
 // CustomEmojiStore reports whether a custom emoji shortcode is registered for the site.

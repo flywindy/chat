@@ -135,3 +135,12 @@ gate for each system type and the regular happy path.
 
 `notification-worker` is a JetStream consumer, not a client-facing request/reply
 or HTTP handler, so **no `docs/client-api.md` change** is required.
+
+## Follow-up — 2026-06-10
+
+As of `claude/reactions-followups`, the durable consumer's `FilterSubjects` is
+further narrowed to `{MsgCanonicalCreated}` only. `MsgCanonicalReacted` moved
+to `broadcast-worker.handleReacted` so all reaction wire effects (room fan-out
++ author notification) live in one handler with the same wire format. The
+in-place `CreateOrUpdateConsumer` pattern from this spec covers the rollout —
+NATS 2.10+ applies the narrowed filter without resetting the cursor.

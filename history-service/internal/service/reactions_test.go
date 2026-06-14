@@ -17,6 +17,7 @@ import (
 	"github.com/hmchangw/chat/pkg/model"
 	"github.com/hmchangw/chat/pkg/natsrouter"
 	"github.com/hmchangw/chat/pkg/subject"
+	"github.com/hmchangw/chat/pkg/userstore"
 )
 
 type reactFixture struct {
@@ -53,6 +54,11 @@ func aliceUser() model.User {
 		EngName:     "Alice",
 		ChineseName: "Alice CN",
 	}
+}
+
+func aliceUserPtr() *model.User {
+	u := aliceUser()
+	return &u
 }
 
 func TestHistoryService_ReactMessage_NotSubscribed(t *testing.T) {
@@ -160,7 +166,7 @@ func TestHistoryService_ReactMessage_AddOnDeleted_Blocked(t *testing.T) {
 		Reactions: nil,
 	}
 	f.msgs.EXPECT().GetMessageByID(gomock.Any(), "m1").Return(deleted, nil)
-	f.users.EXPECT().FindUsersByAccounts(gomock.Any(), []string{"u1"}).Return([]model.User{aliceUser()}, nil)
+	f.users.EXPECT().FindUserByAccount(gomock.Any(), "u1").Return(aliceUserPtr(), nil)
 
 	resp, err := f.svc.ReactMessage(testContext(), "site-test",
 		models.ReactMessageRequest{MessageID: "m1", Shortcode: "thumbsup"})
@@ -185,9 +191,9 @@ func TestHistoryService_ReactMessage_RemoveOnDeleted_Allowed(t *testing.T) {
 		{Emoji: "thumbsup", UserAccount: "u1"}: {UserID: "user-alice", Account: "u1", EngName: "Alice", ReactedAt: createdAt},
 	}
 	f.msgs.EXPECT().GetMessageByID(gomock.Any(), "m1").Return(deleted, nil)
-	f.users.EXPECT().FindUsersByAccounts(gomock.Any(), []string{"u1"}).Return([]model.User{aliceUser()}, nil)
+	f.users.EXPECT().FindUserByAccount(gomock.Any(), "u1").Return(aliceUserPtr(), nil)
 	f.msgs.EXPECT().
-		RemoveReaction(gomock.Any(), deleted, models.ReactionKey{Emoji: "thumbsup", UserAccount: "u1"}, gomock.Any()).
+		RemoveReaction(gomock.Any(), deleted, models.ReactionKey{Emoji: "thumbsup", UserAccount: "u1"}).
 		Return(nil)
 	f.pub.EXPECT().
 		Publish(gomock.Any(), subject.MsgCanonicalReacted("site-test"), gomock.Any(), gomock.Any()).
@@ -213,7 +219,7 @@ func TestHistoryService_ReactMessage_Add_Success_PublishesEvent(t *testing.T) {
 		Sender:    models.Participant{ID: "user-bob", Account: "bob"},
 	}
 	f.msgs.EXPECT().GetMessageByID(gomock.Any(), "m1").Return(target, nil)
-	f.users.EXPECT().FindUsersByAccounts(gomock.Any(), []string{"u1"}).Return([]model.User{aliceUser()}, nil)
+	f.users.EXPECT().FindUserByAccount(gomock.Any(), "u1").Return(aliceUserPtr(), nil)
 
 	expectedKey := models.ReactionKey{Emoji: "thumbsup", UserAccount: "u1"}
 	f.msgs.EXPECT().
@@ -277,9 +283,9 @@ func TestHistoryService_ReactMessage_Remove_Success(t *testing.T) {
 		},
 	}
 	f.msgs.EXPECT().GetMessageByID(gomock.Any(), "m1").Return(target, nil)
-	f.users.EXPECT().FindUsersByAccounts(gomock.Any(), []string{"u1"}).Return([]model.User{aliceUser()}, nil)
+	f.users.EXPECT().FindUserByAccount(gomock.Any(), "u1").Return(aliceUserPtr(), nil)
 	f.msgs.EXPECT().
-		RemoveReaction(gomock.Any(), target, models.ReactionKey{Emoji: "thumbsup", UserAccount: "u1"}, gomock.Any()).
+		RemoveReaction(gomock.Any(), target, models.ReactionKey{Emoji: "thumbsup", UserAccount: "u1"}).
 		Return(nil)
 	f.pub.EXPECT().Publish(gomock.Any(), subject.MsgCanonicalReacted("site-test"), gomock.Any(), gomock.Any()).Return(nil)
 
@@ -299,7 +305,7 @@ func TestHistoryService_ReactMessage_UserLookupError(t *testing.T) {
 		Sender: models.Participant{ID: "user-bob", Account: "bob"},
 	}
 	f.msgs.EXPECT().GetMessageByID(gomock.Any(), "m1").Return(target, nil)
-	f.users.EXPECT().FindUsersByAccounts(gomock.Any(), []string{"u1"}).Return(nil, errors.New("mongo down"))
+	f.users.EXPECT().FindUserByAccount(gomock.Any(), "u1").Return(nil, errors.New("mongo down"))
 
 	resp, err := f.svc.ReactMessage(testContext(), "site-test",
 		models.ReactMessageRequest{MessageID: "m1", Shortcode: "thumbsup"})
@@ -317,7 +323,7 @@ func TestHistoryService_ReactMessage_UserNotFound(t *testing.T) {
 		Sender: models.Participant{ID: "user-bob", Account: "bob"},
 	}
 	f.msgs.EXPECT().GetMessageByID(gomock.Any(), "m1").Return(target, nil)
-	f.users.EXPECT().FindUsersByAccounts(gomock.Any(), []string{"u1"}).Return(nil, nil)
+	f.users.EXPECT().FindUserByAccount(gomock.Any(), "u1").Return(nil, userstore.ErrUserNotFound)
 
 	resp, err := f.svc.ReactMessage(testContext(), "site-test",
 		models.ReactMessageRequest{MessageID: "m1", Shortcode: "thumbsup"})
@@ -335,7 +341,7 @@ func TestHistoryService_ReactMessage_AddStoreError(t *testing.T) {
 		Sender: models.Participant{ID: "user-bob", Account: "bob"},
 	}
 	f.msgs.EXPECT().GetMessageByID(gomock.Any(), "m1").Return(target, nil)
-	f.users.EXPECT().FindUsersByAccounts(gomock.Any(), []string{"u1"}).Return([]model.User{aliceUser()}, nil)
+	f.users.EXPECT().FindUserByAccount(gomock.Any(), "u1").Return(aliceUserPtr(), nil)
 	f.msgs.EXPECT().
 		AddReaction(gomock.Any(), target, gomock.Any(), gomock.Any()).
 		Return(errors.New("cassandra down"))
@@ -359,9 +365,9 @@ func TestHistoryService_ReactMessage_RemoveStoreError(t *testing.T) {
 		},
 	}
 	f.msgs.EXPECT().GetMessageByID(gomock.Any(), "m1").Return(target, nil)
-	f.users.EXPECT().FindUsersByAccounts(gomock.Any(), []string{"u1"}).Return([]model.User{aliceUser()}, nil)
+	f.users.EXPECT().FindUserByAccount(gomock.Any(), "u1").Return(aliceUserPtr(), nil)
 	f.msgs.EXPECT().
-		RemoveReaction(gomock.Any(), target, gomock.Any(), gomock.Any()).
+		RemoveReaction(gomock.Any(), target, gomock.Any()).
 		Return(errors.New("cassandra down"))
 
 	resp, err := f.svc.ReactMessage(testContext(), "site-test",
@@ -380,7 +386,7 @@ func TestHistoryService_ReactMessage_CustomEmojiFound_Success(t *testing.T) {
 		Sender: models.Participant{ID: "user-bob", Account: "bob"},
 	}
 	f.msgs.EXPECT().GetMessageByID(gomock.Any(), "m1").Return(target, nil)
-	f.users.EXPECT().FindUsersByAccounts(gomock.Any(), []string{"u1"}).Return([]model.User{aliceUser()}, nil)
+	f.users.EXPECT().FindUserByAccount(gomock.Any(), "u1").Return(aliceUserPtr(), nil)
 	f.msgs.EXPECT().
 		AddReaction(gomock.Any(), target, models.ReactionKey{Emoji: "acme_party", UserAccount: "u1"}, gomock.Any()).
 		Return(nil)

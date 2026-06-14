@@ -1192,11 +1192,11 @@ func TestHandleReacted_ChannelRoomScopedPublish(t *testing.T) {
 	h := NewHandler(store, us, pub, keyStore, true)
 	require.NoError(t, h.HandleMessage(context.Background(), data))
 
-	require.Len(t, pub.records, 1, "channel: single room-scoped publish")
-	c := pub.records[0]
-	assert.Equal(t, subject.RoomEvent(roomID), c.subject)
+	require.Len(t, pub.records, 2, "channel: room-scoped publish + author notification")
+	roomRec := findPublishRecord(pub.records, subject.RoomEvent(roomID))
+	require.NotNil(t, roomRec, "room-scoped publish expected")
 	var roomEvt model.ReactRoomEvent
-	require.NoError(t, json.Unmarshal(c.data, &roomEvt))
+	require.NoError(t, json.Unmarshal(roomRec.data, &roomEvt))
 	assert.Equal(t, model.RoomEventMessageReacted, roomEvt.Type)
 	assert.Equal(t, roomID, roomEvt.RoomID)
 	assert.Equal(t, "msg-1", roomEvt.MessageID)
@@ -1242,10 +1242,13 @@ func TestHandleReacted_DMFanOut(t *testing.T) {
 	h := NewHandler(store, us, pub, keyStore, false)
 	require.NoError(t, h.HandleMessage(context.Background(), data))
 
-	require.Len(t, pub.records, 2, "DM: one event per non-bot account")
-	subjects := []string{pub.records[0].subject, pub.records[1].subject}
+	require.Len(t, pub.records, 3, "DM: one event per non-bot account + author notification")
+	subjects := make([]string, len(pub.records))
+	for i, r := range pub.records {
+		subjects[i] = r.subject
+	}
 	assert.ElementsMatch(t,
-		[]string{subject.UserRoomEvent("alice"), subject.UserRoomEvent("bob")},
+		[]string{subject.UserRoomEvent("alice"), subject.UserRoomEvent("bob"), subject.Notification("bob")},
 		subjects,
 	)
 }
@@ -1304,6 +1307,137 @@ func TestHandleReacted_MissingUpdatedAt_LogsAndDrops(t *testing.T) {
 	require.NoError(t, err, "malformed event must be acked, not NAK-ed")
 	assert.Empty(t, pub.records)
 }
+
+// findPublishRecord returns the first record whose subject matches, or nil.
+func findPublishRecord(records []publishRecord, subj string) *publishRecord {
+	for i := range records {
+		if records[i].subject == subj {
+			return &records[i]
+		}
+	}
+	return nil
+}
+
+func TestHandleReacted_AuthorNotificationPolicy(t *testing.T) {
+	cases := []struct {
+		name          string
+		action        model.ReactionAction
+		authorAccount string
+		actorAccount  string
+		wantNotify    bool
+	}{
+		{name: "added notifies author when actor differs", action: model.ReactionActionAdded, authorAccount: "bob", actorAccount: "alice", wantNotify: true},
+		{name: "removed never notifies", action: model.ReactionActionRemoved, authorAccount: "bob", actorAccount: "alice", wantNotify: false},
+		{name: "self-react does not notify actor", action: model.ReactionActionAdded, authorAccount: "alice", actorAccount: "alice", wantNotify: false},
+		{name: "empty author (system message) does not notify", action: model.ReactionActionAdded, authorAccount: "", actorAccount: "alice", wantNotify: false},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			store := NewMockStore(ctrl)
+			us := NewMockUserStore(ctrl)
+			pub := &mockPublisher{}
+			keyStore := NewMockRoomKeyProvider(ctrl)
+
+			roomID := "r1"
+			room := &model.Room{ID: roomID, Type: model.RoomTypeChannel, SiteID: "site-a"}
+			store.EXPECT().GetRoom(gomock.Any(), roomID).Return(room, nil)
+
+			reactedAt := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
+			evt := model.MessageEvent{
+				Event:     model.EventReacted,
+				SiteID:    "site-a",
+				Timestamp: reactedAt.UnixMilli(),
+				Message: model.Message{
+					ID: "m1", RoomID: roomID, UserAccount: tc.authorAccount,
+					CreatedAt: reactedAt.Add(-time.Hour), UpdatedAt: &reactedAt,
+				},
+				ReactionDelta: &model.ReactionDelta{
+					Shortcode: "thumbsup",
+					Action:    tc.action,
+					Actor:     model.Participant{UserID: "u-alice", Account: tc.actorAccount, EngName: "Alice"},
+				},
+			}
+			data, err := json.Marshal(&evt)
+			require.NoError(t, err)
+
+			h := NewHandler(store, us, pub, keyStore, true)
+			require.NoError(t, h.HandleMessage(context.Background(), data))
+
+			notif := findPublishRecord(pub.records, subject.Notification(tc.authorAccount))
+			if !tc.wantNotify {
+				assert.Nil(t, notif, "policy gate must suppress the author notification")
+				assert.Len(t, pub.records, 1, "only the room publish should have happened")
+				return
+			}
+			require.NotNil(t, notif, "author notification must be published on chat.user.%s.notification", tc.authorAccount)
+			require.Len(t, pub.records, 2, "room publish + author notification")
+			var got model.NotificationEvent
+			require.NoError(t, json.Unmarshal(notif.data, &got))
+			assert.Equal(t, "reaction", got.Type)
+			require.NotNil(t, got.ReactionDelta)
+			assert.Equal(t, "thumbsup", got.ReactionDelta.Shortcode)
+			assert.Equal(t, tc.actorAccount, got.ReactionDelta.Actor.Account)
+		})
+	}
+}
+
+// partialFailPublisher errors on one subject and records the rest.
+type partialFailPublisher struct {
+	mu       sync.Mutex
+	records  []publishRecord
+	failSubj string
+	failErr  error
+}
+
+func (p *partialFailPublisher) Publish(_ context.Context, subj string, data []byte) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if subj == p.failSubj {
+		return p.failErr
+	}
+	p.records = append(p.records, publishRecord{subject: subj, data: data})
+	return nil
+}
+
+func TestHandleReacted_AuthorPublishFailure_RoomFanOutStillSucceeds(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	store := NewMockStore(ctrl)
+	us := NewMockUserStore(ctrl)
+	pub := &partialFailPublisher{
+		failSubj: subject.Notification("bob"),
+		failErr:  errors.New("nats down"),
+	}
+	keyStore := NewMockRoomKeyProvider(ctrl)
+
+	roomID := "r1"
+	room := &model.Room{ID: roomID, Type: model.RoomTypeChannel, SiteID: "site-a"}
+	store.EXPECT().GetRoom(gomock.Any(), roomID).Return(room, nil)
+
+	reactedAt := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
+	evt := model.MessageEvent{
+		Event: model.EventReacted, SiteID: "site-a", Timestamp: reactedAt.UnixMilli(),
+		Message: model.Message{
+			ID: "m1", RoomID: roomID, UserAccount: "bob",
+			CreatedAt: reactedAt.Add(-time.Hour), UpdatedAt: &reactedAt,
+		},
+		ReactionDelta: &model.ReactionDelta{
+			Shortcode: "thumbsup",
+			Action:    model.ReactionActionAdded,
+			Actor:     model.Participant{Account: "alice"},
+		},
+	}
+	data, err := json.Marshal(&evt)
+	require.NoError(t, err)
+
+	h := NewHandler(store, us, pub, keyStore, true)
+	require.NoError(t, h.HandleMessage(context.Background(), data),
+		"author-notify failure must not NAK the canonical event")
+	require.NotNil(t, findPublishRecord(pub.records, subject.RoomEvent(roomID)),
+		"room fan-out must still have published")
+}
+
 func TestHandlePinned_ChannelRoomScopedPublish(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	store := NewMockStore(ctrl)

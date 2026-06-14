@@ -117,9 +117,13 @@ These compaction choices should be applied to the inline `CREATE TABLE` clauses 
 
 ### 2.5 Mirror consistency
 
-A single reaction toggle writes 2–4 mirror tables (`messages_by_id` always; `messages_by_room` always; `thread_messages_by_thread` when the message is a thread reply; `pinned_messages_by_room` when the message is pinned). The writes are **not atomic across tables** — there is no batch, no LWT.
+A single reaction toggle writes exactly two tables: `messages_by_id` (always) plus the room-or-thread mirror (`messages_by_room` for top-level, `thread_messages_by_thread` for thread replies). `pinned_messages_by_room` is **not** a reactions mirror — the pinned panel does not render reactions.
 
-**Source-of-truth contract:** `messages_by_id` is authoritative. Mirror tables are eventually-consistent. Readers MUST NOT diff reactions across mirrors; the addReaction handler is expected to write to `messages_by_id` first, then mirror to the others. Partial failure of a mirror write returns an error to the caller and gets retried at the application level (the addReaction PR's concern).
+**Add** issues one `gocql.UnloggedBatch` containing two `UPDATE … SET reactions[?] = ?, updated_at = ?` statements (one per table). **Remove** issues one `gocql.UnloggedBatch` containing two `DELETE reactions[?] FROM …` statements — and does **not** touch `updated_at`. No downstream consumer reads `updated_at` for reaction freshness (broadcast events build timestamps from the canonical event, search-sync skips reactions, pagination keys off `created_at`, no NATS ETag semantics), so the touch is dead work.
+
+The batch is transport grouping (not atomic across partitions) — a coordinator failure can half-apply. The heal is automatic because re-published canonical events drive idempotent re-writes (Add overwrites the same map cell, Delete on a missing cell is a no-op). Precedent: `history-service/internal/cassrepo/pin.go`.
+
+**Source-of-truth contract:** `messages_by_id` is authoritative. Mirror tables are eventually-consistent. Readers MUST NOT diff reactions across mirrors.
 
 ## 3. Go Models — `pkg/model/cassandra/`
 

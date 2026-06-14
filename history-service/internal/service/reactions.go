@@ -13,6 +13,7 @@ import (
 	pkgmodel "github.com/hmchangw/chat/pkg/model"
 	"github.com/hmchangw/chat/pkg/natsrouter"
 	"github.com/hmchangw/chat/pkg/subject"
+	"github.com/hmchangw/chat/pkg/userstore"
 )
 
 // ReactMessage toggles one (emoji, user_account) reaction on a message.
@@ -50,15 +51,14 @@ func (s *HistoryService) ReactMessage(c *natsrouter.Context, siteID string, req 
 		return nil, err
 	}
 
-	users, err := s.users.FindUsersByAccounts(c, []string{account})
+	actor, err := s.users.FindUserByAccount(c, account)
 	if err != nil {
+		if errors.Is(err, userstore.ErrUserNotFound) {
+			slog.WarnContext(c, "react: actor not found", "account", account)
+			return nil, fmt.Errorf("react: actor not found for account %s: %w", account, err)
+		}
 		return nil, fmt.Errorf("react: resolve actor %s: %w", account, err)
 	}
-	if len(users) == 0 {
-		slog.WarnContext(c, "react: actor not found", "account", account)
-		return nil, fmt.Errorf("react: actor not found for account %s", account)
-	}
-	actor := users[0]
 
 	// In-row map decides add vs remove without an extra read.
 	key := models.ReactionKey{Emoji: shortcode, UserAccount: actor.Account}
@@ -73,7 +73,7 @@ func (s *HistoryService) ReactMessage(c *natsrouter.Context, siteID string, req 
 	var action pkgmodel.ReactionAction
 	if alreadyReacted {
 		action = pkgmodel.ReactionActionRemoved
-		if err := s.msgWriter.RemoveReaction(c, msg, key, reactedAt); err != nil {
+		if err := s.msgWriter.RemoveReaction(c, msg, key); err != nil {
 			return nil, fmt.Errorf("react: remove %s shortcode %s: %w", req.MessageID, shortcode, err)
 		}
 	} else {

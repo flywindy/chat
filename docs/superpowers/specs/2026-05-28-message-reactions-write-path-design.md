@@ -66,27 +66,28 @@ chat.user.{account}.notification                                ← push notific
                                   chat.msg.canonical.{site}.reacted
                                       (MESSAGES_CANONICAL)
                                                    │
-                              ┌────────────────────┼────────────────────┐
-                              ▼                    ▼                    ▼
-                       broadcast-worker     notification-w      search-sync-w (skip)
-                              │                    │
-                              ▼                    ▼
-              chat.room.{room}.event   chat.user.{author}.notification
-              chat.user.{m}.event.room  (type:"reaction", added only,
-                                         actor != author)
-                              │                    │
-                              ▼                    ▼
+                              ┌────────────────────┴────────────────────┐
+                              ▼                                         ▼
+                       broadcast-worker                       search-sync-w (skip)
+                              │
+            ┌─────────────────┴─────────────────┐
+            ▼                                   ▼
+   chat.room.{room}.event           chat.user.{author}.notification
+   chat.user.{m}.event.room         (type:"reaction", added only,
+                                     actor != author)
+                              │
+                              ▼
                        clients on any site (via NATS gateway interest)
 ```
 
-The shared Cassandra means a single write is sufficient. Cross-site delivery of the live broadcast and notification rides the NATS gateway / interest-propagation setup that already supports cross-site messaging.
+The shared Cassandra means a single write is sufficient. Cross-site delivery of the live broadcast and notification rides the NATS gateway / interest-propagation setup that already supports cross-site messaging. `notification-worker`'s consumer filter is narrowed to `{MsgCanonicalCreated}` only — it no longer participates in the reaction wire path.
 
 ### 3.3 Per-worker dispatch
 
 | Worker | Behaviour on `EventReacted` |
 |---|---|
-| `broadcast-worker` | Builds a flat `ReactRoomEvent` and fans out via the same channel-vs-DM router as edit/delete. Reactions never carry message content, so the encryption branch is bypassed. |
-| `notification-worker` | Publishes a `NotificationEvent{Type: "reaction"}` to the message author only, when `Action == "added"` and the actor is not the author. |
+| `broadcast-worker` | Builds a flat `ReactRoomEvent` and fans out via the same channel-vs-DM router as edit/delete. Reactions never carry message content, so the encryption branch is bypassed. Then, when `Action == "added"` and the actor is not the author and the author is non-empty, publishes a `NotificationEvent{Type:"reaction"}` to `chat.user.{author}.notification`. Author-notify publish failure is logged and swallowed (room fan-out is the primary effect and has already gone out; NAK would re-broadcast it). |
+| `notification-worker` | Does not consume `EventReacted` — filtered out at the broker. Mobile-push pipeline only. |
 | `search-sync-worker` | Skips reaction events in `BuildAction` — reactions don't change indexed content. |
 
 ## 4. Data Model
@@ -225,11 +226,11 @@ Both methods route to the right mirror table based on `msg.ThreadParentID`:
 
 `pinned_messages_by_room` is **not** a reactions mirror. The pinned panel does not render reactions, so writing them there is dead work; if product later wants reactions in the pinned panel, the read path can side-fetch from `messages_by_id` for the small number of pinned IDs the panel renders.
 
-**Execution ordering.** `messages_by_id` is written first and sequentially as the source of truth. After it succeeds, the room-or-thread mirror is written. No concurrency — there is only one mirror.
+**Execution.** Both `AddReaction` and `RemoveReaction` issue a single `gocql.UnloggedBatch` containing the `messages_by_id` statement plus the room-or-thread mirror statement. Precedent: `history-service/internal/cassrepo/pin.go` does the same across `messages_by_id` + `pinned_messages_by_room`.
 
-**Failure semantics.** If `messages_by_id` fails, the mirror is skipped and the handler returns an error. If the mirror write fails after `messages_by_id` committed, the two tables temporarily disagree; the next reaction on the same message converges them. Acceptable trade-off — no XA, no batch.
+**Failure semantics.** The batch is transport grouping, not atomic across partitions. A coordinator failure can half-apply. The heal is automatic because re-published canonical events drive idempotent re-writes (Add overwrites the same map cell, Delete on a missing cell is a no-op). Acceptable trade-off — no XA.
 
-**Remove path detail.** `RemoveReaction` issues two CQL statements per table — a per-cell `DELETE` followed by an `UPDATE … SET updated_at = ?` on the same row — because CQL does not allow combining a per-cell DELETE with a column UPDATE in one statement.
+**Remove path detail.** `RemoveReaction` does **not** touch `updated_at`. No downstream consumer reads it for reaction freshness (broadcast events build timestamps from the canonical event, search-sync skips reactions, pagination keys off `created_at`, no NATS ETag semantics). The `updatedAt` parameter remains on the interface for signature stability but is discarded inside the implementation.
 
 ## 7. Cross-site visibility
 

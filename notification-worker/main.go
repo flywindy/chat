@@ -198,7 +198,6 @@ func main() {
 		Presence:           presence,
 		Hook:               noopVetoer{},
 		Emitter:            emitter,
-		ReactionPub:        natsPublisher{nc: nc.NatsConn()},
 		RoomMeta:           roomMetaCache,
 		LargeRoomThreshold: cfg.LargeRoomThreshold,
 		RecipientBatchSize: cfg.PushRecipientBatchSize,
@@ -342,17 +341,12 @@ func main() {
 	)
 }
 
-// buildConsumerConfig returns the durable consumer config for notification-worker.
-// FilterSubjects scopes the consumer to the only canonical events it acts on —
-// created (push fan-out) and reacted (author notification). updated/deleted/
-// pinned/unpinned are excluded at the broker so they are never delivered,
-// unmarshaled, or acked by this worker.
+// buildConsumerConfig returns the durable; FilterSubjects = {created} only (reacted moved to broadcast-worker).
 func buildConsumerConfig(s stream.ConsumerSettings, siteID string) jetstream.ConsumerConfig {
 	cc := stream.DurableConsumerDefaults(s)
 	cc.Durable = "notification-worker"
 	cc.FilterSubjects = []string{
 		subject.MsgCanonicalCreated(siteID),
-		subject.MsgCanonicalReacted(siteID),
 	}
 	return cc
 }

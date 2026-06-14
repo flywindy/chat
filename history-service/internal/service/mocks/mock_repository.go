@@ -233,17 +233,17 @@ func (mr *MockMessageWriterMockRecorder) PinMessage(ctx, msg, pinnedAt, pinnedBy
 }
 
 // RemoveReaction mocks base method.
-func (m *MockMessageWriter) RemoveReaction(ctx context.Context, msg *models.Message, key models.ReactionKey, updatedAt time.Time) error {
+func (m *MockMessageWriter) RemoveReaction(ctx context.Context, msg *models.Message, key models.ReactionKey) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "RemoveReaction", ctx, msg, key, updatedAt)
+	ret := m.ctrl.Call(m, "RemoveReaction", ctx, msg, key)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // RemoveReaction indicates an expected call of RemoveReaction.
-func (mr *MockMessageWriterMockRecorder) RemoveReaction(ctx, msg, key, updatedAt any) *gomock.Call {
+func (mr *MockMessageWriterMockRecorder) RemoveReaction(ctx, msg, key any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RemoveReaction", reflect.TypeOf((*MockMessageWriter)(nil).RemoveReaction), ctx, msg, key, updatedAt)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RemoveReaction", reflect.TypeOf((*MockMessageWriter)(nil).RemoveReaction), ctx, msg, key)
 }
 
 // SoftDeleteMessage mocks base method.
@@ -479,17 +479,17 @@ func (mr *MockMessageRepositoryMockRecorder) PinMessage(ctx, msg, pinnedAt, pinn
 }
 
 // RemoveReaction mocks base method.
-func (m *MockMessageRepository) RemoveReaction(ctx context.Context, msg *models.Message, key models.ReactionKey, updatedAt time.Time) error {
+func (m *MockMessageRepository) RemoveReaction(ctx context.Context, msg *models.Message, key models.ReactionKey) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "RemoveReaction", ctx, msg, key, updatedAt)
+	ret := m.ctrl.Call(m, "RemoveReaction", ctx, msg, key)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // RemoveReaction indicates an expected call of RemoveReaction.
-func (mr *MockMessageRepositoryMockRecorder) RemoveReaction(ctx, msg, key, updatedAt any) *gomock.Call {
+func (mr *MockMessageRepositoryMockRecorder) RemoveReaction(ctx, msg, key any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RemoveReaction", reflect.TypeOf((*MockMessageRepository)(nil).RemoveReaction), ctx, msg, key, updatedAt)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RemoveReaction", reflect.TypeOf((*MockMessageRepository)(nil).RemoveReaction), ctx, msg, key)
 }
 
 // SoftDeleteMessage mocks base method.
@@ -793,19 +793,19 @@ func (m *MockUserStore) EXPECT() *MockUserStoreMockRecorder {
 	return m.recorder
 }
 
-// FindUsersByAccounts mocks base method.
-func (m *MockUserStore) FindUsersByAccounts(ctx context.Context, accounts []string) ([]model.User, error) {
+// FindUserByAccount mocks base method.
+func (m *MockUserStore) FindUserByAccount(ctx context.Context, account string) (*model.User, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "FindUsersByAccounts", ctx, accounts)
-	ret0, _ := ret[0].([]model.User)
+	ret := m.ctrl.Call(m, "FindUserByAccount", ctx, account)
+	ret0, _ := ret[0].(*model.User)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
-// FindUsersByAccounts indicates an expected call of FindUsersByAccounts.
-func (mr *MockUserStoreMockRecorder) FindUsersByAccounts(ctx, accounts any) *gomock.Call {
+// FindUserByAccount indicates an expected call of FindUserByAccount.
+func (mr *MockUserStoreMockRecorder) FindUserByAccount(ctx, account any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindUsersByAccounts", reflect.TypeOf((*MockUserStore)(nil).FindUsersByAccounts), ctx, accounts)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindUserByAccount", reflect.TypeOf((*MockUserStore)(nil).FindUserByAccount), ctx, account)
 }
 
 // MockCustomEmojiStore is a mock of CustomEmojiStore interface.

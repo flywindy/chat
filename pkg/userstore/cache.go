@@ -13,20 +13,10 @@ import (
 	"github.com/hmchangw/chat/pkg/model"
 )
 
-// Cache is an in-process LRU+TTL cache fronting a UserStore. Shared by
-// message-gatekeeper (sender display-name resolution), broadcast-worker (mention
-// enrichment + sender lookup), and message-worker (mention resolution + sender
-// lookup) so all three pay the same Mongo cost once per warm entry.
-//
-// Both lookups are cached. Every populate writes the user under both the by-ID
-// and by-account prefixes so a hit on either path satisfies the other; the
-// two LRUs share value pointers so a single User lives once in memory.
-// Singleflight collapses concurrent FindUserByID misses for the same id.
-//
-// Pod-local in-memory is fine here: entries are tiny (~500 B/user), per-pod
-// working set caps at a few MB for 10K warm users, writes are rare (display-name
-// changes are admin events). Valkey overhead (network hop, serialization,
-// error handling) buys nothing at this size.
+// Cache fronts a UserStore with two LRU+TTL stores (byID, byAccount) sharing
+// value pointers; populate writes to both so a hit on either satisfies the
+// other. Singleflight collapses concurrent misses. Pod-local: entries ~500B,
+// few-MB working set, writes rare — Valkey buys nothing at this size.
 type Cache struct {
 	byID      *lru.LRU[string, *model.User]
 	byAccount *lru.LRU[string, *model.User]
@@ -44,8 +34,7 @@ type Stats struct {
 	SizeByID, SizeByAccount  int
 }
 
-// NewCache returns a Cache fronting the given UserStore. size applies to each
-// of the by-ID and by-account LRUs independently; ttl applies to both.
+// NewCache returns a Cache. size applies to each LRU independently; ttl applies to both.
 func NewCache(store UserStore, size int, ttl time.Duration) (*Cache, error) {
 	if store == nil {
 		return nil, fmt.Errorf("userstore: store must not be nil")
@@ -63,9 +52,7 @@ func NewCache(store UserStore, size int, ttl time.Duration) (*Cache, error) {
 	}, nil
 }
 
-// FindUserByID serves from the by-ID LRU when hot, falls through to the store
-// on miss. ErrUserNotFound propagates unwrapped; missing entries are NOT
-// negatively cached.
+// FindUserByID serves from byID; misses fall through. ErrUserNotFound is not negatively cached.
 func (c *Cache) FindUserByID(ctx context.Context, id string) (*model.User, error) {
 	if v, ok := c.byID.Get(id); ok {
 		c.hits.Add(1)
@@ -93,10 +80,35 @@ func (c *Cache) FindUserByID(ctx context.Context, id string) (*model.User, error
 	return v.(*model.User), nil
 }
 
-// FindUsersByAccounts serves cache hits from the by-account LRU and forwards
-// the missing set to the store in one batched call. Input duplicates are
-// deduped; result order is not guaranteed to match input. A store error
-// returns partial hits + a wrapped error.
+// FindUserByAccount serves from byAccount; cross-populates byID; SF key "account:"+account avoids ID collision.
+func (c *Cache) FindUserByAccount(ctx context.Context, account string) (*model.User, error) {
+	if v, ok := c.byAccount.Get(account); ok {
+		c.hits.Add(1)
+		return v, nil
+	}
+	c.misses.Add(1)
+	v, err, _ := c.sf.Do("account:"+account, func() (interface{}, error) {
+		if cached, ok := c.byAccount.Get(account); ok {
+			return cached, nil
+		}
+		u, err := c.store.FindUserByAccount(ctx, account)
+		if err != nil {
+			return nil, err
+		}
+		c.populate(u)
+		return u, nil
+	})
+	if err != nil {
+		c.loadErrs.Add(1)
+		if errors.Is(err, ErrUserNotFound) {
+			return nil, err
+		}
+		return nil, fmt.Errorf("find cached user by account %q: %w", account, err)
+	}
+	return v.(*model.User), nil
+}
+
+// FindUsersByAccounts hits byAccount; misses forwarded in one call; input deduped; partial hits on store errors.
 func (c *Cache) FindUsersByAccounts(ctx context.Context, accounts []string) ([]model.User, error) {
 	if len(accounts) == 0 {
 		return nil, nil
@@ -130,8 +142,7 @@ func (c *Cache) FindUsersByAccounts(ctx context.Context, accounts []string) ([]m
 	return append(hits, fresh...), nil
 }
 
-// populate writes the user under both prefixes so a hit on either path
-// satisfies the other. The same pointer is stored in both LRUs.
+// populate writes the user (same pointer) under both byID and byAccount LRUs.
 func (c *Cache) populate(u *model.User) {
 	if u == nil {
 		return
@@ -153,8 +164,7 @@ func (c *Cache) Stats() Stats {
 	}
 }
 
-// Invalidate drops any cached entries for the given user. Empty userID or
-// account skips that prefix.
+// Invalidate drops cached entries; empty userID or account skips that LRU.
 func (c *Cache) Invalidate(userID, account string) {
 	if userID != "" {
 		c.byID.Remove(userID)

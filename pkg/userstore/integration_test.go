@@ -77,6 +77,52 @@ func TestMongoStore_FindUserByID(t *testing.T) {
 	}
 }
 
+func TestMongoStore_FindUserByAccount(t *testing.T) {
+	col := setupMongo(t)
+	store := NewMongoStore(col)
+	ctx := context.Background()
+
+	_, err := col.InsertOne(ctx, bson.M{
+		"_id":         "u-1",
+		"account":     "alice",
+		"siteId":      "site-a",
+		"engName":     "Alice Wang",
+		"chineseName": "愛麗絲",
+		"employeeId":  "EMP001",
+	})
+	require.NoError(t, err)
+
+	tests := []struct {
+		name         string
+		account      string
+		wantErr      bool
+		wantNotFound bool
+		wantID       string
+	}{
+		{name: "found", account: "alice", wantID: "u-1"},
+		{name: "not found", account: "nobody", wantErr: true, wantNotFound: true},
+		{name: "empty account returns not found", account: "", wantErr: true, wantNotFound: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := store.FindUserByAccount(ctx, tt.account)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Nil(t, got)
+				if tt.wantNotFound {
+					assert.True(t, errors.Is(err, ErrUserNotFound), "expected ErrUserNotFound, got: %v", err)
+				}
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, got)
+			assert.Equal(t, tt.wantID, got.ID)
+			assert.Equal(t, "Alice Wang", got.EngName)
+			assert.Equal(t, "愛麗絲", got.ChineseName)
+		})
+	}
+}
+
 func TestMongoStore_FindUsersByAccounts(t *testing.T) {
 	col := setupMongo(t)
 	store := NewMongoStore(col)

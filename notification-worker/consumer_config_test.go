@@ -44,15 +44,14 @@ func TestBuildConsumerConfig(t *testing.T) {
 		assert.Equal(t, 256, cc.MaxWaiting)
 	})
 
-	t.Run("filters to created and reacted subjects only", func(t *testing.T) {
+	t.Run("filters to created subject only", func(t *testing.T) {
 		cc := buildConsumerConfig(stream.ConsumerSettings{}, "site-a")
 
-		// The worker only acts on created (push) and reacted (author notify);
-		// updated/deleted/pinned/unpinned are excluded at the broker so they
-		// are never delivered, unmarshaled, or acked.
+		// The worker only acts on created (push fan-out); reacted moved to
+		// broadcast-worker. updated/deleted/pinned/unpinned are excluded at
+		// the broker so they are never delivered, unmarshaled, or acked.
 		assert.ElementsMatch(t, []string{
 			subject.MsgCanonicalCreated("site-a"),
-			subject.MsgCanonicalReacted("site-a"),
 		}, cc.FilterSubjects)
 	})
 }

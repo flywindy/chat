@@ -41,6 +41,21 @@ func (m *MockUserStore) EXPECT() *MockUserStoreMockRecorder {
 	return m.recorder
 }
 
+// FindUserByAccount mocks base method.
+func (m *MockUserStore) FindUserByAccount(ctx context.Context, account string) (*model.User, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FindUserByAccount", ctx, account)
+	ret0, _ := ret[0].(*model.User)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FindUserByAccount indicates an expected call of FindUserByAccount.
+func (mr *MockUserStoreMockRecorder) FindUserByAccount(ctx, account any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindUserByAccount", reflect.TypeOf((*MockUserStore)(nil).FindUserByAccount), ctx, account)
+}
+
 // FindUserByID mocks base method.
 func (m *MockUserStore) FindUserByID(ctx context.Context, id string) (*model.User, error) {
 	m.ctrl.T.Helper()

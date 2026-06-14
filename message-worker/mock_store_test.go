@@ -124,6 +124,20 @@ func (m *MockThreadStore) EXPECT() *MockThreadStoreMockRecorder {
 	return m.recorder
 }
 
+// AddReplyAccounts mocks base method.
+func (m *MockThreadStore) AddReplyAccounts(ctx context.Context, threadRoomID string, accounts []string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "AddReplyAccounts", ctx, threadRoomID, accounts)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// AddReplyAccounts indicates an expected call of AddReplyAccounts.
+func (mr *MockThreadStoreMockRecorder) AddReplyAccounts(ctx, threadRoomID, accounts any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AddReplyAccounts", reflect.TypeOf((*MockThreadStore)(nil).AddReplyAccounts), ctx, threadRoomID, accounts)
+}
+
 // CreateThreadRoom mocks base method.
 func (m *MockThreadStore) CreateThreadRoom(ctx context.Context, room *model.ThreadRoom) error {
 	m.ctrl.T.Helper()
@@ -193,20 +207,6 @@ func (m *MockThreadStore) UpdateThreadRoomLastMessage(ctx context.Context, threa
 func (mr *MockThreadStoreMockRecorder) UpdateThreadRoomLastMessage(ctx, threadRoomID, lastMsgID, replyAccounts, lastMsgAt any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateThreadRoomLastMessage", reflect.TypeOf((*MockThreadStore)(nil).UpdateThreadRoomLastMessage), ctx, threadRoomID, lastMsgID, replyAccounts, lastMsgAt)
-}
-
-// AddReplyAccounts mocks base method.
-func (m *MockThreadStore) AddReplyAccounts(ctx context.Context, threadRoomID string, accounts []string) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "AddReplyAccounts", ctx, threadRoomID, accounts)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// AddReplyAccounts indicates an expected call of AddReplyAccounts.
-func (mr *MockThreadStoreMockRecorder) AddReplyAccounts(ctx, threadRoomID, accounts any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AddReplyAccounts", reflect.TypeOf((*MockThreadStore)(nil).AddReplyAccounts), ctx, threadRoomID, accounts)
 }
 
 // UpsertThreadSubscription mocks base method.

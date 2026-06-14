@@ -240,12 +240,11 @@ func TestRepository_RemoveReaction_TopLevel(t *testing.T) {
 
 	msg := &models.Message{MessageID: msgID, RoomID: roomID, CreatedAt: createdAt, Sender: sender}
 
-	// Add at one time, remove at a strictly later time so we can prove
-	// updated_at is bumped by the remove (not stuck at the add's value).
+	// Add at one time, then remove. updated_at must reflect the add (Remove
+	// no longer touches it — see file comment on reactions.go).
 	addedAt := reactor.ReactedAt
-	removedAt := addedAt.Add(5 * time.Minute).Truncate(time.Millisecond)
 	require.NoError(t, repo.AddReaction(ctx, msg, key, reactor))
-	require.NoError(t, repo.RemoveReaction(ctx, msg, key, removedAt))
+	require.NoError(t, repo.RemoveReaction(ctx, msg, key))
 
 	var got models.Reactions
 	require.NoError(t, repo.session.Query(
@@ -260,23 +259,120 @@ func TestRepository_RemoveReaction_TopLevel(t *testing.T) {
 	).Scan(&got))
 	assert.NotContains(t, got, key, "removed cell must be gone from messages_by_room")
 
-	// Verify updated_at was bumped on Remove (regression guard for the
-	// '_ = updatedAt' bug where RemoveReaction silently discarded the
-	// timestamp and left updated_at frozen at the add time).
+	// Remove does NOT bump updated_at — row reflects Add (addedAt), not Remove.
 	var gotUpdatedAt time.Time
 	require.NoError(t, repo.session.Query(
 		`SELECT updated_at FROM messages_by_id WHERE message_id = ? AND created_at = ?`,
 		msgID, createdAt,
 	).Scan(&gotUpdatedAt))
-	assert.WithinDuration(t, removedAt, gotUpdatedAt, time.Second,
-		"messages_by_id.updated_at must reflect the remove time")
+	assert.WithinDuration(t, addedAt, gotUpdatedAt, time.Second,
+		"messages_by_id.updated_at must reflect the add (not the remove)")
 
 	require.NoError(t, repo.session.Query(
 		`SELECT updated_at FROM messages_by_room WHERE room_id = ? AND bucket = ? AND created_at = ? AND message_id = ?`,
 		roomID, bucketSizer.Of(createdAt), createdAt, msgID,
 	).Scan(&gotUpdatedAt))
-	assert.WithinDuration(t, removedAt, gotUpdatedAt, time.Second,
-		"messages_by_room.updated_at must reflect the remove time")
+	assert.WithinDuration(t, addedAt, gotUpdatedAt, time.Second,
+		"messages_by_room.updated_at must reflect the add (not the remove)")
+}
+
+// TestRepository_RemoveReaction_ThreadReply covers the thread mirror path.
+func TestRepository_RemoveReaction_ThreadReply(t *testing.T) {
+	repo, _, createdAt, key, reactor := reactionFixture(t)
+	ctx := context.Background()
+
+	sender := models.Participant{ID: "u-bob", Account: "bob"}
+	roomID := "room-thread-remove"
+	msgID := "m-thread-remove"
+	threadRoomID := "thread-room-rm"
+	threadParentID := "thread-parent-rm"
+
+	require.NoError(t, repo.session.Query(
+		`INSERT INTO messages_by_id (message_id, room_id, created_at, sender, msg, thread_parent_id, thread_room_id) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		msgID, roomID, createdAt, sender, "reply", threadParentID, threadRoomID,
+	).Exec())
+	require.NoError(t, repo.session.Query(
+		`INSERT INTO thread_messages_by_thread (thread_room_id, created_at, message_id, sender, msg, thread_parent_id) VALUES (?, ?, ?, ?, ?, ?)`,
+		threadRoomID, createdAt, msgID, sender, "reply", threadParentID,
+	).Exec())
+
+	msg := &models.Message{
+		MessageID:      msgID,
+		RoomID:         roomID,
+		CreatedAt:      createdAt,
+		Sender:         sender,
+		ThreadParentID: threadParentID,
+		ThreadRoomID:   threadRoomID,
+	}
+
+	addedAt := reactor.ReactedAt
+	require.NoError(t, repo.AddReaction(ctx, msg, key, reactor))
+	require.NoError(t, repo.RemoveReaction(ctx, msg, key))
+
+	var got models.Reactions
+	require.NoError(t, repo.session.Query(
+		`SELECT reactions FROM messages_by_id WHERE message_id = ? AND created_at = ?`,
+		msgID, createdAt,
+	).Scan(&got))
+	assert.NotContains(t, got, key, "removed cell must be gone from messages_by_id")
+
+	require.NoError(t, repo.session.Query(
+		`SELECT reactions FROM thread_messages_by_thread WHERE thread_room_id = ? AND created_at = ? AND message_id = ?`,
+		threadRoomID, createdAt, msgID,
+	).Scan(&got))
+	assert.NotContains(t, got, key, "removed cell must be gone from thread_messages_by_thread")
+
+	var gotUpdatedAt time.Time
+	require.NoError(t, repo.session.Query(
+		`SELECT updated_at FROM messages_by_id WHERE message_id = ? AND created_at = ?`,
+		msgID, createdAt,
+	).Scan(&gotUpdatedAt))
+	assert.WithinDuration(t, addedAt, gotUpdatedAt, time.Second,
+		"messages_by_id.updated_at must reflect the add (not the remove)")
+
+	require.NoError(t, repo.session.Query(
+		`SELECT updated_at FROM thread_messages_by_thread WHERE thread_room_id = ? AND created_at = ? AND message_id = ?`,
+		threadRoomID, createdAt, msgID,
+	).Scan(&gotUpdatedAt))
+	assert.WithinDuration(t, addedAt, gotUpdatedAt, time.Second,
+		"thread_messages_by_thread.updated_at must reflect the add (not the remove)")
+}
+
+// TestRepository_AddReaction_BumpsUpdatedAt guards that Add still bumps updated_at.
+func TestRepository_AddReaction_BumpsUpdatedAt(t *testing.T) {
+	repo, bucketSizer, createdAt, key, reactor := reactionFixture(t)
+	ctx := context.Background()
+
+	sender := models.Participant{ID: "u-bob", Account: "bob"}
+	roomID := "room-add-bumps"
+	msgID := "m-add-bumps"
+
+	require.NoError(t, repo.session.Query(
+		`INSERT INTO messages_by_id (message_id, room_id, created_at, sender, msg, thread_parent_id) VALUES (?, ?, ?, ?, ?, ?)`,
+		msgID, roomID, createdAt, sender, "hello", "",
+	).Exec())
+	require.NoError(t, repo.session.Query(
+		`INSERT INTO messages_by_room (room_id, bucket, created_at, message_id, sender, msg, thread_parent_id) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		roomID, bucketSizer.Of(createdAt), createdAt, msgID, sender, "hello", "",
+	).Exec())
+
+	msg := &models.Message{MessageID: msgID, RoomID: roomID, CreatedAt: createdAt, Sender: sender}
+	require.NoError(t, repo.AddReaction(ctx, msg, key, reactor))
+
+	var got time.Time
+	require.NoError(t, repo.session.Query(
+		`SELECT updated_at FROM messages_by_id WHERE message_id = ? AND created_at = ?`,
+		msgID, createdAt,
+	).Scan(&got))
+	assert.WithinDuration(t, reactor.ReactedAt, got, time.Second,
+		"messages_by_id.updated_at must reflect the add time")
+
+	require.NoError(t, repo.session.Query(
+		`SELECT updated_at FROM messages_by_room WHERE room_id = ? AND bucket = ? AND created_at = ? AND message_id = ?`,
+		roomID, bucketSizer.Of(createdAt), createdAt, msgID,
+	).Scan(&got))
+	assert.WithinDuration(t, reactor.ReactedAt, got, time.Second,
+		"messages_by_room.updated_at must reflect the add time")
 }
 
 // Pinned messages: Remove must succeed without touching pinned_messages_by_room.
@@ -308,9 +404,8 @@ func TestRepository_RemoveReaction_Pinned(t *testing.T) {
 	}
 
 	addedAt := reactor.ReactedAt
-	removedAt := addedAt.Add(5 * time.Minute).Truncate(time.Millisecond)
 	require.NoError(t, repo.AddReaction(ctx, msg, key, reactor))
-	require.NoError(t, repo.RemoveReaction(ctx, msg, key, removedAt))
+	require.NoError(t, repo.RemoveReaction(ctx, msg, key))
 
 	// messages_by_id reflects the remove.
 	var primaryReactions models.Reactions
@@ -326,7 +421,7 @@ func TestRepository_RemoveReaction_Pinned(t *testing.T) {
 		`SELECT updated_at FROM pinned_messages_by_room WHERE room_id = ? AND pinned_at = ? AND message_id = ?`,
 		roomID, pinnedAt, msgID,
 	).Scan(&pinnedUpdatedAt))
-	assert.True(t, pinnedUpdatedAt.IsZero() || pinnedUpdatedAt.Before(removedAt),
+	assert.True(t, pinnedUpdatedAt.IsZero() || pinnedUpdatedAt.Before(addedAt),
 		"pinned_messages_by_room.updated_at must not be bumped by RemoveReaction")
 }
 
@@ -350,7 +445,7 @@ func TestRepository_RemoveReaction_Idempotent_AbsentCell(t *testing.T) {
 	msg := &models.Message{MessageID: msgID, RoomID: roomID, CreatedAt: createdAt, Sender: sender}
 
 	// Remove without a prior add — Cassandra map-cell DELETE is a no-op on absent cells.
-	require.NoError(t, repo.RemoveReaction(ctx, msg, key, createdAt))
+	require.NoError(t, repo.RemoveReaction(ctx, msg, key))
 }
 
 func TestRepository_MultipleReactions_DifferentEmojiAndUsers(t *testing.T) {
