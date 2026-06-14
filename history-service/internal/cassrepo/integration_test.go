@@ -56,6 +56,7 @@ func setupCassandra(t testing.TB) *gocql.Session {
 		site_id TEXT,
 		edited_at TIMESTAMP,
 		updated_at TIMESTAMP,
+		pinned_at TIMESTAMP,
 		enc_payload BLOB,
 		enc_meta FROZEN<"EncMeta">,
 		PRIMARY KEY ((room_id, bucket), created_at, message_id)

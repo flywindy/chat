@@ -43,3 +43,8 @@ CREATE TABLE IF NOT EXISTS chat.messages_by_room (
 
 ALTER TABLE chat.messages_by_room ADD enc_payload BLOB;
 ALTER TABLE chat.messages_by_room ADD enc_meta FROZEN<"EncMeta">;
+
+-- Pin indicator for the channel timeline (null when not pinned). pinned_by is
+-- intentionally not mirrored here; richer pin metadata is a point lookup on
+-- messages_by_id.
+ALTER TABLE chat.messages_by_room ADD pinned_at TIMESTAMP;

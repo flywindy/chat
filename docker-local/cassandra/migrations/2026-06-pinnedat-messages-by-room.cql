@@ -1,0 +1,22 @@
+-- Add pinned_at to messages_by_room so the channel timeline can render pin
+-- indicators without a per-message point lookup.
+--
+-- Before this column existed, pin state was only stored on messages_by_id
+-- and pinned_messages_by_room: a client reloading channel history got rows
+-- whose pinnedAt was never populated, so timeline pin indicators disappeared
+-- after reload. history-service now mirrors pinned_at onto messages_by_room
+-- on pin/unpin (history-service/internal/cassrepo/pin.go).
+--
+-- pinned_by is intentionally NOT added — the timeline indicator only needs
+-- pinned_at; richer pin metadata remains a point lookup on messages_by_id.
+--
+-- Apply manually against the production keyspace; the docker-local init
+-- scripts already create new clusters with this column.
+--
+-- Backfill note: rows pinned before this migration keep a null pinned_at
+-- here until they are re-pinned. messages_by_id and pinned_messages_by_room
+-- remain the source of truth; if a backfill is wanted, walk
+-- pinned_messages_by_room per room and issue the same UPDATE the service
+-- now performs.
+
+ALTER TABLE chat.messages_by_room ADD pinned_at TIMESTAMP;

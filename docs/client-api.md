@@ -1808,7 +1808,7 @@ Used by every history-service method that returns messages. Mirrors the Cassandr
 | `editedAt` | string | Optional. RFC 3339. Set after an edit. |
 | `updatedAt` | string | Optional. RFC 3339. Mirrors `editedAt` for edits, set on delete to record the deletion time. |
 | `threadRoomId` | string | Optional. The thread room ID when this is a thread message. |
-| `pinnedAt` | string | Optional. RFC 3339. |
+| `pinnedAt` | string | Optional. RFC 3339. With the `messages_by_room` `pinned_at` mirror, room-timeline history loads now return this on pinned rows too (previously only `pin.list` and point lookups carried it). |
 | `pinnedBy` | [MessageParticipant](#messageparticipant) | Optional. |
 
 ##### MessageParticipant

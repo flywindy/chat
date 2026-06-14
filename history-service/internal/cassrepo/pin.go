@@ -14,6 +14,11 @@ const (
 	pinMsgByID   = `UPDATE messages_by_id SET pinned_at = ?, pinned_by = ? WHERE message_id = ? AND created_at = ?`
 	unpinMsgByID = `UPDATE messages_by_id SET pinned_at = null, pinned_by = null WHERE message_id = ? AND created_at = ?`
 
+	// messages_by_room mirrors pinned_at only (the timeline indicator needs no
+	// more); pinned_by stays a point lookup on messages_by_id.
+	pinMsgByRoom   = `UPDATE messages_by_room SET pinned_at = ? WHERE room_id = ? AND bucket = ? AND created_at = ? AND message_id = ?`
+	unpinMsgByRoom = `UPDATE messages_by_room SET pinned_at = null WHERE room_id = ? AND bucket = ? AND created_at = ? AND message_id = ?`
+
 	insertPinnedMsg = `INSERT INTO pinned_messages_by_room (
 		room_id, pinned_at, message_id, sender, msg, mentions,
 		attachments, file, card, card_action, quoted_parent_message, visible_to,
@@ -31,9 +36,30 @@ const (
 	pinnedByRoomQuery = "SELECT " + pinnedColumns + " FROM pinned_messages_by_room WHERE room_id = ?"
 )
 
-// PinMessage writes the pin via a single UnloggedBatch across messages_by_id
-// and pinned_messages_by_room — transport grouping, not atomic; half-apply on
-// coordinator failure is possible (caller-side heal in service/pin.go).
+// hasRoomTimelineRow reports whether msg has a messages_by_room row: channel
+// messages and tshow=true thread replies do; tshow=false thread replies live
+// only in thread_messages_by_thread. The pin mirror must gate on this because
+// a Cassandra UPDATE is an upsert — an unguarded pinned_at write for a
+// thread-only reply would create a ghost timeline row holding nothing but the
+// primary key and pin column.
+func hasRoomTimelineRow(msg *models.Message) bool {
+	return msg.ThreadParentID == "" || msg.TShow
+}
+
+// pinBatchTables names the tables in a pin/unpin batch so on-call knows which
+// to read back on half-apply.
+func pinBatchTables(withRoomRow bool) string {
+	if withRoomRow {
+		return "messages_by_id, pinned_messages_by_room, messages_by_room"
+	}
+	return "messages_by_id, pinned_messages_by_room"
+}
+
+// PinMessage writes the pin via a single UnloggedBatch across messages_by_id,
+// pinned_messages_by_room and (for messages with a timeline row) the
+// messages_by_room pinned_at mirror — transport grouping, not atomic;
+// half-apply on coordinator failure is possible (caller-side heal in
+// service/pin.go).
 func (r *Repository) PinMessage(ctx context.Context, msg *models.Message, pinnedAt time.Time, pinnedBy models.Participant) error { //nolint:gocritic // hugeParam: Participant is passed by value to match the service.MessageWriter interface
 	batch := r.session.NewBatch(gocql.UnloggedBatch).WithContext(ctx)
 	batch.Query(pinMsgByID, pinnedAt, pinnedBy, msg.MessageID, msg.CreatedAt)
@@ -43,9 +69,12 @@ func (r *Repository) PinMessage(ctx context.Context, msg *models.Message, pinned
 		msg.Reactions, msg.Deleted, msg.Type, msg.SysMsgData, msg.SiteID, msg.EditedAt, msg.UpdatedAt, pinnedBy,
 		msg.CreatedAt, msg.TShow, msg.ThreadParentID, msg.ThreadParentCreatedAt,
 	)
+	withRoomRow := hasRoomTimelineRow(msg)
+	if withRoomRow {
+		batch.Query(pinMsgByRoom, pinnedAt, msg.RoomID, r.bucket.Of(msg.CreatedAt), msg.CreatedAt, msg.MessageID)
+	}
 	if err := r.session.ExecuteBatch(batch); err != nil {
-		// Name both tables so on-call knows which to read back on half-apply.
-		return fmt.Errorf("pin message %s in room %s via batch(messages_by_id, pinned_messages_by_room): %w", msg.MessageID, msg.RoomID, err)
+		return fmt.Errorf("pin message %s in room %s via batch(%s): %w", msg.MessageID, msg.RoomID, pinBatchTables(withRoomRow), err)
 	}
 	return nil
 }
@@ -58,8 +87,14 @@ func (r *Repository) UnpinMessage(ctx context.Context, msg *models.Message) erro
 	batch := r.session.NewBatch(gocql.UnloggedBatch).WithContext(ctx)
 	batch.Query(unpinMsgByID, msg.MessageID, msg.CreatedAt)
 	batch.Query(deletePinnedRow, msg.RoomID, *msg.PinnedAt, msg.MessageID)
+	withRoomRow := hasRoomTimelineRow(msg)
+	if withRoomRow {
+		// Setting pinned_at = null on the existing row only writes a tombstone;
+		// the guard still applies so a thread-only reply doesn't get one.
+		batch.Query(unpinMsgByRoom, msg.RoomID, r.bucket.Of(msg.CreatedAt), msg.CreatedAt, msg.MessageID)
+	}
 	if err := r.session.ExecuteBatch(batch); err != nil {
-		return fmt.Errorf("unpin message %s in room %s via batch(messages_by_id, pinned_messages_by_room): %w", msg.MessageID, msg.RoomID, err)
+		return fmt.Errorf("unpin message %s in room %s via batch(%s): %w", msg.MessageID, msg.RoomID, pinBatchTables(withRoomRow), err)
 	}
 	return nil
 }

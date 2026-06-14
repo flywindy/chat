@@ -27,6 +27,20 @@ func seedMessageFull(t *testing.T, repo *Repository, m *models.Message) {
 	).WithContext(context.Background()).Exec())
 }
 
+// roomRowPinnedAt reads pinned_at straight off the messages_by_room row;
+// found=false means the row itself is absent.
+func roomRowPinnedAt(t *testing.T, repo *Repository, m *models.Message) (pinnedAt *time.Time, found bool) {
+	t.Helper()
+	b := msgbucket.New(24 * time.Hour).Of(m.CreatedAt)
+	iter := repo.session.Query(
+		`SELECT pinned_at FROM messages_by_room WHERE room_id = ? AND bucket = ? AND created_at = ? AND message_id = ?`,
+		m.RoomID, b, m.CreatedAt, m.MessageID,
+	).WithContext(context.Background()).Iter()
+	found = iter.Scan(&pinnedAt)
+	require.NoError(t, iter.Close())
+	return pinnedAt, found
+}
+
 func TestRepository_PinAndUnpinMessage(t *testing.T) {
 	session := setupCassandra(t)
 	repo := NewRepository(session, msgbucket.New(24*time.Hour), 365, nil)
@@ -59,6 +73,18 @@ func TestRepository_PinAndUnpinMessage(t *testing.T) {
 	require.NotNil(t, pinned[0].PinnedBy)
 	assert.Equal(t, "mod", pinned[0].PinnedBy.Account)
 
+	roomPinnedAt, found := roomRowPinnedAt(t, repo, msg)
+	require.True(t, found)
+	require.NotNil(t, roomPinnedAt)
+	assert.True(t, roomPinnedAt.Equal(pinnedAt), "messages_by_room pinned_at must mirror the pin time")
+
+	// Room history must surface the pin so timeline indicators survive a reload.
+	page, err := repo.GetMessagesBefore(ctx, "r1", created.Add(time.Hour), created.Add(-time.Hour), PageRequest{PageSize: 10})
+	require.NoError(t, err)
+	require.Len(t, page.Data, 1)
+	require.NotNil(t, page.Data[0].PinnedAt)
+	assert.True(t, page.Data[0].PinnedAt.Equal(pinnedAt), "room history must scan pinned_at")
+
 	got.PinnedAt = &pinnedAt
 	require.NoError(t, repo.UnpinMessage(ctx, got))
 
@@ -70,6 +96,52 @@ func TestRepository_PinAndUnpinMessage(t *testing.T) {
 	emptyAfter, err := repo.GetAllPinnedMessages(ctx, "r1")
 	require.NoError(t, err)
 	assert.Empty(t, emptyAfter)
+
+	roomPinnedAtAfter, foundAfter := roomRowPinnedAt(t, repo, msg)
+	require.True(t, foundAfter, "the timeline row itself must survive unpin")
+	assert.Nil(t, roomPinnedAtAfter, "unpin must clear messages_by_room pinned_at")
+}
+
+func TestRepository_PinThreadOnlyReply_NoGhostRoomRow(t *testing.T) {
+	session := setupCassandra(t)
+	repo := NewRepository(session, msgbucket.New(24*time.Hour), 365, nil)
+	ctx := context.Background()
+
+	created := time.Date(2026, 5, 1, 9, 0, 0, 0, time.UTC)
+	msg := &models.Message{
+		MessageID: "tr1", RoomID: "r5", CreatedAt: created,
+		Sender:         models.Participant{ID: "u1", Account: "alice"},
+		Msg:            "thread-only reply",
+		ThreadParentID: "parent1", ThreadRoomID: "thread1", TShow: false,
+	}
+	// Thread-only replies (tshow=false) have rows in messages_by_id and the
+	// thread table but NOT in messages_by_room — seed accordingly.
+	require.NoError(t, repo.session.Query(
+		`INSERT INTO messages_by_id (message_id, room_id, created_at, sender, msg, deleted, tshow, thread_parent_id, thread_room_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		msg.MessageID, msg.RoomID, msg.CreatedAt, msg.Sender, msg.Msg, false, false, msg.ThreadParentID, msg.ThreadRoomID,
+	).WithContext(ctx).Exec())
+
+	pinnedAt := time.Date(2026, 5, 2, 10, 0, 0, 0, time.UTC)
+	require.NoError(t, repo.PinMessage(ctx, msg, pinnedAt, models.Participant{ID: "u2", Account: "mod"}))
+
+	// Cassandra UPDATE upserts: without the hasRoomTimelineRow guard, the pin
+	// would create a ghost timeline row holding only the PK + pinned_at.
+	_, found := roomRowPinnedAt(t, repo, msg)
+	assert.False(t, found, "pinning a thread-only reply must not upsert a messages_by_room ghost row")
+
+	// The pin itself must still land on messages_by_id + pinned_messages_by_room.
+	got, err := repo.GetMessageByID(ctx, "tr1")
+	require.NoError(t, err)
+	require.NotNil(t, got.PinnedAt)
+	assert.True(t, got.PinnedAt.Equal(pinnedAt))
+	pinnedRows, err := repo.GetAllPinnedMessages(ctx, "r5")
+	require.NoError(t, err)
+	require.Len(t, pinnedRows, 1)
+
+	got.PinnedAt = &pinnedAt
+	require.NoError(t, repo.UnpinMessage(ctx, got))
+	_, found = roomRowPinnedAt(t, repo, msg)
+	assert.False(t, found, "unpinning a thread-only reply must not upsert a messages_by_room ghost row")
 }
 
 func TestRepository_GetPinnedMessages_OrderAndEmpty(t *testing.T) {

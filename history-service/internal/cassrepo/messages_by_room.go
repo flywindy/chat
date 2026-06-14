@@ -14,7 +14,7 @@ const baseColumns = "room_id, created_at, message_id, thread_room_id, sender, " 
 	"msg, mentions, attachments, file, card, card_action, tshow, tcount, " +
 	"thread_parent_id, thread_parent_created_at, quoted_parent_message, " +
 	"visible_to, reactions, deleted, " +
-	"type, sys_msg_data, site_id, edited_at, updated_at, " +
+	"type, sys_msg_data, site_id, edited_at, updated_at, pinned_at, " +
 	"enc_payload, enc_meta"
 
 const messageByRoomQuery = "SELECT " + baseColumns + " FROM messages_by_room"
