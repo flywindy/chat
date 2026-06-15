@@ -96,6 +96,7 @@ func (h *Handler) Register(r *natsrouter.Router) {
 	natsrouter.Register(r, subject.RoomRenamePattern(h.siteID), h.roomRename)
 	natsrouter.Register(r, subject.RoomRestricted(h.siteID), h.roomRestricted)
 	natsrouter.Register(r, subject.RoomsInfoBatchSubscribe(h.siteID), h.roomsInfoBatch)
+	natsrouter.Register(r, subject.ThreadUnreadSummarySubscribe(h.siteID), h.threadUnreadSummary)
 	natsrouter.Register(r, subject.RoomKeyEnsure(h.siteID), h.ensureRoomKey)
 	natsrouter.Register(r, subject.RoomCreatePattern(h.siteID), h.createRoom)
 }
@@ -1069,6 +1070,51 @@ func (h *Handler) roomsInfoBatch(c *natsrouter.Context, req model.RoomsInfoBatch
 	return &model.RoomsInfoBatchResponse{Rooms: infos}, nil
 }
 
+func (h *Handler) threadUnreadSummary(c *natsrouter.Context, req model.ThreadUnreadSummaryRequest) (*model.ThreadUnreadSummaryResponse, error) {
+	var ctx context.Context = c
+	start := time.Now()
+	if req.UserAccount == "" {
+		return nil, errcode.BadRequest("userAccount must not be empty")
+	}
+
+	if span := trace.SpanFromContext(ctx); span.IsRecording() {
+		span.SetAttributes(attribute.String("site_id", h.siteID))
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	summary, err := h.store.GetThreadUnreadSummary(ctx, req.UserAccount, h.siteID)
+	if err != nil {
+		return nil, fmt.Errorf("get thread unread summary: %w", err)
+	}
+
+	resp := &model.ThreadUnreadSummaryResponse{
+		Unread:              summary.Unread,
+		UnreadDirectMessage: summary.UnreadDirectMessage,
+		UnreadMention:       summary.UnreadMention,
+		LastMessageAt:       timePtrToMillis(summary.LastMessageAt),
+	}
+
+	slog.Debug("thread unread summary handled",
+		"site_id", h.siteID,
+		"unread", resp.Unread,
+		"latency_ms", time.Since(start).Milliseconds(),
+	)
+
+	return resp, nil
+}
+
+// timePtrToMillis converts a nullable timestamp to UnixMilli for wire responses,
+// returning nil for a nil or zero time so the field is omitted.
+func timePtrToMillis(t *time.Time) *int64 {
+	if t == nil || t.IsZero() {
+		return nil
+	}
+	ms := t.UTC().UnixMilli()
+	return &ms
+}
+
 func (h *Handler) aggregateRoomInfo(ids []string, rooms []model.Room, keys map[string]*roomkeystore.VersionedKeyPair) ([]model.RoomInfo, int, int) {
 	byID := make(map[string]*model.Room, len(rooms))
 	for i := range rooms {
@@ -1087,14 +1133,8 @@ func (h *Handler) aggregateRoomInfo(ids []string, rooms []model.Room, keys map[s
 		foundCount++
 		entry.SiteID = r.SiteID
 		entry.Name = r.Name
-		if r.LastMsgAt != nil && !r.LastMsgAt.IsZero() {
-			ms := r.LastMsgAt.UTC().UnixMilli()
-			entry.LastMsgAt = &ms
-		}
-		if r.LastMentionAllAt != nil && !r.LastMentionAllAt.IsZero() {
-			ms := r.LastMentionAllAt.UTC().UnixMilli()
-			entry.LastMentionAllAt = &ms
-		}
+		entry.LastMsgAt = timePtrToMillis(r.LastMsgAt)
+		entry.LastMentionAllAt = timePtrToMillis(r.LastMentionAllAt)
 		if kp, ok := keys[id]; ok && kp != nil {
 			enc := base64.StdEncoding.EncodeToString(kp.KeyPair.PrivateKey)
 			ver := kp.Version

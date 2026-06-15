@@ -25,3 +25,19 @@ type ThreadSubscription struct {
 	CreatedAt  time.Time  `json:"createdAt"   bson:"createdAt"`
 	UpdatedAt  time.Time  `json:"updatedAt"   bson:"updatedAt"`
 }
+
+// ThreadUnreadSummaryRequest is the NATS request body for the per-site thread
+// unread summary RPC. Filtered on userAccount (the key every thread_subscriptions
+// query and index uses).
+type ThreadUnreadSummaryRequest struct {
+	UserAccount string `json:"userAccount"`
+}
+
+// ThreadUnreadSummaryResponse is the per-site thread unread rollup for one user.
+// LastMessageAt is UnixMilli; nil when the user has no threads on this site.
+type ThreadUnreadSummaryResponse struct {
+	Unread              bool   `json:"unread"`
+	UnreadDirectMessage bool   `json:"unreadDirectMessage"`
+	UnreadMention       bool   `json:"unreadMention"`
+	LastMessageAt       *int64 `json:"lastMessageAt,omitempty"`
+}

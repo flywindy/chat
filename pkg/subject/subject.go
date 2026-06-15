@@ -220,6 +220,12 @@ func RoomsInfoBatch(siteID string) string {
 	return fmt.Sprintf("chat.server.request.room.%s.info.batch", siteID)
 }
 
+// ThreadUnreadSummary is the server-to-server request subject for a per-site
+// thread unread rollup for a single user.
+func ThreadUnreadSummary(siteID string) string {
+	return fmt.Sprintf("chat.server.request.room.%s.thread.unread.summary", siteID)
+}
+
 // RoomKeyEnsure is the server-to-server request subject for the room key ensure
 // RPC. Callers send a RoomKeyEnsureRequest and receive a RoomKeyEnsureResponse
 // confirming the room has a key pair in Valkey at the returned version.
@@ -352,6 +358,12 @@ func OutboxWildcard(siteID string) string {
 // RoomsInfoBatchSubscribe is the per-site subscription subject for room-service.
 func RoomsInfoBatchSubscribe(siteID string) string {
 	return fmt.Sprintf("chat.server.request.room.%s.info.batch", siteID)
+}
+
+// ThreadUnreadSummarySubscribe is the per-site subscription subject for the
+// thread unread summary RPC.
+func ThreadUnreadSummarySubscribe(siteID string) string {
+	return fmt.Sprintf("chat.server.request.room.%s.thread.unread.summary", siteID)
 }
 
 func UserResponseWildcard() string {

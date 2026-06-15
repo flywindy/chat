@@ -237,6 +237,21 @@ func (mr *MockRoomStoreMockRecorder) GetThreadSubscriptionByParent(ctx, account,
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetThreadSubscriptionByParent", reflect.TypeOf((*MockRoomStore)(nil).GetThreadSubscriptionByParent), ctx, account, parentMessageID, roomID)
 }
 
+// GetThreadUnreadSummary mocks base method.
+func (m *MockRoomStore) GetThreadUnreadSummary(ctx context.Context, account, siteID string) (*ThreadUnreadSummary, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetThreadUnreadSummary", ctx, account, siteID)
+	ret0, _ := ret[0].(*ThreadUnreadSummary)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetThreadUnreadSummary indicates an expected call of GetThreadUnreadSummary.
+func (mr *MockRoomStoreMockRecorder) GetThreadUnreadSummary(ctx, account, siteID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetThreadUnreadSummary", reflect.TypeOf((*MockRoomStore)(nil).GetThreadUnreadSummary), ctx, account, siteID)
+}
+
 // GetUser mocks base method.
 func (m *MockRoomStore) GetUser(ctx context.Context, account string) (*model.User, error) {
 	m.ctrl.T.Helper()
