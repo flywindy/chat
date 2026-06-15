@@ -12,6 +12,7 @@ import (
 
 	"github.com/Marz32onE/instrumentation-go/otel-nats/oteljetstream"
 
+	"github.com/hmchangw/chat/pkg/jobguard"
 	"github.com/hmchangw/chat/pkg/natsutil"
 	"github.com/hmchangw/chat/pkg/otelutil"
 	"github.com/hmchangw/chat/pkg/searchengine"
@@ -328,10 +329,19 @@ func runConsumer(
 	defer close(doneCh)
 	lastFlush := time.Now()
 
+	// jobguard recovers panics from the batch handler so a single poison
+	// message or a malformed bulk response can't crash this collection's
+	// consumer goroutine for good. On a recovered panic the in-flight messages
+	// are left un-acked and JetStream redelivers them after AckWait.
+	flush := func() { jobguard.Guard("search-sync flush", func() { handler.Flush(ctx) }) }
+	add := func(m jetstream.Msg) {
+		jobguard.Guard("search-sync add: "+m.Subject(), func() { handler.Add(m) })
+	}
+
 	for {
 		select {
 		case <-stopCh:
-			handler.Flush(ctx)
+			flush()
 			return
 		default:
 		}
@@ -341,7 +351,7 @@ func runConsumer(
 		// may still push us over — that's handled mid-loop below.
 		remaining := bulkBatchSize - handler.ActionCount()
 		if remaining <= 0 {
-			handler.Flush(ctx)
+			flush()
 			lastFlush = time.Now()
 			continue
 		}
@@ -354,34 +364,34 @@ func runConsumer(
 		if err != nil {
 			select {
 			case <-stopCh:
-				handler.Flush(ctx)
+				flush()
 				return
 			default:
 			}
 			if handler.ActionCount() > 0 && time.Since(lastFlush) >= bulkFlushInterval {
-				handler.Flush(ctx)
+				flush()
 				lastFlush = time.Now()
 			}
 			continue
 		}
 
 		for msg := range batch.Messages() {
-			handler.Add(msg.Msg)
+			add(msg.Msg)
 			// Mid-batch flush: if a single fan-out message just pushed the
 			// buffer over the bulk cap, flush immediately instead of waiting
 			// for the outer loop — otherwise the next message's actions
 			// would add to an already-oversized bulk request.
 			if handler.ActionCount() >= bulkBatchSize {
-				handler.Flush(ctx)
+				flush()
 				lastFlush = time.Now()
 			}
 		}
 
 		if handler.ActionCount() >= bulkBatchSize {
-			handler.Flush(ctx)
+			flush()
 			lastFlush = time.Now()
 		} else if handler.ActionCount() > 0 && time.Since(lastFlush) >= bulkFlushInterval {
-			handler.Flush(ctx)
+			flush()
 			lastFlush = time.Now()
 		}
 	}

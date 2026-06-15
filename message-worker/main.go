@@ -15,6 +15,7 @@ import (
 
 	"github.com/hmchangw/chat/pkg/atrest"
 	"github.com/hmchangw/chat/pkg/cassutil"
+	"github.com/hmchangw/chat/pkg/jobguard"
 	"github.com/hmchangw/chat/pkg/mongoutil"
 	"github.com/hmchangw/chat/pkg/msgbucket"
 	"github.com/hmchangw/chat/pkg/natsutil"
@@ -179,8 +180,13 @@ func main() {
 					<-sem
 					wg.Done()
 				}()
-				handlerCtx, _ := natsutil.StampRequestID(msgCtx, msg.Headers(), msg.Subject())
-				handler.HandleJetStreamMsg(handlerCtx, msg)
+				// jobguard recovers handler panics — this goroutine runs outside
+				// natsrouter's Recovery middleware, so an unrecovered panic would
+				// crash the worker and crash-loop on JetStream redelivery.
+				jobguard.Run(msg, func() {
+					handlerCtx, _ := natsutil.StampRequestID(msgCtx, msg.Headers(), msg.Subject())
+					handler.HandleJetStreamMsg(handlerCtx, msg)
+				})
 			}()
 		}
 	}()

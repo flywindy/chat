@@ -14,6 +14,7 @@ import (
 	"github.com/Marz32onE/instrumentation-go/otel-nats/oteljetstream"
 	"github.com/Marz32onE/instrumentation-go/otel-nats/otelnats"
 
+	"github.com/hmchangw/chat/pkg/jobguard"
 	"github.com/hmchangw/chat/pkg/mongoutil"
 	"github.com/hmchangw/chat/pkg/natsutil"
 	"github.com/hmchangw/chat/pkg/otelutil"
@@ -194,36 +195,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	sem := make(chan struct{}, cfg.MaxWorkers)
 	var wg sync.WaitGroup
-
-	go func() {
-		for {
-			msgCtx, msg, err := iter.Next()
-			if err != nil {
-				return
-			}
-			sem <- struct{}{}
-			wg.Add(1)
-			go func() {
-				defer func() {
-					<-sem
-					wg.Done()
-				}()
-				handlerCtx, _ := natsutil.StampRequestID(msgCtx, msg.Headers(), msg.Subject())
-				if err := handler.HandleMessage(handlerCtx, msg.Data()); err != nil {
-					slog.Error("handle message failed", "error", err, "request_id", natsutil.RequestIDFromContext(handlerCtx))
-					if err := msg.Nak(); err != nil {
-						slog.Error("failed to nak message", "error", err)
-					}
-					return
-				}
-				if err := msg.Ack(); err != nil {
-					slog.Error("failed to ack message", "error", err)
-				}
-			}()
-		}
-	}()
+	go consumeLoop(iter, broadcastProcessor(handler), cfg.MaxWorkers, &wg)
 
 	slog.Info("broadcast-worker started", "site", cfg.SiteID, "encryption", cfg.Encryption.Enabled)
 
@@ -276,6 +249,64 @@ func (p *natsPublisher) Publish(ctx context.Context, subject string, data []byte
 		return fmt.Errorf("publish to %q: %w", subject, err)
 	}
 	return nil
+}
+
+// messageProcessor handles one consumed message, performing its own Ack/Nak.
+type messageProcessor func(msgCtx context.Context, msg jetstream.Msg)
+
+// messageIterator is the slice of oteljetstream.MessagesContext that
+// consumeLoop drives — an interface so the loop is testable against a real
+// embedded JetStream consumer.
+type messageIterator interface {
+	Next(...jetstream.NextOpt) (context.Context, jetstream.Msg, error)
+}
+
+// broadcastProcessor builds the per-message processing closure for the
+// canonical consumer: stamp the request ID, run the handler, Ack on success or
+// Nak on error.
+func broadcastProcessor(handler *Handler) messageProcessor {
+	return func(msgCtx context.Context, msg jetstream.Msg) {
+		handlerCtx, _ := natsutil.StampRequestID(msgCtx, msg.Headers(), msg.Subject())
+		if err := handler.HandleMessage(handlerCtx, msg.Data()); err != nil {
+			slog.Error("handle message failed", "error", err, "request_id", natsutil.RequestIDFromContext(handlerCtx))
+			if err := msg.Nak(); err != nil {
+				slog.Error("failed to nak message", "error", err)
+			}
+			return
+		}
+		if err := msg.Ack(); err != nil {
+			slog.Error("failed to ack message", "error", err)
+		}
+	}
+}
+
+// consumeLoop drains iter, dispatching each message to process under a
+// maxWorkers-bounded semaphore. In-flight handlers are tracked on wg so
+// shutdown can wait for them. It returns when iter.Next reports an error (e.g.
+// after iter.Stop()).
+//
+// jobguard.Run recovers handler panics: this dispatch runs outside
+// natsrouter's Recovery middleware, so an unrecovered panic would crash the
+// worker and — because the message would be left un-acked — crash-loop on
+// JetStream redelivery. The recover runs before the semaphore slot is released
+// and wg.Done fires.
+func consumeLoop(iter messageIterator, process messageProcessor, maxWorkers int, wg *sync.WaitGroup) {
+	sem := make(chan struct{}, maxWorkers)
+	for {
+		msgCtx, msg, err := iter.Next()
+		if err != nil {
+			return
+		}
+		sem <- struct{}{}
+		wg.Add(1)
+		go func() {
+			defer func() {
+				<-sem
+				wg.Done()
+			}()
+			jobguard.Run(msg, func() { process(msgCtx, msg) })
+		}()
+	}
 }
 
 // buildConsumerConfig returns the durable consumer config for

@@ -17,6 +17,7 @@ import (
 
 	"github.com/Marz32onE/instrumentation-go/otel-nats/oteljetstream"
 
+	"github.com/hmchangw/chat/pkg/jobguard"
 	"github.com/hmchangw/chat/pkg/model"
 	"github.com/hmchangw/chat/pkg/mongoutil"
 	"github.com/hmchangw/chat/pkg/natsutil"
@@ -281,17 +282,22 @@ func main() {
 					<-sem
 					wg.Done()
 				}()
-				handlerCtx, _ := natsutil.StampRequestID(msgCtx, msg.Headers(), msg.Subject())
-				if err := handler.HandleMessage(handlerCtx, msg.Data()); err != nil {
-					slog.Error("handle message failed", "error", err, "request_id", natsutil.RequestIDFromContext(handlerCtx))
-					if err := msg.Nak(); err != nil {
-						slog.Error("failed to nak message", "error", err)
+				// jobguard recovers handler panics — this goroutine runs outside
+				// natsrouter's Recovery middleware, so an unrecovered panic would
+				// crash the worker and crash-loop on JetStream redelivery.
+				jobguard.Run(msg, func() {
+					handlerCtx, _ := natsutil.StampRequestID(msgCtx, msg.Headers(), msg.Subject())
+					if err := handler.HandleMessage(handlerCtx, msg.Data()); err != nil {
+						slog.Error("handle message failed", "error", err, "request_id", natsutil.RequestIDFromContext(handlerCtx))
+						if err := msg.Nak(); err != nil {
+							slog.Error("failed to nak message", "error", err)
+						}
+						return
 					}
-					return
-				}
-				if err := msg.Ack(); err != nil {
-					slog.Error("failed to ack message", "error", err)
-				}
+					if err := msg.Ack(); err != nil {
+						slog.Error("failed to ack message", "error", err)
+					}
+				})
 			}()
 		}
 	}()
