@@ -153,7 +153,7 @@ func TestServeListener_ServesThenStops(t *testing.T) {
 		Check{Name: "dep", Probe: func(context.Context) error { return nil }},
 	)
 
-	resp, err := http.Get(url)
+	resp, err := http.Get(url) // #nosec G107 -- test requests its own in-process httptest listener URL, not attacker-controlled
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	require.NoError(t, resp.Body.Close())
@@ -161,7 +161,7 @@ func TestServeListener_ServesThenStops(t *testing.T) {
 	require.NoError(t, stop(context.Background()))
 
 	// After shutdown the listener is closed, so the request must fail.
-	resp, err = http.Get(url)
+	resp, err = http.Get(url) // #nosec G107 -- test requests its own in-process httptest listener URL, not attacker-controlled
 	if resp != nil {
 		require.NoError(t, resp.Body.Close())
 	}
