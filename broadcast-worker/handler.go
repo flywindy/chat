@@ -916,32 +916,38 @@ func (h *Handler) publishToThreadAccounts(ctx context.Context, accounts []string
 	return nil
 }
 
-// threadFanOutAccounts builds the deduplicated fan-out recipient list for
-// a thread event. senderAccount is always excluded. extraAccounts
-// (e.g. @mentioned users from the message payload) are added after the
-// follower pass.
+// threadFanOutAccounts builds the deduplicated fan-out recipient list for a
+// thread event. The message sender is always included first (unless a bot):
+// they authored the reply and are therefore a thread participant, so their own
+// devices must receive the event for multi-device sync. The sender is added
+// directly here rather than relied upon via replyAccounts — replyAccounts is
+// written by message-worker on a separate, unordered MESSAGES_CANONICAL
+// consumer, so a fan-out that depended on it would race the sender's own first
+// reply and silently drop the echo. followers (thread repliers) and
+// extraAccounts (@-mentioned users) are merged after, deduped. Bots are always
+// excluded.
 func threadFanOutAccounts(senderAccount string, followers map[string]struct{}, extraAccounts []string) []string {
-	seen := map[string]struct{}{senderAccount: {}}
+	seen := map[string]struct{}{}
 	var fanOut []string
-	for acc := range followers {
+	add := func(acc string) {
+		if acc == "" {
+			return
+		}
 		if _, ok := seen[acc]; ok {
-			continue
+			return
 		}
 		if isBot(acc) {
-			continue
+			return
 		}
 		seen[acc] = struct{}{}
 		fanOut = append(fanOut, acc)
 	}
+	add(senderAccount) // author is a thread participant — include race-free
+	for acc := range followers {
+		add(acc)
+	}
 	for _, acc := range extraAccounts {
-		if _, ok := seen[acc]; ok {
-			continue
-		}
-		if isBot(acc) {
-			continue
-		}
-		seen[acc] = struct{}{}
-		fanOut = append(fanOut, acc)
+		add(acc)
 	}
 	return fanOut
 }
