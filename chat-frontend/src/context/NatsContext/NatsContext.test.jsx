@@ -20,9 +20,14 @@ vi.mock('nkeys.js', () => ({
 }))
 
 import { NatsProvider, useNats } from './NatsContext'
+import { DebugProvider } from '@/context/DebugContext'
 
 function wrapper({ children }) {
-  return <NatsProvider>{children}</NatsProvider>
+  return (
+    <DebugProvider>
+      <NatsProvider>{children}</NatsProvider>
+    </DebugProvider>
+  )
 }
 
 describe('NatsProvider connect wiring', () => {

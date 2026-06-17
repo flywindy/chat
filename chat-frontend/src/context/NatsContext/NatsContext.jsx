@@ -1,7 +1,8 @@
-import { createContext, useContext, useRef, useState, useCallback, useMemo } from 'react'
-import { connect as natsConnect, StringCodec } from 'nats.ws'
+import { createContext, useContext, useRef, useState, useCallback, useEffect, useMemo } from 'react'
+import { connect as natsConnect, StringCodec, headers as natsHeaders } from 'nats.ws'
 import { createUser } from 'nkeys.js'
 import { AUTH_URL, NATS_URL } from '@/lib/runtimeConfig'
+import { useDebug } from '@/context/DebugContext'
 import { useJwtRefresh } from './useJwtRefresh'
 import {
   requestWithAsyncResult as asyncJobRequest,
@@ -21,6 +22,28 @@ export function NatsProvider({ children }) {
 
   const authUrl = AUTH_URL
   const natsUrl = NATS_URL
+
+  // Keep the live debug settings in refs so the transport callbacks can read
+  // them at send time without being recreated (and re-rendering consumers) on
+  // every change. When the level is not 'off' every request/publish carries an
+  // `X-Debug: <level>` header; when payload capture is on it also carries
+  // `X-Debug-Payload: 1` (independent of the level).
+  const { level: debugLevel, payload: debugPayload } = useDebug()
+  const debugLevelRef = useRef(debugLevel)
+  const debugPayloadRef = useRef(debugPayload)
+  useEffect(() => { debugLevelRef.current = debugLevel }, [debugLevel])
+  useEffect(() => { debugPayloadRef.current = debugPayload }, [debugPayload])
+
+  const buildHeaders = useCallback(() => {
+    const lvl = debugLevelRef.current
+    const payload = debugPayloadRef.current
+    const wantsDebug = lvl && lvl !== 'off'
+    if (!wantsDebug && !payload) return undefined
+    const h = natsHeaders()
+    if (wantsDebug) h.set('X-Debug', lvl)
+    if (payload) h.set('X-Debug-Payload', '1')
+    return h
+  }, [])
 
   const { authenticator, setCredentials, stop } = useJwtRefresh({ authUrl, ncRef })
 
@@ -112,7 +135,10 @@ export function NatsProvider({ children }) {
   const request = useCallback(async (subject, data = {}) => {
     if (!ncRef.current) throw new Error('Not connected')
     const payload = sc.encode(JSON.stringify(data))
-    const resp = await ncRef.current.request(subject, payload, { timeout: 5000 })
+    const reqOpts = { timeout: 5000 }
+    const h = buildHeaders()
+    if (h) reqOpts.headers = h
+    const resp = await ncRef.current.request(subject, payload, reqOpts)
     const parsed = JSON.parse(sc.decode(resp.data))
     if (parsed.error) {
       // errcode envelope {code, reason?, error, metadata?}. Legacy replies
@@ -125,7 +151,7 @@ export function NatsProvider({ children }) {
       })
     }
     return parsed
-  }, [])
+  }, [buildHeaders])
 
   /**
    * Two-phase request/reply for operations whose sync reply is just
@@ -148,7 +174,11 @@ export function NatsProvider({ children }) {
     if (!ncRef.current) throw new Error('Not connected')
     const account = user?.account
     if (!account) throw new Error('Not authenticated')
-    return asyncJobRequest(ncRef.current, account, subject, data, opts)
+    return asyncJobRequest(ncRef.current, account, subject, data, {
+      debugLevel: debugLevelRef.current,
+      debugPayload: debugPayloadRef.current,
+      ...opts,
+    })
   }, [user])
 
   /**
@@ -163,8 +193,9 @@ export function NatsProvider({ children }) {
   const publish = useCallback((subject, data = {}) => {
     if (!ncRef.current) throw new Error('Not connected')
     const payload = sc.encode(JSON.stringify(data))
-    ncRef.current.publish(subject, payload)
-  }, [])
+    const h = buildHeaders()
+    ncRef.current.publish(subject, payload, h ? { headers: h } : undefined)
+  }, [buildHeaders])
 
   /**
    * Subscribe to a subject pattern and dispatch parsed JSON messages

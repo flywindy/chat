@@ -209,6 +209,8 @@ export async function requestWithAsyncResult<S = unknown, A = unknown>(
     syncTimeout = DEFAULT_SYNC_TIMEOUT,
     asyncTimeout = DEFAULT_ASYNC_TIMEOUT,
     treatAsSuccess,
+    debugLevel = 'off',
+    debugPayload = false,
   } = opts
 
   const sub: NatsSubscription = nc.subscribe(userResponse(account, requestId), { max: 1 })
@@ -238,6 +240,8 @@ export async function requestWithAsyncResult<S = unknown, A = unknown>(
   try {
     const h = natsHeaders()
     h.set('X-Request-ID', requestId)
+    if (debugLevel && debugLevel !== 'off') h.set('X-Debug', debugLevel)
+    if (debugPayload) h.set('X-Debug-Payload', '1')
     const resp = await nc.request(subject, sc.encode(JSON.stringify(payload)), {
       timeout: syncTimeout,
       headers: h,
