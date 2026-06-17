@@ -54,7 +54,9 @@ CREATE TYPE IF NOT EXISTS "QuotedParentMessage"(
   message_link TEXT,
   thread_parent_id TEXT,          // set by message-worker when quoted message is a TShow reply
   thread_parent_created_at TIMESTAMP  // actual CreatedAt of the thread parent; used by history-service
-                                      // to enforce access-window checks without a Cassandra round-trip
+                                      // to enforce access-window checks without a Cassandra round-trip.
+                                      // Resolved server-side by message-gatekeeper from the parent
+                                      // message (NOT client-supplied) — see #322.
 );
 ```
 #### EncMeta

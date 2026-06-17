@@ -2,7 +2,6 @@ package model_test
 
 import (
 	"encoding/json"
-	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -414,29 +413,6 @@ func TestSendMessageRequestJSON(t *testing.T) {
 		assert.False(t, present, "threadParentMessageId should be omitted when empty")
 	})
 
-	t.Run("with threadParentMessageCreatedAt", func(t *testing.T) {
-		parentMillis := time.Date(2026, 1, 1, 11, 0, 0, 0, time.UTC).UnixMilli()
-		raw := fmt.Sprintf(`{"id":"msg-uuid-1","content":"reply","requestId":"req-1","threadParentMessageId":"parent-msg-uuid","threadParentMessageCreatedAt":%d}`, parentMillis)
-		var r model.SendMessageRequest
-		require.NoError(t, json.Unmarshal([]byte(raw), &r))
-		assert.Equal(t, "parent-msg-uuid", r.ThreadParentMessageID)
-		require.NotNil(t, r.ThreadParentMessageCreatedAt)
-		assert.Equal(t, parentMillis, *r.ThreadParentMessageCreatedAt)
-	})
-
-	t.Run("threadParentMessageCreatedAt omitted when nil", func(t *testing.T) {
-		r := model.SendMessageRequest{
-			ID:        "msg-uuid-1",
-			Content:   "hello world",
-			RequestID: "req-1",
-		}
-		data, err := json.Marshal(&r)
-		require.NoError(t, err)
-		var raw map[string]any
-		require.NoError(t, json.Unmarshal(data, &raw))
-		_, present := raw["threadParentMessageCreatedAt"]
-		assert.False(t, present, "threadParentMessageCreatedAt should be omitted when nil")
-	})
 }
 
 func TestMessageEventJSON(t *testing.T) {

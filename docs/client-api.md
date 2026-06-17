@@ -3207,8 +3207,7 @@ The same subject and request body cover three send variants: plain message, thre
 | `id` | string | yes | The message's ID. Must be 20-char base62. The client generates this and uses it for client-side optimistic rendering. |
 | `content` | string | yes | The message body. Must be non-empty and ≤ 20 KiB. |
 | `requestId` | string | yes | A 36-char hyphenated UUID (v4 or v7) the client generates. **Validated** — an empty or malformed `requestId` is rejected with no message published. The async reply is delivered to `chat.user.{account}.response.{requestId}`. |
-| `threadParentMessageId` | string | no | Set when posting a thread reply. Must be a valid 20-char base62 message ID. Pair with `threadParentMessageCreatedAt`. |
-| `threadParentMessageCreatedAt` | number | no | Required when `threadParentMessageId` is set. Epoch ms (UTC). |
+| `threadParentMessageId` | string | no | Set when posting a thread reply. Must be a valid 20-char base62 message ID. |
 | `tshow` | boolean | no | The "Also send to channel" option. Only meaningful on a thread reply (`threadParentMessageId` set): the reply is persisted into the parent room's channel timeline as well as the thread (dual-write into `messages_by_room` in addition to `thread_messages_by_thread` + `messages_by_id`), and is surfaced with `tshow: true` on the persisted message. On a non-thread send the flag is **ignored and normalized to `false`** — the request is not rejected. |
 | `quotedParentMessageId` | string | no | Set when posting a quoted message. The gatekeeper fetches the parent and embeds a snapshot in the persisted message; the client does not send the snapshot itself. |
 
@@ -3229,8 +3228,7 @@ The same subject and request body cover three send variants: plain message, thre
   "id": "01970a4f8c2d7c9aQUVW",
   "content": "good morning",
   "requestId": "01970a4f-8c2d-7c9a-abcd-e0123456789a",
-  "threadParentMessageId": "01970a4f8c2d7c9aQRST",
-  "threadParentMessageCreatedAt": 1746518100000
+  "threadParentMessageId": "01970a4f8c2d7c9aQRST"
 }
 ```
 
@@ -3288,7 +3286,6 @@ Delivered on `chat.user.{account}.response.{requestId}`. See [Error envelope](#6
 | `invalid thread parent message ID "…": …` | `bad_request` | — | `threadParentMessageId` is not a valid message ID. |
 | `content must not be empty` | `bad_request` | — | Empty `content`. |
 | `content exceeds maximum size of 20480 bytes` | `bad_request` | — | `content` > 20 KiB. |
-| `validate thread parent fields: threadParentMessageCreatedAt is required when threadParentMessageId is set` | `bad_request` | — | Missing thread-parent timestamp. |
 | `not subscribed` | `forbidden` | `not_subscribed` | Sender is not a member of the room. |
 | `posting is restricted to owners and admins in this room` | `forbidden` | `large_room_post_restricted` | Non-owner/admin/bot posting a top-level message in a room above the large-room threshold (thread replies are exempt). |
 | `quoted parent {id} not found` | `not_found` | — | The quoted message lookup failed (deleted, cross-room, …). |

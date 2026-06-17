@@ -56,12 +56,11 @@ type RoomRestrictedSysData struct {
 }
 
 type SendMessageRequest struct {
-	ID                           string `json:"id"`
-	Content                      string `json:"content"`
-	RequestID                    string `json:"requestId"`
-	ThreadParentMessageID        string `json:"threadParentMessageId,omitempty"`
-	ThreadParentMessageCreatedAt *int64 `json:"threadParentMessageCreatedAt,omitempty"`
-	QuotedParentMessageID        string `json:"quotedParentMessageId,omitempty"`
+	ID                    string `json:"id"`
+	Content               string `json:"content"`
+	RequestID             string `json:"requestId"`
+	ThreadParentMessageID string `json:"threadParentMessageId,omitempty"`
+	QuotedParentMessageID string `json:"quotedParentMessageId,omitempty"`
 	// TShow requests that a thread reply also appear in the parent room's
 	// channel timeline (the "Also send to channel" option). Only meaningful
 	// when ThreadParentMessageID is set — message-gatekeeper normalizes it to
