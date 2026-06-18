@@ -511,6 +511,11 @@ const (
 	// MessageTypeRoomRestricted is the system-message type emitted when a
 	// channel's Restricted/ExternalAccess flags change.
 	MessageTypeRoomRestricted = "room_restricted"
+	// MessageTypeTeamsMeetStarted is the system-message type emitted when a
+	// Microsoft Teams online meeting is created for a room. Its SysMsgData
+	// carries the meeting ID + join URL (TeamsMeetStartedSysData) and is read
+	// back per-room to make the meetings RPC idempotent.
+	MessageTypeTeamsMeetStarted = "teams_meet_started"
 )
 
 const (

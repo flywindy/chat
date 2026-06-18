@@ -78,6 +78,15 @@ var (
 	// version has aged out of the grace window).
 	errRoomKeyAbsent = errcode.NotFound("room key not available")
 
+	// Sentinels for the Microsoft Teams integration RPCs.
+	errTeamsAccountRequired       = errcode.BadRequest("accountName is required")
+	errTeamsRoomIDRequired        = errcode.BadRequest("roomId is required")
+	errTeamsNoCallableMembers     = errcode.NotFound("no other members to call", errcode.WithReason(errcode.RoomTargetNotMember))
+	errTeamsCallTooManyMembers    = errcode.Conflict("room has too many members to start a call", errcode.WithReason(errcode.RoomMaxSizeReached))
+	errTeamsMeetingTooManyMembers = errcode.Conflict("room has too many members to start a meeting", errcode.WithReason(errcode.RoomMaxSizeReached))
+	errTeamsNotConfigured         = errcode.Internal("teams meetings are not configured")
+	errTeamsRequesterMissing      = errcode.Unauthenticated("requester account missing")
+
 	// Sentinels for rename and restricted operations.
 	errOnlyOwnersOrAdmins       = errcode.Forbidden("only owners or platform admins can rename a channel")
 	errOnlyAdmins               = errcode.Forbidden("only admins can change room restricted state")

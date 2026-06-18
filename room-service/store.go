@@ -227,3 +227,21 @@ type MessageReader interface {
 		roomID string, createdAt time.Time, senderAccount string, found bool, err error,
 	)
 }
+
+// TeamsMeetingStore is the first-class idempotency record for a room's Teams
+// meeting. It replaces the message-bucket marker scan with a dedicated Mongo
+// document keyed unique on (roomId, siteId), mirroring the unique-index +
+// IsDuplicateKeyError retry-safe-write convention room-service already uses for
+// room_members and subscriptions (see store_mongo.go EnsureIndexes).
+type TeamsMeetingStore interface {
+	// GetTeamsMeeting fast-path reads the room's existing meeting record.
+	// found=false with err=nil means the room has no meeting yet.
+	GetTeamsMeeting(ctx context.Context, roomID, siteID string) (
+		record *model.TeamsMeetingRecord, found bool, err error,
+	)
+	// InsertTeamsMeeting inserts the meeting record. The (roomId, siteId)
+	// unique index makes this the idempotency gate: a concurrent second insert
+	// returns a duplicate-key error (mongo.IsDuplicateKeyError), which the
+	// handler treats as "a concurrent winner already wrote it" and reads back.
+	InsertTeamsMeeting(ctx context.Context, record model.TeamsMeetingRecord) error
+}

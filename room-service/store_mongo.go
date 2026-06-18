@@ -33,6 +33,7 @@ type MongoStore struct {
 	users               *mongo.Collection
 	apps                *mongo.Collection
 	botCmdMenus         *mongo.Collection
+	teamsMeetings       *mongo.Collection
 }
 
 func NewMongoStore(db *mongo.Database) *MongoStore {
@@ -44,6 +45,7 @@ func NewMongoStore(db *mongo.Database) *MongoStore {
 		users:               db.Collection("users"),
 		apps:                db.Collection("apps"),
 		botCmdMenus:         db.Collection("bot_cmd_menu"),
+		teamsMeetings:       db.Collection("teams_meetings"),
 	}
 }
 
@@ -166,6 +168,42 @@ func (s *MongoStore) EnsureIndexes(ctx context.Context) error {
 		Keys: bson.D{{Key: "activeStatus", Value: 1}, {Key: "name", Value: 1}},
 	}); err != nil {
 		return fmt.Errorf("ensure bot_cmd_menu (activeStatus,name) index: %w", err)
+	}
+	// Unique logical key for teams_meetings — the per-room idempotency record for
+	// the meetings RPC. A concurrent second create hits this constraint and the
+	// loser reads back the winner's record instead of inserting a duplicate (and
+	// thus publishing a second teams_meet_started system message). Same retry-safe
+	// rationale as the room_members / subscriptions unique indexes above.
+	if _, err := s.teamsMeetings.Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys:    bson.D{{Key: "roomId", Value: 1}, {Key: "siteId", Value: 1}},
+		Options: options.Index().SetUnique(true),
+	}); err != nil {
+		return fmt.Errorf("ensure teams_meetings (roomId,siteId) unique index: %w", err)
+	}
+	return nil
+}
+
+// GetTeamsMeeting fast-path reads the room's existing Teams meeting record.
+// found=false with err=nil means the room has no meeting yet.
+func (s *MongoStore) GetTeamsMeeting(ctx context.Context, roomID, siteID string) (*model.TeamsMeetingRecord, bool, error) {
+	var rec model.TeamsMeetingRecord
+	err := s.teamsMeetings.FindOne(ctx, bson.M{"roomId": roomID, "siteId": siteID}).Decode(&rec)
+	if errors.Is(err, mongo.ErrNoDocuments) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("get teams meeting for room %q: %w", roomID, err)
+	}
+	return &rec, true, nil
+}
+
+// InsertTeamsMeeting inserts the meeting record. The (roomId, siteId) unique
+// index makes this the idempotency gate: a concurrent second insert returns a
+// duplicate-key error the handler detects via mongo.IsDuplicateKeyError (which
+// unwraps with errors.As) and reads back the winner's record.
+func (s *MongoStore) InsertTeamsMeeting(ctx context.Context, record model.TeamsMeetingRecord) error {
+	if _, err := s.teamsMeetings.InsertOne(ctx, record); err != nil {
+		return fmt.Errorf("insert teams meeting record: %w", err)
 	}
 	return nil
 }

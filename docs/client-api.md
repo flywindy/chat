@@ -558,6 +558,9 @@ and Rename Room.
 | `chat.user.{account}.request.orgs.{orgID}.{siteID}.members` | [List Org Members](#list-org-members) |
 | `chat.user.{account}.request.room.{roomID}.{siteID}.app.tabs` | [Get Room App Tabs](#get-room-app-tabs) |
 | `chat.user.{account}.request.room.{roomID}.{siteID}.app.cmd-menu` | [Get Room App Command Menu](#get-room-app-command-menu) |
+| `chat.user.{account}.request.room.{roomID}.{siteID}.teams.call` | [Start Teams Room Call](#start-teams-room-call) |
+| `chat.user.{account}.request.teams.{siteID}.call.user` | [Start Teams User Call](#start-teams-user-call) |
+| `chat.user.{account}.request.room.{roomID}.{siteID}.teams.meeting` | [Start Teams Meeting](#start-teams-meeting) |
 
 #### Create Room
 
@@ -1797,6 +1800,170 @@ Same envelope and sentinels as Get Room App Tabs.
 ##### Triggered events — success path
 
 `None — reply only.`
+
+##### Triggered events — error path
+
+`None — error returned only via the reply subject.`
+
+---
+
+> **Note on `External client label`:** each Teams RPC below lists an HTTP-style
+> label (e.g. `POST /api/v1/calls/room`). That label is the path the **edge
+> gateway exposes to external/mobile clients**; the gateway translates it to the
+> NATS RPC shown under **Subject**. This service implements **only** the NATS RPC
+> (request/reply over `_INBOX.>`) — it does not serve an HTTP endpoint.
+
+#### Start Teams Room Call
+
+Builds a Microsoft Teams deep link for a call to every other member of the room (the caller is excluded). No Graph API call — the link is built from the member list, deriving each member's email as `account@TEAMS_EMAIL_DOMAIN`.
+
+External client label: `POST /api/v1/calls/room`.
+
+**Subject:** `chat.user.{account}.request.room.{roomID}.{siteID}.teams.call`
+**Reply subject:** auto-generated `_INBOX.>` (NATS request/reply)
+
+- `{siteID}` must be the room's origin `siteID`.
+- The requester account is taken from the subject, not from a token.
+
+##### Request body
+
+Empty body is accepted (the room is the subject's `{roomID}`).
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `roomId` | string | no | Optional echo of the room; the authoritative room is the subject's `{roomID}`. |
+
+##### Success response
+
+| Field | Type | Notes |
+|---|---|---|
+| `joinUrl` | string | A `https://teams.microsoft.com/l/call/0/0?users=<comma-joined emails>` deep link. |
+
+```json
+{ "joinUrl": "https://teams.microsoft.com/l/call/0/0?users=bob%40corp.com%2Ccarol%40corp.com" }
+```
+
+##### Error response
+
+See [Error envelope](#6-error-envelope-reference).
+
+| Reason | Code | When |
+|---|---|---|
+| — | `unauthenticated` | Requester account missing from the subject. |
+| — | `bad_request` | `roomId` empty (subject malformed). |
+| `not_room_member` | `forbidden` | Caller is not a member of the room. |
+| `target_not_member` | `not_found` | No other callable members in the room. |
+| `max_room_size_reached` | `conflict` | More than `ROOM_MEMBERS_CALL_LIMIT` (20) other members. |
+
+##### Triggered events — success path
+
+`None — reply only.`
+
+##### Triggered events — error path
+
+`None — error returned only via the reply subject.`
+
+---
+
+#### Start Teams User Call
+
+Builds a Microsoft Teams 1:1 call deep link for a single target account. No Graph API call. The target email is derived as `accountName@TEAMS_EMAIL_DOMAIN`.
+
+External client label: `POST /api/v1/calls/user`.
+
+**Subject:** `chat.user.{account}.request.teams.{siteID}.call.user`
+**Reply subject:** auto-generated `_INBOX.>` (NATS request/reply)
+
+- The requester account is taken from the subject, not from a token.
+
+##### Request body
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `accountName` | string | yes | The target user's account. |
+
+```json
+{ "accountName": "bob" }
+```
+
+##### Success response
+
+| Field | Type | Notes |
+|---|---|---|
+| `joinUrl` | string | A `https://teams.microsoft.com/l/call/0/0?users=<email>` deep link. |
+
+```json
+{ "joinUrl": "https://teams.microsoft.com/l/call/0/0?users=bob%40corp.com" }
+```
+
+##### Error response
+
+See [Error envelope](#6-error-envelope-reference).
+
+| Reason | Code | When |
+|---|---|---|
+| — | `unauthenticated` | Requester account missing from the subject. |
+| — | `bad_request` | `accountName` empty. |
+
+##### Triggered events — success path
+
+`None — reply only.`
+
+##### Triggered events — error path
+
+`None — error returned only via the reply subject.`
+
+---
+
+#### Start Teams Meeting
+
+Creates a Microsoft Teams `onlineMeeting` via the Graph API and returns its join URL. **Idempotent per room, including under concurrency:** the meeting is created via Graph's `createOrGet` endpoint keyed on a stable per-room `externalId`, and a first-class `teams_meetings` record with a unique key on `(roomId, siteId)` guards local state. Repeated or concurrent calls for the same room return the same meeting and publish exactly one `teams_meet_started` system message. Attendee emails are derived as `account@TEAMS_EMAIL_DOMAIN`.
+
+> Graph client details (config env vars, app-only auth, the `createOrGet` idempotency key, the production application-access-policy requirement, and how to test without real credentials) are documented in [`docs/msgraph-client.md`](msgraph-client.md).
+
+External client label: `POST /api/v1/meetings`.
+
+**Subject:** `chat.user.{account}.request.room.{roomID}.{siteID}.teams.meeting`
+**Reply subject:** auto-generated `_INBOX.>` (NATS request/reply)
+
+- `{siteID}` must be the room's origin `siteID`.
+- The requester account is taken from the subject, not from a token; it becomes the meeting organizer.
+
+##### Request body
+
+Empty body is accepted (the room is the subject's `{roomID}`).
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `roomId` | string | no | Optional echo of the room; the authoritative room is the subject's `{roomID}`. |
+
+##### Success response
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | string | The Graph `onlineMeeting` ID. |
+| `joinUrl` | string | The meeting's join web URL. |
+
+```json
+{ "id": "MSpkYzE3...", "joinUrl": "https://teams.microsoft.com/l/meetup-join/..." }
+```
+
+##### Error response
+
+See [Error envelope](#6-error-envelope-reference).
+
+| Reason | Code | When |
+|---|---|---|
+| — | `unauthenticated` | Requester account missing from the subject. |
+| — | `bad_request` | `roomId` empty (subject malformed). |
+| `not_room_member` | `forbidden` | Caller is not a member of the room. |
+| `max_room_size_reached` | `conflict` | Room has more than `ROOM_MEMBERS_LIMIT` (500) members. |
+| — | `internal` | Teams meetings not configured, or the Graph create failed. |
+
+##### Triggered events — success path
+
+On first creation, a `teams_meet_started` system message is published on the canonical message path (`chat.msg.canonical.{siteID}.created`), persisted by `message-worker`, and fanned out to room members like other system messages. Its `sysMsgData` carries `{ "meetingId": "...", "joinUrl": "..." }`.
+On idempotent repeat calls that return cached meeting details, no additional system message is published.
 
 ##### Triggered events — error path
 

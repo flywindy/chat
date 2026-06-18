@@ -727,3 +727,57 @@ func (mr *MockMessageReaderMockRecorder) GetMessageRoomAndCreatedAt(ctx, message
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetMessageRoomAndCreatedAt", reflect.TypeOf((*MockMessageReader)(nil).GetMessageRoomAndCreatedAt), ctx, messageID)
 }
+
+// MockTeamsMeetingStore is a mock of TeamsMeetingStore interface.
+type MockTeamsMeetingStore struct {
+	ctrl     *gomock.Controller
+	recorder *MockTeamsMeetingStoreMockRecorder
+	isgomock struct{}
+}
+
+// MockTeamsMeetingStoreMockRecorder is the mock recorder for MockTeamsMeetingStore.
+type MockTeamsMeetingStoreMockRecorder struct {
+	mock *MockTeamsMeetingStore
+}
+
+// NewMockTeamsMeetingStore creates a new mock instance.
+func NewMockTeamsMeetingStore(ctrl *gomock.Controller) *MockTeamsMeetingStore {
+	mock := &MockTeamsMeetingStore{ctrl: ctrl}
+	mock.recorder = &MockTeamsMeetingStoreMockRecorder{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use.
+func (m *MockTeamsMeetingStore) EXPECT() *MockTeamsMeetingStoreMockRecorder {
+	return m.recorder
+}
+
+// GetTeamsMeeting mocks base method.
+func (m *MockTeamsMeetingStore) GetTeamsMeeting(ctx context.Context, roomID, siteID string) (*model.TeamsMeetingRecord, bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetTeamsMeeting", ctx, roomID, siteID)
+	ret0, _ := ret[0].(*model.TeamsMeetingRecord)
+	ret1, _ := ret[1].(bool)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
+}
+
+// GetTeamsMeeting indicates an expected call of GetTeamsMeeting.
+func (mr *MockTeamsMeetingStoreMockRecorder) GetTeamsMeeting(ctx, roomID, siteID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetTeamsMeeting", reflect.TypeOf((*MockTeamsMeetingStore)(nil).GetTeamsMeeting), ctx, roomID, siteID)
+}
+
+// InsertTeamsMeeting mocks base method.
+func (m *MockTeamsMeetingStore) InsertTeamsMeeting(ctx context.Context, record model.TeamsMeetingRecord) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "InsertTeamsMeeting", ctx, record)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// InsertTeamsMeeting indicates an expected call of InsertTeamsMeeting.
+func (mr *MockTeamsMeetingStoreMockRecorder) InsertTeamsMeeting(ctx, record any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InsertTeamsMeeting", reflect.TypeOf((*MockTeamsMeetingStore)(nil).InsertTeamsMeeting), ctx, record)
+}

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/hmchangw/chat/pkg/subject"
 )
@@ -889,4 +890,49 @@ func TestPresenceSubjects(t *testing.T) {
 	assert.Equal(t, "chat.user.presence.site-a.query.batch", subject.PresenceQueryBatch("site-a"))
 	assert.Equal(t, "chat.server.request.presence.site-a.query.batch", subject.PresenceQueryBatchPeer("site-a"))
 	assert.Equal(t, "chat.user.presence.state.alice", subject.PresenceState("alice"))
+}
+
+func TestTeamsSubjectBuilders(t *testing.T) {
+	t.Run("happy path", func(t *testing.T) {
+		got, err := subject.TeamsRoomCall("alice", "r1", "site-a")
+		require.NoError(t, err)
+		assert.Equal(t, "chat.user.alice.request.room.r1.site-a.teams.call", got)
+
+		got, err = subject.TeamsMeeting("alice", "r1", "site-a")
+		require.NoError(t, err)
+		assert.Equal(t, "chat.user.alice.request.room.r1.site-a.teams.meeting", got)
+
+		got, err = subject.TeamsUserCall("alice", "site-a")
+		require.NoError(t, err)
+		assert.Equal(t, "chat.user.alice.request.teams.site-a.call.user", got)
+	})
+
+	t.Run("wildcard account rejected with error (no panic)", func(t *testing.T) {
+		got, err := subject.TeamsRoomCall("*", "r1", "site-a")
+		require.Error(t, err)
+		assert.Empty(t, got)
+
+		got, err = subject.TeamsMeeting(">", "r1", "site-a")
+		require.Error(t, err)
+		assert.Empty(t, got)
+
+		got, err = subject.TeamsUserCall("*", "site-a")
+		require.Error(t, err)
+		assert.Empty(t, got)
+	})
+
+	t.Run("empty account rejected with error", func(t *testing.T) {
+		_, err := subject.TeamsRoomCall("", "r1", "site-a")
+		require.Error(t, err)
+		_, err = subject.TeamsMeeting("", "r1", "site-a")
+		require.Error(t, err)
+		_, err = subject.TeamsUserCall("", "site-a")
+		require.Error(t, err)
+	})
+
+	t.Run("pattern builders", func(t *testing.T) {
+		assert.Equal(t, "chat.user.{account}.request.room.{roomID}.site-a.teams.call", subject.TeamsRoomCallPattern("site-a"))
+		assert.Equal(t, "chat.user.{account}.request.room.{roomID}.site-a.teams.meeting", subject.TeamsMeetingPattern("site-a"))
+		assert.Equal(t, "chat.user.{account}.request.teams.site-a.call.user", subject.TeamsUserCallPattern("site-a"))
+	})
 }

@@ -18,6 +18,7 @@ import (
 	"github.com/hmchangw/chat/pkg/health"
 	"github.com/hmchangw/chat/pkg/logctx"
 	"github.com/hmchangw/chat/pkg/mongoutil"
+	"github.com/hmchangw/chat/pkg/msgraph"
 	"github.com/hmchangw/chat/pkg/natsrouter"
 	"github.com/hmchangw/chat/pkg/natsutil"
 	"github.com/hmchangw/chat/pkg/otelutil"
@@ -46,6 +47,16 @@ type config struct {
 	HealthAddr               string          `env:"HEALTH_ADDR" envDefault:":8081"`
 	Bootstrap                bootstrapConfig `envPrefix:"BOOTSTRAP_"`
 	RestrictedRoomMinMembers int             `env:"RESTRICTED_ROOM_MIN_MEMBERS" envDefault:"5"`
+	// Microsoft Teams integration. Teams* credentials are required only for the
+	// meetings RPC (Graph onlineMeeting create); the deep-link RPCs use only
+	// EmailDomain. When TenantID/ClientID/ClientSecret are unset the meetings RPC
+	// returns errTeamsNotConfigured; the deep-link RPCs still work.
+	TeamsTenantID        string `env:"TEAMS_TENANT_ID"          envDefault:""`
+	TeamsClientID        string `env:"TEAMS_CLIENT_ID"          envDefault:""`
+	TeamsClientSecret    string `env:"TEAMS_CLIENT_SECRET"      envDefault:""`
+	TeamsEmailDomain     string `env:"TEAMS_EMAIL_DOMAIN"       envDefault:"dev.local"`
+	RoomMembersLimit     int    `env:"ROOM_MEMBERS_LIMIT"       envDefault:"500"`
+	RoomMembersCallLimit int    `env:"ROOM_MEMBERS_CALL_LIMIT"  envDefault:"20"`
 	// Atrest/Vault drive eager at-rest DEK provisioning at room creation.
 	// When Atrest.Enabled is false the DEK is created lazily by message-worker.
 	Atrest   atrest.Config      // env vars already prefixed ATREST_*
@@ -139,6 +150,18 @@ func main() {
 	}
 	cassReader := NewCassMessageReader(cassSession)
 
+	// Graph client backs the meetings RPC. Constructed only when the Azure app
+	// credentials are present; otherwise the meetings RPC reports not-configured
+	// while the deep-link RPCs keep working.
+	var graphClient msgraph.Client
+	if cfg.TeamsTenantID != "" && cfg.TeamsClientID != "" && cfg.TeamsClientSecret != "" {
+		graphClient = msgraph.New(msgraph.Config{
+			TenantID:     cfg.TeamsTenantID,
+			ClientID:     cfg.TeamsClientID,
+			ClientSecret: cfg.TeamsClientSecret,
+		})
+	}
+
 	// Eager at-rest DEK provisioning: when enabled, room creation provisions
 	// the room's wrapped DEK so the first message write doesn't pay the create
 	// cost. message-worker's lazy creation remains the fallback for remote
@@ -179,6 +202,11 @@ func main() {
 		nc.NatsConn().MaxPayload(),
 	)
 	handler.dekProvisioner = dekProvisioner
+	handler.graphClient = graphClient
+	handler.teamsMeetingStore = store
+	handler.teamsEmailDomain = cfg.TeamsEmailDomain
+	handler.roomMembersLimit = cfg.RoomMembersLimit
+	handler.roomMembersCallLimit = cfg.RoomMembersCallLimit
 
 	router := natsrouter.New(nc, "room-service")
 	router.Use(natsrouter.Recovery(), natsrouter.RequestID(), natsrouter.Logging())

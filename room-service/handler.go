@@ -25,6 +25,7 @@ import (
 	"github.com/hmchangw/chat/pkg/idgen"
 	"github.com/hmchangw/chat/pkg/logctx"
 	"github.com/hmchangw/chat/pkg/model"
+	"github.com/hmchangw/chat/pkg/msgraph"
 	"github.com/hmchangw/chat/pkg/natsrouter"
 	"github.com/hmchangw/chat/pkg/natsutil"
 	"github.com/hmchangw/chat/pkg/roomkeystore"
@@ -52,6 +53,18 @@ type Handler struct {
 	restrictedRoomMinMembers int
 	siteURL                  *url.URL
 	maxResponseBytes         int64
+
+	// Microsoft Teams integration. graphClient is nil-safe: only the meetings
+	// RPC uses it (the deep-link RPCs are pure string building). teamsEmailDomain
+	// derives a member's email as account@domain. teamsMeetingStore backs the
+	// per-room idempotency record (Mongo unique key on roomId+siteId).
+	// roomMembersLimit / roomMembersCallLimit cap the member set for meetings and
+	// calls respectively.
+	graphClient          msgraph.Client
+	teamsMeetingStore    TeamsMeetingStore
+	teamsEmailDomain     string
+	roomMembersLimit     int
+	roomMembersCallLimit int
 }
 
 func NewHandler(store RoomStore, keyStore RoomKeyStore, memberListClient MemberListClient, msgReader MessageReader, siteID string, maxRoomSize, maxBatchSize int, memberListTimeout time.Duration, restrictedRoomMinMembers int, publishToStream func(context.Context, string, []byte, string) error, publishCore func(context.Context, string, []byte) error, siteURL *url.URL, maxResponseBytes int64) *Handler {
@@ -100,6 +113,9 @@ func (h *Handler) Register(r *natsrouter.Router) {
 	natsrouter.Register(r, subject.ThreadUnreadSummarySubscribe(h.siteID), h.threadUnreadSummary)
 	natsrouter.Register(r, subject.RoomKeyEnsure(h.siteID), h.ensureRoomKey)
 	natsrouter.Register(r, subject.RoomCreatePattern(h.siteID), h.createRoom)
+	natsrouter.Register(r, subject.TeamsRoomCallPattern(h.siteID), h.teamsRoomCall)
+	natsrouter.Register(r, subject.TeamsUserCallPattern(h.siteID), h.teamsUserCall)
+	natsrouter.Register(r, subject.TeamsMeetingPattern(h.siteID), h.teamsMeeting)
 }
 
 func (h *Handler) createRoom(c *natsrouter.Context, req model.CreateRoomRequest) (*model.CreateRoomReply, error) { //nolint:gocritic // hugeParam: req is passed by value to satisfy the natsrouter.Register handler signature

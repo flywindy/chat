@@ -56,6 +56,15 @@ services:
       - ROOM_KEY_GRACE_PERIOD=24h
       - CASSANDRA_HOSTS=cassandra
       - CASSANDRA_KEYSPACE=chat
+      # Microsoft Teams integration. The deep-link RPCs (calls/room, calls/user)
+      # only need TEAMS_EMAIL_DOMAIN; the meetings RPC needs the Azure app creds
+      # below and reports not-configured until they are set (live test only).
+      - TEAMS_EMAIL_DOMAIN=dev.local
+      - TEAMS_TENANT_ID=
+      - TEAMS_CLIENT_ID=
+      - TEAMS_CLIENT_SECRET=
+      - ROOM_MEMBERS_LIMIT=500
+      - ROOM_MEMBERS_CALL_LIMIT=20
       - BOOTSTRAP_STREAMS=true
       - ATREST_ENABLED=true
       - VAULT_ADDR=http://vault:8200
