@@ -19,18 +19,20 @@ const (
 	pinMsgByRoom   = `UPDATE messages_by_room SET pinned_at = ? WHERE room_id = ? AND bucket = ? AND created_at = ? AND message_id = ?`
 	unpinMsgByRoom = `UPDATE messages_by_room SET pinned_at = null WHERE room_id = ? AND bucket = ? AND created_at = ? AND message_id = ?`
 
+	// reactions is intentionally absent: the pinned panel does not render reactions;
+	// callers that need them side-fetch from messages_by_id.
 	insertPinnedMsg = `INSERT INTO pinned_messages_by_room (
 		room_id, pinned_at, message_id, sender, msg, mentions,
 		attachments, file, card, card_action, quoted_parent_message, visible_to,
-		reactions, deleted, type, sys_msg_data, site_id, edited_at, updated_at, pinned_by,
+		deleted, type, sys_msg_data, site_id, edited_at, updated_at, pinned_by,
 		created_at, tshow, thread_parent_id, thread_parent_created_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	deletePinnedRow = `DELETE FROM pinned_messages_by_room WHERE room_id = ? AND pinned_at = ? AND message_id = ?`
 
 	pinnedColumns = "room_id, pinned_at, message_id, sender, " +
 		"msg, mentions, attachments, file, card, card_action, quoted_parent_message, " +
-		"visible_to, reactions, deleted, type, sys_msg_data, site_id, edited_at, " +
+		"visible_to, deleted, type, sys_msg_data, site_id, edited_at, " +
 		"updated_at, pinned_by, created_at, tshow, thread_parent_id, thread_parent_created_at"
 
 	pinnedByRoomQuery = "SELECT " + pinnedColumns + " FROM pinned_messages_by_room WHERE room_id = ?"
@@ -66,7 +68,7 @@ func (r *Repository) PinMessage(ctx context.Context, msg *models.Message, pinned
 	batch.Query(insertPinnedMsg,
 		msg.RoomID, pinnedAt, msg.MessageID, msg.Sender, msg.Msg, msg.Mentions,
 		msg.Attachments, msg.File, msg.Card, msg.CardAction, msg.QuotedParentMessage, msg.VisibleTo,
-		msg.Reactions, msg.Deleted, msg.Type, msg.SysMsgData, msg.SiteID, msg.EditedAt, msg.UpdatedAt, pinnedBy,
+		msg.Deleted, msg.Type, msg.SysMsgData, msg.SiteID, msg.EditedAt, msg.UpdatedAt, pinnedBy,
 		msg.CreatedAt, msg.TShow, msg.ThreadParentID, msg.ThreadParentCreatedAt,
 	)
 	withRoomRow := hasRoomTimelineRow(msg)

@@ -135,7 +135,6 @@ func setupCassandra(t testing.TB) *gocql.Session {
 		card_action FROZEN<"CardAction">,
 		quoted_parent_message FROZEN<"QuotedParentMessage">,
 		visible_to TEXT,
-		reactions MAP<FROZEN<reaction_key>, FROZEN<reactor_info>>,
 		deleted BOOLEAN,
 		type TEXT,
 		sys_msg_data BLOB,
