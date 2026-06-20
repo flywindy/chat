@@ -586,9 +586,7 @@ func TestSubscriptionJSON_ThreadUnreadOmittedAlertAlwaysPresent(t *testing.T) {
 }
 
 func TestDMSubscriptionJSON_EmbeddedFlattensWithHRInfo(t *testing.T) {
-	// Verify Go's embedded *Subscription serialisation flattens onto the
-	// top-level object — the frontend depends on this in api/types.ts
-	// (DMSubscription extends Subscription).
+	// Embedded *Subscription must flatten onto the top-level JSON object — frontend api/types.ts depends on this.
 	d := model.DMSubscription{
 		Subscription: &model.Subscription{
 			ID:       "s-dm-1",
@@ -627,9 +625,7 @@ func TestDMSubscriptionJSON_EmbeddedFlattensWithHRInfo(t *testing.T) {
 }
 
 func TestDMSubscriptionJSON_HRInfoOmittedWhenNil(t *testing.T) {
-	// `*SubscriptionHRInfo` with `omitempty` should disappear from the
-	// JSON when nil — channels/botDMs that share this wrapper shouldn't
-	// have a phantom hrInfo: null on the wire.
+	// nil *SubscriptionHRInfo with omitempty must not produce a phantom hrInfo:null on the wire.
 	d := model.DMSubscription{
 		Subscription: &model.Subscription{
 			ID:       "s-c-1",
@@ -651,9 +647,19 @@ func TestDMSubscriptionJSON_HRInfoOmittedWhenNil(t *testing.T) {
 	assert.False(t, hasHRInfo, "nil HRInfo must be omitted from JSON")
 }
 
+func TestSubscriptionItem_Base(t *testing.T) {
+	base := &model.Subscription{ID: "s1", Name: "row"}
+	items := []model.SubscriptionItem{
+		&model.ChannelSubscription{Subscription: base},
+		&model.DMSubscription{Subscription: base},
+		&model.BotDMSubscription{Subscription: base},
+	}
+	for _, it := range items {
+		assert.Same(t, base, it.Base(), "Base() must return the embedded base subscription")
+	}
+}
+
 func TestSubscriptionHRInfoJSON(t *testing.T) {
-	// All three fields are required strings (no omitempty) — when the
-	// HRInfo pointer is non-nil, every field is on the wire.
 	hr := model.SubscriptionHRInfo{
 		Account: "bob",
 		Name:    "鮑勃",
@@ -981,9 +987,6 @@ func TestRoomKeyGetResponseJSON(t *testing.T) {
 	roundTrip(t, &src, &dst)
 }
 
-// TestNotificationEventJSON_Reaction round-trips the reaction notification
-// envelope published on chat.user.{account}.notification when someone reacts
-// to a message.
 func TestNotificationEventJSON_Reaction(t *testing.T) {
 	src := model.NotificationEvent{
 		Type:   "reaction",
@@ -1661,6 +1664,72 @@ func TestListOrgMembersResponseJSON(t *testing.T) {
 	assert.Equal(t, resp, dst)
 }
 
+func TestSubscriptionRoomJSON(t *testing.T) {
+	t.Run("round trip with all fields", func(t *testing.T) {
+		pk := "dGVzdC1wcml2YXRlLWtleS1iYXNlNjQ="
+		kv := 7
+		lastMsg := int64(1735776000000)
+		lastMention := int64(1735862400000)
+		r := model.SubscriptionRoom{
+			SiteID:           "site-a",
+			Name:             "general",
+			UserCount:        42,
+			AppCount:         3,
+			LastMsgAt:        &lastMsg,
+			LastMsgID:        "m-100",
+			LastMentionAllAt: &lastMention,
+			PrivateKey:       &pk,
+			KeyVersion:       &kv,
+		}
+		roundTrip(t, &r, &model.SubscriptionRoom{})
+	})
+
+	t.Run("zero value omits all fields", func(t *testing.T) {
+		// #nosec G117 -- test roundtrip on a model whose PrivateKey field is part of the wire schema
+		data, err := json.Marshal(&model.SubscriptionRoom{})
+		require.NoError(t, err)
+		assert.JSONEq(t, `{}`, string(data))
+	})
+}
+
+func TestSubscriptionJSON_NestedRoom(t *testing.T) {
+	lastMsg := time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
+	s := model.Subscription{
+		ID:        "s1",
+		User:      model.SubscriptionUser{ID: "u1", Account: "alice"},
+		RoomID:    "r1",
+		SiteID:    "site-a",
+		RoomType:  model.RoomTypeChannel,
+		Name:      "general",
+		JoinedAt:  time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		UserCount: 42,
+		LastMsgAt: &lastMsg,
+		LastMsgID: "m-100",
+		Room: &model.SubscriptionRoom{
+			SiteID:    "site-a",
+			Name:      "general-canonical",
+			UserCount: 42,
+			LastMsgID: "m-100",
+		},
+	}
+	data, err := json.Marshal(&s)
+	require.NoError(t, err)
+
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(data, &raw))
+
+	// Room-derived fields are nested under "room" — never flattened on the wire.
+	for _, key := range []string{"userCount", "lastMsgAt", "lastMsgId"} {
+		_, present := raw[key]
+		assert.False(t, present, "flattened %q must not serialize at the top level", key)
+	}
+	room, ok := raw["room"].(map[string]any)
+	require.True(t, ok, "room object must be present")
+	assert.Equal(t, "general-canonical", room["name"])
+	assert.Equal(t, float64(42), room["userCount"])
+	assert.Equal(t, "m-100", room["lastMsgId"])
+}
+
 func TestRoomsInfoBatchRequestJSON(t *testing.T) {
 	src := model.RoomsInfoBatchRequest{
 		RoomIDs: []string{"r1", "r2", "r3"},
@@ -1685,7 +1754,10 @@ func TestRoomInfoJSON(t *testing.T) {
 			Found:            true,
 			SiteID:           "site-a",
 			Name:             "general",
+			UserCount:        42,
+			AppCount:         3,
 			LastMsgAt:        &lastMsg,
+			LastMsgID:        "m-100",
 			LastMentionAllAt: &lastMention,
 			PrivateKey:       &pk,
 			KeyVersion:       &kv,
@@ -1719,7 +1791,7 @@ func TestRoomInfoJSON(t *testing.T) {
 		assert.True(t, foundPresent, "found must be present")
 		assert.Equal(t, false, foundVal)
 
-		for _, key := range []string{"siteId", "name", "lastMsgAt", "lastMentionAllAt", "privateKey", "keyVersion", "error"} {
+		for _, key := range []string{"siteId", "name", "userCount", "appCount", "lastMsgAt", "lastMsgId", "lastMentionAllAt", "privateKey", "keyVersion", "error"} {
 			_, present := raw[key]
 			assert.False(t, present, "%q should be omitted", key)
 		}
@@ -1739,7 +1811,7 @@ func TestRoomInfoJSON(t *testing.T) {
 		var raw map[string]any
 		require.NoError(t, json.Unmarshal(data, &raw))
 
-		for _, key := range []string{"lastMsgAt", "lastMentionAllAt", "privateKey", "keyVersion"} {
+		for _, key := range []string{"userCount", "lastMsgAt", "lastMsgId", "lastMentionAllAt", "privateKey", "keyVersion"} {
 			_, present := raw[key]
 			assert.False(t, present, "%q should be omitted when zero/nil", key)
 		}
@@ -2165,11 +2237,6 @@ func TestCreateRoomRequestRoundtrip(t *testing.T) {
 	assert.Equal(t, int64(1740000000000), dst.Timestamp)
 }
 
-// TestErrorResponseRoomIDOmitempty was removed: model.ErrorResponse was deleted
-// alongside the rest of the legacy error machinery (see pkg/errcode for the
-// canonical client-facing error type). The DM-exists path now returns a success
-// reply (model.CreateRoomReply{Status: CreateRoomStatusExists, RoomID}).
-
 func TestAsyncJobResultShape(t *testing.T) {
 	r := model.AsyncJobResult{
 		RequestID: "req-1",
@@ -2227,9 +2294,6 @@ func TestAddMembersRequestNoRequestIDField(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, string(body), "requestId")
 }
-
-// TestErrorResponseJSON was removed alongside model.ErrorResponse. The wire
-// envelope is now owned by pkg/errcode (see pkg/errcode/error_test.go).
 
 func TestReadReceiptRequestJSON(t *testing.T) {
 	r := model.ReadReceiptRequest{MessageID: "m1"}
@@ -2447,11 +2511,10 @@ func TestAppAssistantDisabledRoundtrip(t *testing.T) {
 	assert.False(t, dst.Assistant.Enabled)
 }
 
-func TestAppRoundtrip_WithChannelTabAndAvatar(t *testing.T) {
+func TestAppRoundtrip_WithChannelTab(t *testing.T) {
 	a := model.App{
 		ID:        "app1",
 		Name:      "Calendar",
-		AvatarURL: "https://cdn.example.com/avatars/calendar.png",
 		Assistant: &model.AppAssistant{Enabled: true, Name: "calendar.bot"},
 		ChannelTab: &model.AppChannelTab{
 			Enabled: true,
@@ -2470,7 +2533,6 @@ func TestAppRoundtrip_WithChannelTabAndAvatar(t *testing.T) {
 	assert.Equal(t, "Calendar", dst.ChannelTab.Name)
 	assert.Equal(t, "https://upstream.example.com/calendar/${roomId}/${siteId}/index",
 		dst.ChannelTab.URL.Default)
-	assert.Equal(t, "https://cdn.example.com/avatars/calendar.png", dst.AvatarURL)
 }
 
 func TestAppChannelTabRoundtrip(t *testing.T) {
@@ -2482,6 +2544,109 @@ func TestAppChannelTabRoundtrip(t *testing.T) {
 	}
 	var dst model.AppChannelTab
 	roundTrip(t, &tab, &dst)
+}
+
+func TestAppRoundtrip_NewMetaFields(t *testing.T) {
+	a := model.App{
+		ID:   "app-meta",
+		Name: "Meta Bot",
+		Assistant: &model.AppAssistant{
+			Enabled:  true,
+			Name:     "meta.bot",
+			Username: "Meta Assistant",
+		},
+		AppViewURL:    map[string]string{"default": "https://upstream/meta/view"},
+		ReportURL:     "https://upstream/meta/report",
+		ForumURL:      "https://upstream/meta/forum",
+		UserManualURL: "https://upstream/meta/manual",
+		Version:       "1.2.3",
+		Sponsors:      []model.AppSponsor{{Name: "Acme", Phone: "555-0199"}},
+	}
+	var dst model.App
+	roundTrip(t, &a, &dst)
+	require.NotNil(t, dst.Assistant)
+	assert.Equal(t, "Meta Assistant", dst.Assistant.Username)
+	assert.Equal(t, map[string]string{"default": "https://upstream/meta/view"}, dst.AppViewURL)
+	assert.Equal(t, "https://upstream/meta/report", dst.ReportURL)
+	assert.Equal(t, "https://upstream/meta/forum", dst.ForumURL)
+	assert.Equal(t, "https://upstream/meta/manual", dst.UserManualURL)
+	assert.Equal(t, "1.2.3", dst.Version)
+}
+
+func TestAppRoundtrip_NewMetaFields_OmitEmpty(t *testing.T) {
+	a := model.App{ID: "app-bare", Name: "Bare"}
+	b, err := json.Marshal(&a)
+	require.NoError(t, err)
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(b, &raw))
+	for _, k := range []string{"appViewUrl", "reportUrl", "forumUrl", "userManualUrl", "version"} {
+		_, present := raw[k]
+		assert.False(t, present, "empty %s must be omitted", k)
+	}
+}
+
+func TestAppSubscriptionRoundtrip(t *testing.T) {
+	m := model.AppSubscription{
+		AppID:       "app-meta",
+		Name:        "Meta App",
+		Description: "A metadata overlay",
+		Assistant: &model.AppAssistant{
+			Enabled:  true,
+			Name:     "meta.bot",
+			Username: "Meta Assistant",
+		},
+		AppViewURL:    map[string]string{"default": "https://upstream/meta/view"},
+		ReportURL:     "https://upstream/meta/report",
+		ForumURL:      "https://upstream/meta/forum",
+		UserManualURL: "https://upstream/meta/manual",
+		Version:       "1.2.3",
+		Sponsors:      []model.AppSponsor{{Name: "Acme", Phone: "555-0199"}},
+	}
+	var dst model.AppSubscription
+	roundTrip(t, &m, &dst)
+	require.NotNil(t, dst.Assistant)
+	assert.Equal(t, "meta.bot", dst.Assistant.Name)
+	assert.Equal(t, "app-meta", dst.AppID)
+	assert.Equal(t, "Meta App", dst.Name)
+	assert.Len(t, dst.Sponsors, 1)
+}
+
+func TestAppSubscriptionRoundtrip_OmitEmpty(t *testing.T) {
+	m := model.AppSubscription{}
+	b, err := json.Marshal(&m)
+	require.NoError(t, err)
+	assert.Equal(t, "{}", string(b), "a zero AppSubscription must marshal to an empty object")
+}
+
+func TestAppSubscriptionFromApp(t *testing.T) {
+	a := &model.App{
+		ID:          "app-x",
+		Name:        "Display Name",
+		Description: "desc",
+		Assistant:   &model.AppAssistant{Enabled: true, Name: "x.bot", Username: "X"},
+		// ChannelTab is intentionally NOT carried onto the app object.
+		ChannelTab:    &model.AppChannelTab{Enabled: true, Name: "tab"},
+		AppViewURL:    map[string]string{"default": "https://upstream/x/view"},
+		ReportURL:     "https://upstream/x/report",
+		ForumURL:      "https://upstream/x/forum",
+		UserManualURL: "https://upstream/x/manual",
+		Version:       "9.9",
+		Sponsors:      []model.AppSponsor{{Name: "Sponsor", Phone: "555-0000"}},
+	}
+	meta := model.AppSubscriptionFromApp(a)
+	require.NotNil(t, meta)
+	assert.Equal(t, "app-x", meta.AppID, "AppID must come from App.ID")
+	assert.Equal(t, "Display Name", meta.Name, "Name must come from App.Name")
+	assert.Equal(t, "desc", meta.Description)
+	require.NotNil(t, meta.Assistant)
+	assert.Equal(t, "x.bot", meta.Assistant.Name)
+	assert.Equal(t, "X", meta.Assistant.Username)
+	assert.Equal(t, map[string]string{"default": "https://upstream/x/view"}, meta.AppViewURL)
+	assert.Equal(t, "https://upstream/x/report", meta.ReportURL)
+	assert.Equal(t, "https://upstream/x/forum", meta.ForumURL)
+	assert.Equal(t, "https://upstream/x/manual", meta.UserManualURL)
+	assert.Equal(t, "9.9", meta.Version)
+	assert.Len(t, meta.Sponsors, 1)
 }
 
 func TestBotCmdMenuRoundtrip(t *testing.T) {
@@ -2545,7 +2710,6 @@ func TestGetRoomAppTabsResponseRoundtrip(t *testing.T) {
 				Name:      "Calendar",
 				TabURL:    "https://chat.example.com/calendar/r1/site-a/index",
 				Assistant: &model.AppAssistant{Enabled: true, Name: "cal.bot"},
-				AvatarURL: "https://cdn/cal.png",
 			},
 		},
 	}
@@ -3514,4 +3678,104 @@ func TestOplogEventJSON_Degraded(t *testing.T) {
 		Timestamp:      1718100000123,
 	}
 	roundTrip(t, &src, &model.OplogEvent{})
+}
+
+func TestUserStatusFields_RoundTrip(t *testing.T) {
+	src := model.User{
+		ID:           "u1",
+		Account:      "alice",
+		SiteID:       "site-a",
+		StatusText:   "busy",
+		StatusIsShow: true,
+	}
+	dst := model.User{}
+	roundTrip(t, &src, &dst)
+}
+
+func TestUserStatusUpdated_RoundTrip(t *testing.T) {
+	show := true
+	src := model.UserStatusUpdated{
+		Account:      "alice",
+		StatusText:   "in a meeting",
+		StatusIsShow: &show,
+		Timestamp:    1735689600000,
+	}
+	dst := model.UserStatusUpdated{}
+	roundTrip(t, &src, &dst)
+}
+
+func TestUserStatusUpdated_StatusIsShowOmittedWhenNil(t *testing.T) {
+	src := model.UserStatusUpdated{
+		Account:    "alice",
+		StatusText: "in a meeting",
+		Timestamp:  1735689600000,
+	}
+	data, err := json.Marshal(&src)
+	require.NoError(t, err)
+
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(data, &raw))
+	_, present := raw["statusIsShow"]
+	assert.False(t, present, "nil StatusIsShow must be omitted from JSON")
+}
+
+func TestSubscriptionEnrichmentFields_RoundTrip(t *testing.T) {
+	// The flattened $lookup baseline fields are internal (json:"-"); the wire
+	// carries room-derived data only via the nested Room object.
+	lastMsg := int64(1735819200000)
+	src := model.Subscription{
+		ID:       "s1",
+		User:     model.SubscriptionUser{ID: "u1", Account: "alice"},
+		RoomID:   "r1",
+		SiteID:   "site-a",
+		Roles:    []model.Role{model.RoleMember},
+		JoinedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		Room: &model.SubscriptionRoom{
+			SiteID:    "site-a",
+			UserCount: 42,
+			LastMsgAt: &lastMsg,
+			LastMsgID: "msg-abc",
+		},
+	}
+	dst := model.Subscription{}
+	roundTrip(t, &src, &dst)
+}
+
+func TestSubscriptionBaseMetadata_RoundTrip(t *testing.T) {
+	favoritedAt := time.Date(2026, 2, 1, 9, 0, 0, 0, time.UTC)
+	updatedAt := time.Date(2026, 3, 2, 10, 0, 0, 0, time.UTC)
+	src := model.Subscription{
+		ID:              "s1",
+		User:            model.SubscriptionUser{ID: "u1", Account: "alice"},
+		RoomID:          "r1",
+		SiteID:          "site-a",
+		Roles:           []model.Role{model.RoleMember},
+		RoomType:        model.RoomTypeChannel,
+		JoinedAt:        time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		HasGroupMention: true,
+		HasUnread:       true,
+		AvatarURL:       "https://cdn/avatar.png",
+		FavoritedAt:     &favoritedAt,
+		UpdatedAt:       &updatedAt,
+	}
+	dst := model.Subscription{}
+	roundTrip(t, &src, &dst)
+
+	// hasGroupMention/hasUnread are always emitted; the nullable metadata is omitted when unset.
+	raw := map[string]any{}
+	b, err := json.Marshal(&src)
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(b, &raw))
+	assert.Equal(t, true, raw["hasGroupMention"])
+	assert.Equal(t, true, raw["hasUnread"])
+	assert.Equal(t, "https://cdn/avatar.png", raw["avatarUrl"])
+
+	zero := map[string]any{}
+	zb, err := json.Marshal(&model.Subscription{ID: "z", JoinedAt: time.Now().UTC()})
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(zb, &zero))
+	for _, k := range []string{"avatarUrl", "favoritedAt", "updatedAt"} {
+		_, present := zero[k]
+		assert.False(t, present, "%q must be omitted when unset", k)
+	}
 }

@@ -5,7 +5,7 @@ trigger:
       - develop
   paths:
     include:
-      - mock-user-service/
+      - user-service/
       - pkg/
 
 pr:
@@ -14,12 +14,12 @@ pr:
       - main
   paths:
     include:
-      - mock-user-service/
+      - user-service/
       - pkg/
 
 variables:
   GO_VERSION: '1.25.11'
-  SERVICE_NAME: mock-user-service
+  SERVICE_NAME: user-service
   REGISTRY: '$(containerRegistry)'
 
 stages:

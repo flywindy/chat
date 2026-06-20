@@ -87,6 +87,14 @@ type stubInboxStore struct {
 	threadSubs         []model.ThreadSubscription
 	threadReads        []threadRead
 	applyThreadReadErr error
+	userStatusUpdates  []userStatusUpdate
+	userStatusErr      error
+}
+
+type userStatusUpdate struct {
+	account    string
+	statusText string
+	isShow     *bool
 }
 
 func (s *stubInboxStore) CreateSubscription(ctx context.Context, sub *model.Subscription) error {
@@ -325,6 +333,26 @@ func (s *stubInboxStore) getThreadSubs() []model.ThreadSubscription {
 	defer s.mu.Unlock()
 	cp := make([]model.ThreadSubscription, len(s.threadSubs))
 	copy(cp, s.threadSubs)
+	return cp
+}
+
+func (s *stubInboxStore) UpdateUserStatus(_ context.Context, account, statusText string, statusIsShow *bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.userStatusErr != nil {
+		return s.userStatusErr
+	}
+	s.userStatusUpdates = append(s.userStatusUpdates, userStatusUpdate{
+		account: account, statusText: statusText, isShow: statusIsShow,
+	})
+	return nil
+}
+
+func (s *stubInboxStore) getUserStatusUpdates() []userStatusUpdate {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cp := make([]userStatusUpdate, len(s.userStatusUpdates))
+	copy(cp, s.userStatusUpdates)
 	return cp
 }
 
@@ -1592,4 +1620,85 @@ func TestHandler_RoomVisibilityChanged_ForwardsEventTimestamp(t *testing.T) {
 	updates := store.getVisibilityUpdates()
 	require.Len(t, updates, 1)
 	assert.Equal(t, int64(12345), updates[0].updatedAt.UnixMilli())
+}
+
+func TestHandler_UserStatusUpdated(t *testing.T) {
+	isShow := true
+	store := &stubInboxStore{}
+	h := NewHandler(store)
+
+	payload, err := json.Marshal(model.UserStatusUpdated{
+		Account: "alice", StatusText: "out to lunch", StatusIsShow: &isShow, Timestamp: 12345,
+	})
+	require.NoError(t, err)
+	evt, err := json.Marshal(model.OutboxEvent{
+		Type: model.OutboxUserStatusUpdated, SiteID: "site-a", DestSiteID: "site-b",
+		Payload: payload, Timestamp: 12345,
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, h.HandleEvent(context.Background(), evt))
+
+	updates := store.getUserStatusUpdates()
+	require.Len(t, updates, 1)
+	assert.Equal(t, "alice", updates[0].account)
+	assert.Equal(t, "out to lunch", updates[0].statusText)
+	require.NotNil(t, updates[0].isShow)
+	assert.True(t, *updates[0].isShow)
+}
+
+func TestHandler_UserStatusUpdated_IsShowOmittedStaysNil(t *testing.T) {
+	store := &stubInboxStore{}
+	h := NewHandler(store)
+
+	// A text-only update omits statusIsShow; the handler must forward nil so the
+	// store leaves the stored flag untouched rather than clobbering it.
+	payload, err := json.Marshal(model.UserStatusUpdated{
+		Account: "alice", StatusText: "heads down", Timestamp: 12345,
+	})
+	require.NoError(t, err)
+	evt, err := json.Marshal(model.OutboxEvent{
+		Type: model.OutboxUserStatusUpdated, Payload: payload, Timestamp: 12345,
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, h.HandleEvent(context.Background(), evt))
+
+	updates := store.getUserStatusUpdates()
+	require.Len(t, updates, 1)
+	assert.Equal(t, "heads down", updates[0].statusText)
+	assert.Nil(t, updates[0].isShow)
+}
+
+func TestHandler_UserStatusUpdated_MalformedPayload(t *testing.T) {
+	store := &stubInboxStore{}
+	h := NewHandler(store)
+
+	evt, err := json.Marshal(model.OutboxEvent{
+		Type:    model.OutboxUserStatusUpdated,
+		Payload: []byte("not-json"),
+	})
+	require.NoError(t, err)
+
+	err = h.HandleEvent(context.Background(), evt)
+	require.Error(t, err)
+	assert.Empty(t, store.getUserStatusUpdates())
+}
+
+func TestHandler_UserStatusUpdated_StoreError(t *testing.T) {
+	store := &stubInboxStore{userStatusErr: errors.New("boom")}
+	h := NewHandler(store)
+
+	payload, err := json.Marshal(model.UserStatusUpdated{
+		Account: "alice", StatusText: "busy", Timestamp: 12345,
+	})
+	require.NoError(t, err)
+	evt, err := json.Marshal(model.OutboxEvent{
+		Type: model.OutboxUserStatusUpdated, Payload: payload, Timestamp: 12345,
+	})
+	require.NoError(t, err)
+
+	err = h.HandleEvent(context.Background(), evt)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "update user status")
 }

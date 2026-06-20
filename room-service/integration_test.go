@@ -3535,3 +3535,62 @@ func TestMongoStore_GetThreadUnreadSummary_Integration(t *testing.T) {
 		assert.Nil(t, got.LastMessageAt)
 	})
 }
+
+// account is a user's identity, so EnsureIndexes makes users.account unique —
+// matching user-service's declaration on the shared collection. A second users
+// doc with the same account must violate the unique index.
+func TestEnsureIndexes_UsersAccountUnique_Integration(t *testing.T) {
+	db := setupMongo(t)
+	store := NewMongoStore(db)
+	ctx := context.Background()
+	require.NoError(t, store.EnsureIndexes(ctx))
+
+	users := db.Collection("users")
+	_, err := users.InsertOne(ctx, bson.M{"_id": "u1", "account": "alice"})
+	require.NoError(t, err)
+	_, err = users.InsertOne(ctx, bson.M{"_id": "u2", "account": "alice"})
+	require.True(t, mongo.IsDuplicateKeyError(err), "expected duplicate-key error, got %v", err)
+}
+
+// Building the users.account unique index against a collection that already holds
+// duplicate accounts (a dirty pre-rollout environment) must fail at startup with
+// an actionable error pointing operators at the dedupe preflight, not a bare
+// driver error.
+func TestEnsureIndexes_UsersAccountUnique_PreexistingDuplicates_Integration(t *testing.T) {
+	db := setupMongo(t)
+	store := NewMongoStore(db)
+	ctx := context.Background()
+
+	users := db.Collection("users")
+	_, err := users.InsertOne(ctx, bson.M{"_id": "u1", "account": "alice"})
+	require.NoError(t, err)
+	_, err = users.InsertOne(ctx, bson.M{"_id": "u2", "account": "alice"})
+	require.NoError(t, err)
+
+	err = store.EnsureIndexes(ctx)
+	require.Error(t, err)
+	require.True(t, mongo.IsDuplicateKeyError(err), "expected duplicate-key error, got %v", err)
+	require.Contains(t, err.Error(), "dedupe preflight", "error must direct operators to the dedupe preflight")
+}
+
+// A pre-existing NON-unique account_1 index conflicts with EnsureIndexes'
+// unique account_1 declaration (IndexOptionsConflict 85 / IndexKeySpecsConflict
+// 86 — the latter when the auto-generated name collides). The service must
+// surface an actionable error telling the operator to drop the old index rather
+// than a bare driver error.
+func TestEnsureIndexes_UsersAccountIndexOptionsConflict_Integration(t *testing.T) {
+	db := setupMongo(t)
+	store := NewMongoStore(db)
+	ctx := context.Background()
+
+	// Pre-create a non-unique index named account_1 with the same key spec.
+	_, err := db.Collection("users").Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys: bson.D{{Key: "account", Value: 1}},
+	})
+	require.NoError(t, err)
+
+	err = store.EnsureIndexes(ctx)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "drop the old non-unique account_1 index",
+		"error must direct operators to drop the conflicting non-unique index")
+}

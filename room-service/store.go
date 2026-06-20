@@ -156,7 +156,7 @@ type RoomStore interface {
 	GetApp(ctx context.Context, botAccount string) (*model.App, error)
 	// ListDefaultChannelTabApps returns apps whose channelTab.enabled AND
 	// channelTab.default are both true, sorted by channelTab.name asc.
-	// Projection: _id, avatarUrl, assistant, channelTab. Empty result is
+	// Projection: _id, assistant, channelTab. Empty result is
 	// ([], nil).
 	ListDefaultChannelTabApps(ctx context.Context) ([]model.App, error)
 	// ListRoomBotApps returns one entry per bot subscribed to roomID,

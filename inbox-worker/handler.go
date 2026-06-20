@@ -59,6 +59,11 @@ type InboxStore interface {
 	// ownerAccount is non-empty, a $cond pipeline demotes all accounts except
 	// ownerAccount to RoleMember.
 	ApplySubscriptionVisibility(ctx context.Context, roomID string, restricted, externalAccess bool, ownerAccount string, visibilityUpdatedAt time.Time) error
+	// UpdateUserStatus replicates a cross-site status change onto the local
+	// users doc keyed by account. statusIsShow is written only when non-nil so a
+	// text-only update cannot clobber the stored flag. A missing user (no doc on
+	// this site) is a silent no-op.
+	UpdateUserStatus(ctx context.Context, account, statusText string, statusIsShow *bool) error
 }
 
 // Handler processes cross-site OutboxEvent messages; replicates only subscription/room metadata, never room keys.
@@ -101,6 +106,8 @@ func (h *Handler) HandleEvent(ctx context.Context, data []byte) error {
 		return h.handleRoomRenamed(ctx, &evt)
 	case model.OutboxRoomRestricted:
 		return h.handleRoomVisibilityChanged(ctx, &evt)
+	case model.OutboxUserStatusUpdated:
+		return h.handleUserStatusUpdated(ctx, &evt)
 	default:
 		slog.Warn("unknown event type, skipping", "type", evt.Type)
 		return nil
@@ -314,6 +321,19 @@ func (h *Handler) handleRoomVisibilityChanged(ctx context.Context, evt *model.Ou
 	}
 	if err := h.store.ApplySubscriptionVisibility(ctx, p.RoomID, p.Restricted, p.ExternalAccess, p.OwnerAccount, time.UnixMilli(p.Timestamp).UTC()); err != nil {
 		return fmt.Errorf("apply subscription visibility for room %s: %w", p.RoomID, err)
+	}
+	return nil
+}
+
+// handleUserStatusUpdated mirrors a cross-site status change onto the local
+// users doc. Status is last-write-wins, so no timestamp guard is applied.
+func (h *Handler) handleUserStatusUpdated(ctx context.Context, evt *model.OutboxEvent) error {
+	var e model.UserStatusUpdated
+	if err := json.Unmarshal(evt.Payload, &e); err != nil {
+		return fmt.Errorf("unmarshal user_status_updated payload: %w", err)
+	}
+	if err := h.store.UpdateUserStatus(ctx, e.Account, e.StatusText, e.StatusIsShow); err != nil {
+		return fmt.Errorf("update user status for %q: %w", e.Account, err)
 	}
 	return nil
 }

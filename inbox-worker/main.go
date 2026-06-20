@@ -156,6 +156,25 @@ func (s *mongoInboxStore) FindUsersByAccounts(ctx context.Context, accounts []st
 	return users, nil
 }
 
+// UpdateUserStatus mirrors a cross-site status change onto the local users doc
+// keyed by account. statusIsShow is written only when non-nil so a text-only
+// update cannot clobber the stored flag. A missing user (no doc on this site)
+// is a silent no-op — the event is for an account that doesn't live here.
+func (s *mongoInboxStore) UpdateUserStatus(ctx context.Context, account, statusText string, statusIsShow *bool) error {
+	set := bson.M{"statusText": statusText}
+	if statusIsShow != nil {
+		set["statusIsShow"] = *statusIsShow
+	}
+	res, err := s.userCol.UpdateOne(ctx, bson.M{"account": account}, bson.M{"$set": set})
+	if err != nil {
+		return fmt.Errorf("update user status for %q: %w", account, err)
+	}
+	if res.MatchedCount == 0 {
+		slog.WarnContext(ctx, "user_status_updated for unknown account, skipping", "account", account)
+	}
+	return nil
+}
+
 // BulkCreateSubscriptions inserts the supplied subs idempotently. Each is
 // keyed by (roomId, u.account) and written via $setOnInsert so an existing
 // sub (from a previous delivery, or with read-state already accumulated) is

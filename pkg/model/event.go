@@ -17,6 +17,16 @@ const (
 	EventThreadReplyAdded EventType = "thread_reply_added"
 )
 
+// UserStatusUpdated is the cross-site outbox event user-service publishes on
+// status.set; the remote inbox-worker applies it. Timestamp is the event-level
+// time set at publish via time.Now().UTC().UnixMilli().
+type UserStatusUpdated struct {
+	Account      string `json:"account"                bson:"account"`
+	StatusText   string `json:"statusText"             bson:"statusText"`
+	StatusIsShow *bool  `json:"statusIsShow,omitempty" bson:"statusIsShow,omitempty"`
+	Timestamp    int64  `json:"timestamp"              bson:"timestamp"`
+}
+
 type MessageEvent struct {
 	Event   EventType `json:"event,omitempty" bson:"event,omitempty"`
 	Message Message   `json:"message"`
@@ -133,6 +143,7 @@ const (
 	OutboxThreadRead                  OutboxEventType = "thread_read"
 	OutboxRoomRenamed                 OutboxEventType = "room_renamed"
 	OutboxRoomRestricted              OutboxEventType = "room_restricted"
+	OutboxUserStatusUpdated           OutboxEventType = "user_status_updated"
 )
 
 // SubscriptionReadEvent is the OutboxEvent.Payload for type

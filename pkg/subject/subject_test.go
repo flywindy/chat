@@ -466,7 +466,6 @@ func TestParseRoomCreateSubject(t *testing.T) {
 		{"wrong suffix", "chat.user.alice.request.room.site-A.member", "", false},
 		{"wrong prefix", "foo.user.alice.request.room.site-A.create", "", false},
 		{"empty", "", "", false},
-		// Wildcard guard: NATS '*' / '>' must never leak into the parsed account.
 		{"account is wildcard star", "chat.user.*.request.room.site-A.create", "", false},
 		{"account is wildcard tail", "chat.user.>.request.room.site-A.create", "", false},
 		{"account contains star", "chat.user.al*ce.request.room.site-A.create", "", false},
@@ -524,18 +523,15 @@ func TestUserServiceBuilders(t *testing.T) {
 		want string
 	}{
 		{"status.getByName", subject.UserStatusGetByName("alice", "s1"), "chat.user.alice.request.user.s1.status.getByName"},
-		{"status.set", subject.UserStatusSet("alice", "s1"), "chat.user.alice.request.user.s1.status.set"},
 		{"profile.getByName", subject.UserProfileGetByName("alice", "s1"), "chat.user.alice.request.user.s1.profile.getByName"},
-		{"subscription.getCurrent", subject.UserSubscriptionGetCurrent("alice", "s1"), "chat.user.alice.request.user.s1.subscription.getCurrent"},
-		{"subscription.getRooms", subject.UserSubscriptionGetRooms("alice", "s1"), "chat.user.alice.request.user.s1.subscription.getRooms"},
+		{"status.set", subject.UserStatusSet("alice", "s1"), "chat.user.alice.request.user.s1.status.set"},
 		{"subscription.getChannels", subject.UserSubscriptionGetChannels("alice", "s1"), "chat.user.alice.request.user.s1.subscription.getChannels"},
 		{"subscription.getDM", subject.UserSubscriptionGetDM("alice", "s1"), "chat.user.alice.request.user.s1.subscription.getDM"},
-		{"subscription.getApps", subject.UserSubscriptionGetApps("alice", "s1"), "chat.user.alice.request.user.s1.subscription.getApps"},
 		{"subscription.count", subject.UserSubscriptionCount("alice", "s1"), "chat.user.alice.request.user.s1.subscription.count"},
-		{"subscription.subscribeApp", subject.UserSubscriptionSubscribeApp("alice", "s1"), "chat.user.alice.request.user.s1.subscription.subscribeApp"},
-		{"subscription.unsubscribeApp", subject.UserSubscriptionUnsubscribeApp("alice", "s1"), "chat.user.alice.request.user.s1.subscription.unsubscribeApp"},
-		{"room.subscription.get", subject.UserRoomSubscriptionGet("alice", "s1", "r1"), "chat.user.alice.request.user.s1.room.r1.subscription.get"},
 		{"apps.list", subject.UserAppsList("alice", "s1"), "chat.user.alice.request.user.s1.apps.list"},
+		{"subscription.list", subject.UserSubscriptionList("alice", "s1"), "chat.user.alice.request.user.s1.subscription.list"},
+		{"subscription.setAppSubscription", subject.UserSubscriptionSetAppSubscription("alice", "s1"), "chat.user.alice.request.user.s1.subscription.setAppSubscription"},
+		{"subscription.getByRoomID", subject.UserSubscriptionGetByRoomID("alice", "s1"), "chat.user.alice.request.user.s1.subscription.getByRoomID"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -586,27 +582,17 @@ func TestParseStatusSubject(t *testing.T) {
 	assert.Equal(t, "alice", account)
 	assert.Equal(t, "set", action)
 
-	_, _, ok = subject.ParseStatusSubject(subject.UserProfileGetByName("alice", "s1"))
+	_, _, ok = subject.ParseStatusSubject(subject.UserAppsList("alice", "s1"))
 	assert.False(t, ok, "wrong area must be rejected")
 }
 
 func TestParseSubscriptionSubject(t *testing.T) {
-	account, action, ok := subject.ParseSubscriptionSubject(subject.UserSubscriptionGetCurrent("alice", "s1"))
+	account, action, ok := subject.ParseSubscriptionSubject(subject.UserSubscriptionList("alice", "s1"))
 	assert.True(t, ok)
 	assert.Equal(t, "alice", account)
-	assert.Equal(t, "getCurrent", action)
+	assert.Equal(t, "list", action)
 
 	_, _, ok = subject.ParseSubscriptionSubject(subject.UserStatusSet("alice", "s1"))
-	assert.False(t, ok)
-}
-
-func TestParseProfileSubject(t *testing.T) {
-	account, action, ok := subject.ParseProfileSubject(subject.UserProfileGetByName("alice", "s1"))
-	assert.True(t, ok)
-	assert.Equal(t, "alice", account)
-	assert.Equal(t, "getByName", action)
-
-	_, _, ok = subject.ParseProfileSubject(subject.UserStatusSet("alice", "s1"))
 	assert.False(t, ok)
 }
 
@@ -621,8 +607,8 @@ func TestParseAppsSubject(t *testing.T) {
 }
 
 func TestParseRoomSubject(t *testing.T) {
-	t.Run("subscription.get roundtrips", func(t *testing.T) {
-		subj := subject.UserRoomSubscriptionGet("alice", "s1", "r1")
+	t.Run("parses valid 10-token room subject", func(t *testing.T) {
+		subj := "chat.user.alice.request.user.s1.room.r1.subscription.get"
 		account, roomID, action, ok := subject.ParseRoomSubject(subj)
 		assert.True(t, ok)
 		assert.Equal(t, "alice", account)
@@ -698,18 +684,15 @@ func TestUserServiceBuildersRejectWildcardAccounts(t *testing.T) {
 		fn   func()
 	}{
 		{"UserStatusGetByName", func() { subject.UserStatusGetByName("*", "s1") }},
-		{"UserStatusSet", func() { subject.UserStatusSet("*", "s1") }},
 		{"UserProfileGetByName", func() { subject.UserProfileGetByName("*", "s1") }},
-		{"UserSubscriptionGetCurrent", func() { subject.UserSubscriptionGetCurrent("*", "s1") }},
-		{"UserSubscriptionGetRooms", func() { subject.UserSubscriptionGetRooms("*", "s1") }},
+		{"UserStatusSet", func() { subject.UserStatusSet("*", "s1") }},
 		{"UserSubscriptionGetChannels", func() { subject.UserSubscriptionGetChannels("*", "s1") }},
 		{"UserSubscriptionGetDM", func() { subject.UserSubscriptionGetDM(">", "s1") }},
-		{"UserSubscriptionGetApps", func() { subject.UserSubscriptionGetApps(">", "s1") }},
 		{"UserSubscriptionCount", func() { subject.UserSubscriptionCount(">", "s1") }},
-		{"UserSubscriptionSubscribeApp", func() { subject.UserSubscriptionSubscribeApp(">", "s1") }},
-		{"UserSubscriptionUnsubscribeApp", func() { subject.UserSubscriptionUnsubscribeApp(">", "s1") }},
-		{"UserRoomSubscriptionGet", func() { subject.UserRoomSubscriptionGet("*", "s1", "r1") }},
 		{"UserAppsList", func() { subject.UserAppsList(">", "s1") }},
+		{"UserSubscriptionList", func() { subject.UserSubscriptionList("*", "s1") }},
+		{"UserSubscriptionSetAppSubscription", func() { subject.UserSubscriptionSetAppSubscription("*", "s1") }},
+		{"UserSubscriptionGetByRoomID", func() { subject.UserSubscriptionGetByRoomID(">", "s1") }},
 	}
 	for _, b := range builders {
 		t.Run(b.name, func(t *testing.T) {
@@ -801,18 +784,15 @@ func TestUserServicePatternBuilders(t *testing.T) {
 		want string
 	}{
 		{"status.getByName", subject.UserStatusGetByNamePattern("s1"), "chat.user.{account}.request.user.s1.status.getByName"},
-		{"status.set", subject.UserStatusSetPattern("s1"), "chat.user.{account}.request.user.s1.status.set"},
 		{"profile.getByName", subject.UserProfileGetByNamePattern("s1"), "chat.user.{account}.request.user.s1.profile.getByName"},
-		{"subscription.getCurrent", subject.UserSubscriptionGetCurrentPattern("s1"), "chat.user.{account}.request.user.s1.subscription.getCurrent"},
-		{"subscription.getRooms", subject.UserSubscriptionGetRoomsPattern("s1"), "chat.user.{account}.request.user.s1.subscription.getRooms"},
+		{"status.set", subject.UserStatusSetPattern("s1"), "chat.user.{account}.request.user.s1.status.set"},
 		{"subscription.getChannels", subject.UserSubscriptionGetChannelsPattern("s1"), "chat.user.{account}.request.user.s1.subscription.getChannels"},
 		{"subscription.getDM", subject.UserSubscriptionGetDMPattern("s1"), "chat.user.{account}.request.user.s1.subscription.getDM"},
-		{"subscription.getApps", subject.UserSubscriptionGetAppsPattern("s1"), "chat.user.{account}.request.user.s1.subscription.getApps"},
 		{"subscription.count", subject.UserSubscriptionCountPattern("s1"), "chat.user.{account}.request.user.s1.subscription.count"},
-		{"subscription.subscribeApp", subject.UserSubscriptionSubscribeAppPattern("s1"), "chat.user.{account}.request.user.s1.subscription.subscribeApp"},
-		{"subscription.unsubscribeApp", subject.UserSubscriptionUnsubscribeAppPattern("s1"), "chat.user.{account}.request.user.s1.subscription.unsubscribeApp"},
-		{"room.subscription.get", subject.UserRoomSubscriptionGetPattern("s1"), "chat.user.{account}.request.user.s1.room.{roomID}.subscription.get"},
 		{"apps.list", subject.UserAppsListPattern("s1"), "chat.user.{account}.request.user.s1.apps.list"},
+		{"subscription.list", subject.UserSubscriptionListPattern("s1"), "chat.user.{account}.request.user.s1.subscription.list"},
+		{"subscription.setAppSubscription", subject.UserSubscriptionSetAppSubscriptionPattern("s1"), "chat.user.{account}.request.user.s1.subscription.setAppSubscription"},
+		{"subscription.getByRoomID", subject.UserSubscriptionGetByRoomIDPattern("s1"), "chat.user.{account}.request.user.s1.subscription.getByRoomID"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

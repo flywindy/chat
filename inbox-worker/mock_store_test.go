@@ -197,6 +197,20 @@ func (mr *MockInboxStoreMockRecorder) UpdateSubscriptionRoles(ctx, account, room
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateSubscriptionRoles", reflect.TypeOf((*MockInboxStore)(nil).UpdateSubscriptionRoles), ctx, account, roomID, roles, rolesUpdatedAt)
 }
 
+// UpdateUserStatus mocks base method.
+func (m *MockInboxStore) UpdateUserStatus(ctx context.Context, account, statusText string, statusIsShow *bool) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UpdateUserStatus", ctx, account, statusText, statusIsShow)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// UpdateUserStatus indicates an expected call of UpdateUserStatus.
+func (mr *MockInboxStoreMockRecorder) UpdateUserStatus(ctx, account, statusText, statusIsShow any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateUserStatus", reflect.TypeOf((*MockInboxStore)(nil).UpdateUserStatus), ctx, account, statusText, statusIsShow)
+}
+
 // UpsertRoom mocks base method.
 func (m *MockInboxStore) UpsertRoom(ctx context.Context, room *model.Room) error {
 	m.ctrl.T.Helper()

@@ -38,6 +38,8 @@
 
 All services follow this layout, including `message-gatekeeper` (validates messages and publishes to MESSAGES_CANONICAL).
 
+**Note:** request/reply services with a larger surface (e.g. `user-service`, `history-service`) MAY instead use a sub-package layout under the service directory (`config/`, `models/`, `mongorepo/`, `service/`, `service/mocks/`) — this is a sanctioned exception, not a deviation. The store interface still lives with its consumer (`service/`), and generated mocks still go in a dedicated mocks package (`service/mocks/`).
+
 ## Section 2: Common Commands
 
 All commands are wrapped in the root Makefile. Always use `make` targets — never run raw `go` commands directly.

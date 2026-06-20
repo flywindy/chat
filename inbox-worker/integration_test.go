@@ -1273,3 +1273,48 @@ func TestInbox_UpsertRoom_NewerUpdatedAtApplies(t *testing.T) {
 	require.NoError(t, store.roomCol.FindOne(ctx, bson.M{"_id": "r1"}).Decode(&got))
 	assert.Equal(t, "newer", got.Name)
 }
+
+func TestInboxWorker_UpdateUserStatus_Integration(t *testing.T) {
+	db := setupMongo(t)
+	ctx := context.Background()
+
+	store := &mongoInboxStore{
+		subCol:  db.Collection("subscriptions"),
+		roomCol: db.Collection("rooms"),
+		userCol: db.Collection("users"),
+	}
+
+	_, err := db.Collection("users").InsertOne(ctx, model.User{
+		ID: "u1", Account: "alice", SiteID: "site-b", StatusText: "old", StatusIsShow: true,
+	})
+	require.NoError(t, err)
+
+	t.Run("updates text and isShow when both supplied", func(t *testing.T) {
+		hide := false
+		require.NoError(t, store.UpdateUserStatus(ctx, "alice", "out to lunch", &hide))
+
+		var got model.User
+		require.NoError(t, store.userCol.FindOne(ctx, bson.M{"account": "alice"}).Decode(&got))
+		assert.Equal(t, "out to lunch", got.StatusText)
+		assert.False(t, got.StatusIsShow)
+	})
+
+	t.Run("text-only update leaves stored isShow untouched", func(t *testing.T) {
+		// Stored isShow is currently false from the previous subtest; a nil
+		// isShow must not clobber it.
+		require.NoError(t, store.UpdateUserStatus(ctx, "alice", "heads down", nil))
+
+		var got model.User
+		require.NoError(t, store.userCol.FindOne(ctx, bson.M{"account": "alice"}).Decode(&got))
+		assert.Equal(t, "heads down", got.StatusText)
+		assert.False(t, got.StatusIsShow)
+	})
+
+	t.Run("unknown account is a silent no-op", func(t *testing.T) {
+		require.NoError(t, store.UpdateUserStatus(ctx, "ghost", "nope", nil))
+
+		count, err := store.userCol.CountDocuments(ctx, bson.M{"account": "ghost"})
+		require.NoError(t, err)
+		assert.Equal(t, int64(0), count)
+	})
+}

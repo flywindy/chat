@@ -1954,7 +1954,7 @@ func TestHandler_handleRoomsInfoBatch(t *testing.T) {
 			req:  model.RoomsInfoBatchRequest{RoomIDs: []string{"r1", "r2", "r3"}},
 			setupStore: func(s *MockRoomStore) {
 				s.EXPECT().ListRoomsByIDs(gomock.Any(), []string{"r1", "r2", "r3"}).Return([]model.Room{
-					{ID: "r1", Name: "general", SiteID: "site-a"},
+					{ID: "r1", Name: "general", SiteID: "site-a", UserCount: 42, LastMsgID: "m-100"},
 					{ID: "r2", Name: "random", SiteID: "site-a"},
 					{ID: "r3", Name: "help", SiteID: "site-b"},
 				}, nil)
@@ -1968,10 +1968,12 @@ func TestHandler_handleRoomsInfoBatch(t *testing.T) {
 			assertResp: func(t *testing.T, resp model.RoomsInfoBatchResponse) {
 				require.Len(t, resp.Rooms, 3)
 
-				// r1: found, keyed
+				// r1: found, keyed, room-doc denorm fields forwarded
 				assert.Equal(t, "r1", resp.Rooms[0].RoomID)
 				assert.True(t, resp.Rooms[0].Found)
 				assert.Equal(t, "general", resp.Rooms[0].Name)
+				assert.Equal(t, 42, resp.Rooms[0].UserCount)
+				assert.Equal(t, "m-100", resp.Rooms[0].LastMsgID)
 				require.NotNil(t, resp.Rooms[0].PrivateKey)
 				assert.Equal(t, privB64, *resp.Rooms[0].PrivateKey)
 				require.NotNil(t, resp.Rooms[0].KeyVersion)
@@ -2141,6 +2143,25 @@ func TestHandler_handleRoomsInfoBatch(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestHandler_handleRoomsInfoBatch_ForwardsCounts(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	store := NewMockRoomStore(ctrl)
+	keyStore := NewMockRoomKeyStore(ctrl)
+
+	store.EXPECT().ListRoomsByIDs(gomock.Any(), []string{"r1"}).Return([]model.Room{
+		{ID: "r1", Name: "general", SiteID: "site-a", UserCount: 5, AppCount: 2},
+	}, nil)
+	keyStore.EXPECT().GetMany(gomock.Any(), []string{"r1"}).Return(map[string]*roomkeystore.VersionedKeyPair{}, nil)
+
+	h := &Handler{store: store, keyStore: keyStore, siteID: "site-a", maxBatchSize: 100}
+
+	resp, err := h.roomsInfoBatch(ctxParams(map[string]string{}), model.RoomsInfoBatchRequest{RoomIDs: []string{"r1"}})
+	require.NoError(t, err)
+	require.Len(t, resp.Rooms, 1)
+	assert.Equal(t, 5, resp.Rooms[0].UserCount)
+	assert.Equal(t, 2, resp.Rooms[0].AppCount)
 }
 
 func TestHandler_handleRoomsInfoBatch_chunking(t *testing.T) {
@@ -4942,7 +4963,6 @@ func newTabsTestHandler(t *testing.T, siteURL string) (*Handler, *MockRoomStore,
 func mockTabApp(id, tabName, urlTemplate string) model.App {
 	return model.App{
 		ID:        id,
-		AvatarURL: "https://cdn/" + id + ".png",
 		Assistant: &model.AppAssistant{Enabled: true, Name: id + ".bot"},
 		ChannelTab: &model.AppChannelTab{
 			Enabled: true, Default: true, Name: tabName,
@@ -5030,7 +5050,6 @@ func TestHandler_handleGetRoomAppTabs_MemberAllowed(t *testing.T) {
 	assert.Equal(t, "app1", resp.Apps[0].ID)
 	assert.Equal(t, "Calendar", resp.Apps[0].Name)
 	assert.Equal(t, "https://chat.example.com/cal/r1/site-a/index", resp.Apps[0].TabURL)
-	assert.Equal(t, "https://cdn/app1.png", resp.Apps[0].AvatarURL)
 	require.NotNil(t, resp.Apps[0].Assistant)
 	assert.Equal(t, "app1.bot", resp.Apps[0].Assistant.Name)
 }
@@ -5151,7 +5170,7 @@ func TestHandler_handleGetRoomAppTabs_SkipsAppWithNilChannelTab(t *testing.T) {
 	store.EXPECT().GetSubscription(gomock.Any(), "alice", "r1").
 		Return(&model.Subscription{User: model.SubscriptionUser{Account: "alice"}, RoomID: "r1"}, nil)
 	// One app has nil ChannelTab (invalid data), one is valid — only the valid one should appear.
-	appNoTab := model.App{ID: "notab", AvatarURL: "https://cdn/notab.png", ChannelTab: nil}
+	appNoTab := model.App{ID: "notab", ChannelTab: nil}
 	store.EXPECT().ListDefaultChannelTabApps(gomock.Any()).Return([]model.App{
 		appNoTab,
 		mockTabApp("ok1", "OK1", "https://upstream/ok1/${roomId}"),

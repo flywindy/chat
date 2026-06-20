@@ -6,6 +6,7 @@ import { useDebug } from '@/context/DebugContext'
 import { useJwtRefresh } from './useJwtRefresh'
 import {
   requestWithAsyncResult as asyncJobRequest,
+  requestSync as asyncJobRequestSync,
   AsyncJobError,
   ASYNC_JOB_ERROR_KINDS,
 } from '@/api/_transport/asyncJob'
@@ -169,24 +170,11 @@ export function NatsProvider({ children }) {
    */
   const request = useCallback(async (subject, data = {}) => {
     if (!ncRef.current) throw new Error('Not connected')
-    const payload = sc.encode(JSON.stringify(data))
-    const reqOpts = { timeout: 5000 }
-    const h = buildHeaders()
-    if (h) reqOpts.headers = h
-    const resp = await ncRef.current.request(subject, payload, reqOpts)
-    const parsed = JSON.parse(sc.decode(resp.data))
-    if (parsed.error) {
-      // errcode envelope {code, reason?, error, metadata?}. Legacy replies
-      // (pre-migration backend during rollout) lack code/reason — consumers
-      // fall back to err.message.
-      throw new AsyncJobError(parsed.error, ASYNC_JOB_ERROR_KINDS.SyncError, {
-        code: parsed.code,
-        reason: parsed.reason,
-        metadata: parsed.metadata,
-      })
-    }
-    return parsed
-  }, [buildHeaders])
+    return asyncJobRequestSync(ncRef.current, subject, data, {
+      debugLevel: debugLevelRef.current,
+      debugPayload: debugPayloadRef.current,
+    })
+  }, [])
 
   /**
    * Two-phase request/reply for operations whose sync reply is just

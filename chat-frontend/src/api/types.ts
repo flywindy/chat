@@ -23,6 +23,24 @@ export interface SubscriptionHRInfo {
   engName: string
 }
 
+/** Room-level fields nested under `Subscription.room` after enrichment.
+ *  `name` here is the room's CANONICAL name — the subscription's own
+ *  `name` (counterpart account for DMs, app display name for botDMs,
+ *  channel name for channels) is never overwritten by it. */
+export interface SubscriptionRoom {
+  siteId?: string
+  name?: string
+  userCount?: number
+  appCount?: number
+  lastMsgAt?: string | null
+  lastMsgId?: string
+  lastMentionAllAt?: string | null
+  /** Base64-encoded room E2E private key — delivered on subscription.list
+   *  for initial key bootstrap (same payload as the room.key.get RPC). */
+  privateKey?: string
+  keyVersion?: number
+}
+
 /** Mirrors pkg/model.Subscription — the per-user record linking a user
  *  to a room (channel / botDM / discussion). Carries the room's roles
  *  for THIS user, the user's preferred name, mute/alert state, and
@@ -30,7 +48,7 @@ export interface SubscriptionHRInfo {
  *  type (`DMSubscription`) that extends this with HRInfo. */
 export interface Subscription {
   id: string
-  u: { id: string; account: string }
+  u: { id: string; account: string; isBot?: boolean }
   roomId: string
   siteId: string
   roles: Role[]
@@ -43,14 +61,11 @@ export interface Subscription {
   hasMention: boolean
   threadUnread?: string[]
   alert: boolean
-  /** Room-level metadata that the real user-service embeds on subscription
-   *  replies (the three `subscription.get*` RPCs return joined Room data
-   *  inline so the frontend doesn't need a separate `rooms.list` call).
-   *  Optional because mock-user-service and live `subscription.update`
-   *  events don't carry them today; default to 0 / null at the consumer. */
-  userCount?: number
-  lastMsgAt?: string | null
-  lastMsgId?: string
+  /** Room-level metadata nested under `room` after enrichment by
+   *  user-service. Present on `subscription.list` replies; absent on
+   *  live `subscription.update` events. Default to 0 / null at the
+   *  consumer. */
+  room?: SubscriptionRoom
 }
 
 /**
