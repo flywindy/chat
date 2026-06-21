@@ -70,7 +70,7 @@ type RoomMetadataUpdateEvent struct {
 type SubscriptionUpdateEvent struct {
 	UserID       string       `json:"userId"`
 	Subscription Subscription `json:"subscription"`
-	Action       string       `json:"action"` // "added" | "removed" | "role_updated" | "mute_toggled" | "favorite_toggled"
+	Action       string       `json:"action"` // "added" | "removed" | "role_updated" | "mute_toggled" | "favorite_toggled" | "read"
 	Timestamp    int64        `json:"timestamp" bson:"timestamp"`
 }
 

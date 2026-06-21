@@ -1293,6 +1293,17 @@ func (h *Handler) messageRead(c *natsrouter.Context) (*model.StatusReply, error)
 		return &model.StatusReply{Status: "accepted"}, nil
 	}
 
+	// Best-effort subscription.update to the reader's account (multi-device sync).
+	if !isBot(account) {
+		updatedSub := *sub
+		updatedSub.LastSeenAt = &now
+		updatedSub.Alert = newAlert
+		if _, err := h.publishSubscriptionUpdate(ctx, account, "read", &updatedSub, now); err != nil {
+			slog.Error("subscription update on read failed", "error", err,
+				"request_id", natsutil.RequestIDFromContext(ctx), "account", account)
+		}
+	}
+
 	minTime, err := h.store.MinSubscriptionLastSeenByRoomID(ctx, roomID)
 	if err != nil {
 		return nil, fmt.Errorf("min subscription lastSeenAt: %w", err)
