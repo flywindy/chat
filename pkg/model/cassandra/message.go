@@ -84,6 +84,7 @@ type Message struct {
 	CardAction            *CardAction          `json:"cardAction,omitempty"            cql:"card_action"`
 	TShow                 bool                 `json:"tshow,omitempty"                 cql:"tshow"`
 	TCount                *int                 `json:"tcount,omitempty"                cql:"tcount"`
+	ThreadLastMsgAt       *time.Time           `json:"threadLastMsgAt,omitempty"       cql:"thread_last_msg_at"`
 	ThreadParentID        string               `json:"threadParentId,omitempty"        cql:"thread_parent_id"`
 	ThreadParentCreatedAt *time.Time           `json:"threadParentCreatedAt,omitempty" cql:"thread_parent_created_at"`
 	QuotedParentMessage   *QuotedParentMessage `json:"quotedParentMessage,omitempty"   cql:"quoted_parent_message"`

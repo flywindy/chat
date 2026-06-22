@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS chat.messages_by_id (
   card_action              FROZEN<"CardAction">,
   tshow                    BOOLEAN,
   tcount                   INT, // reply thread count
+  thread_last_msg_at       TIMESTAMP, // timestamp of most recent thread reply
   thread_parent_id         TEXT,
   thread_parent_created_at TIMESTAMP,
   quoted_parent_message    FROZEN<"QuotedParentMessage">,

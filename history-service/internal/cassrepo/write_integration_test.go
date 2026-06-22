@@ -471,6 +471,139 @@ func TestRepository_SoftDeleteMessage_DecrementsParentTcount(t *testing.T) {
 	assert.Equal(t, 2, gotTcount, "messages_by_room.tcount = count-based 2")
 }
 
+func TestRepository_SoftDeleteMessage_UpdatesParentTlm(t *testing.T) {
+	session := setupCassandra(t)
+	repo := NewRepository(session, msgbucket.New(24*time.Hour), 365, nil)
+	ctx := context.Background()
+
+	sender := models.Participant{ID: "u1", Account: "alice"}
+	roomID := "room-tlm-del"
+	threadRoomID := "thread-tlm-del"
+	parentID := "m-tlm-parent"
+	parentCreatedAt := time.Now().UTC().Truncate(time.Millisecond)
+
+	require.NoError(t, session.Query(
+		`INSERT INTO messages_by_id (message_id, room_id, created_at, sender, msg, thread_parent_id, deleted) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		parentID, roomID, parentCreatedAt, sender, "parent", "", false,
+	).Exec())
+	require.NoError(t, session.Query(
+		`INSERT INTO messages_by_room (room_id, bucket, created_at, message_id, sender, msg, thread_parent_id, deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		roomID, msgbucket.New(24*time.Hour).Of(parentCreatedAt), parentCreatedAt, parentID, sender, "parent", "", false,
+	).Exec())
+
+	// Seed 2 replies: survivor (newer) and the one being deleted (oldest reply).
+	survivorAt := parentCreatedAt.Add(5 * time.Second)
+	replyAt := parentCreatedAt.Add(3 * time.Second) // older than survivor
+	replyID := "m-tlm-reply-del"
+	require.NoError(t, session.Query(
+		`INSERT INTO thread_messages_by_thread (thread_room_id, created_at, message_id, room_id, sender, msg, thread_parent_id, deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		threadRoomID, survivorAt, "m-tlm-survivor", roomID, sender, "survivor", parentID, false,
+	).Exec())
+	require.NoError(t, session.Query(
+		`INSERT INTO messages_by_id (message_id, room_id, created_at, sender, msg, thread_parent_id, thread_parent_created_at, thread_room_id, deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		replyID, roomID, replyAt, sender, "reply to delete", parentID, parentCreatedAt, threadRoomID, false,
+	).Exec())
+	require.NoError(t, session.Query(
+		`INSERT INTO thread_messages_by_thread (thread_room_id, created_at, message_id, room_id, sender, msg, thread_parent_id, deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		threadRoomID, replyAt, replyID, roomID, sender, "reply to delete", parentID, false,
+	).Exec())
+
+	parentCreatedAtPtr := parentCreatedAt
+	msg := &models.Message{
+		MessageID:             replyID,
+		RoomID:                roomID,
+		CreatedAt:             replyAt,
+		Sender:                sender,
+		ThreadParentID:        parentID,
+		ThreadParentCreatedAt: &parentCreatedAtPtr,
+		ThreadRoomID:          threadRoomID,
+	}
+	_, applied, _, err := repo.SoftDeleteMessage(ctx, msg, replyAt.Add(time.Minute))
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	// tlm must equal survivorAt (the max created_at among surviving replies).
+	var gotTlm *time.Time
+	require.NoError(t, session.Query(
+		`SELECT thread_last_msg_at FROM messages_by_id WHERE message_id = ?`,
+		parentID,
+	).Scan(&gotTlm))
+	require.NotNil(t, gotTlm, "tlm must be set to surviving max after delete")
+	assert.True(t, gotTlm.Equal(survivorAt), "tlm must equal the newest surviving reply's createdAt")
+
+	var gotTlmRoom *time.Time
+	require.NoError(t, session.Query(
+		`SELECT thread_last_msg_at FROM messages_by_room WHERE room_id = ? AND bucket = ? AND created_at = ? AND message_id = ?`,
+		roomID, msgbucket.New(24*time.Hour).Of(parentCreatedAt), parentCreatedAt, parentID,
+	).Scan(&gotTlmRoom))
+	require.NotNil(t, gotTlmRoom, "messages_by_room.tlm must be set to surviving max after delete")
+	assert.True(t, gotTlmRoom.Equal(survivorAt))
+}
+
+func TestRepository_SoftDeleteMessage_ClearsTlmOnLastReplyDelete(t *testing.T) {
+	session := setupCassandra(t)
+	repo := NewRepository(session, msgbucket.New(24*time.Hour), 365, nil)
+	ctx := context.Background()
+
+	sender := models.Participant{ID: "u1", Account: "alice"}
+	roomID := "room-tlm-last"
+	threadRoomID := "thread-tlm-last"
+	parentID := "m-tlm-last-parent"
+	parentCreatedAt := time.Now().UTC().Truncate(time.Millisecond)
+	replyAt := parentCreatedAt.Add(5 * time.Second)
+	replyID := "m-tlm-last-reply"
+
+	require.NoError(t, session.Query(
+		`INSERT INTO messages_by_id (message_id, room_id, created_at, sender, msg, thread_parent_id, deleted) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		parentID, roomID, parentCreatedAt, sender, "parent", "", false,
+	).Exec())
+	require.NoError(t, session.Query(
+		`INSERT INTO messages_by_room (room_id, bucket, created_at, message_id, sender, msg, thread_parent_id, deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		roomID, msgbucket.New(24*time.Hour).Of(parentCreatedAt), parentCreatedAt, parentID, sender, "parent", "", false,
+	).Exec())
+
+	// Seed only one reply — deleting it leaves count=0, tlm=NULL.
+	require.NoError(t, session.Query(
+		`INSERT INTO messages_by_id (message_id, room_id, created_at, sender, msg, thread_parent_id, thread_parent_created_at, thread_room_id, deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		replyID, roomID, replyAt, sender, "only reply", parentID, parentCreatedAt, threadRoomID, false,
+	).Exec())
+	require.NoError(t, session.Query(
+		`INSERT INTO thread_messages_by_thread (thread_room_id, created_at, message_id, room_id, sender, msg, thread_parent_id, deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		threadRoomID, replyAt, replyID, roomID, sender, "only reply", parentID, false,
+	).Exec())
+
+	parentCreatedAtPtr := parentCreatedAt
+	msg := &models.Message{
+		MessageID:             replyID,
+		RoomID:                roomID,
+		CreatedAt:             replyAt,
+		Sender:                sender,
+		ThreadParentID:        parentID,
+		ThreadParentCreatedAt: &parentCreatedAtPtr,
+		ThreadRoomID:          threadRoomID,
+	}
+	_, applied, newTcount, err := repo.SoftDeleteMessage(ctx, msg, replyAt.Add(time.Minute))
+	require.NoError(t, err)
+	require.True(t, applied)
+	require.NotNil(t, newTcount)
+	assert.Equal(t, 0, *newTcount, "tcount must be 0 after deleting last reply")
+
+	// tlm must be NULL on the parent.
+	var gotTlm *time.Time
+	require.NoError(t, session.Query(
+		`SELECT thread_last_msg_at FROM messages_by_id WHERE message_id = ?`,
+		parentID,
+	).Scan(&gotTlm))
+	assert.Nil(t, gotTlm, "tlm must be NULL after last reply is deleted (count→0)")
+
+	var gotTlmRoom *time.Time
+	require.NoError(t, session.Query(
+		`SELECT thread_last_msg_at FROM messages_by_room WHERE room_id = ? AND bucket = ? AND created_at = ? AND message_id = ?`,
+		roomID, msgbucket.New(24*time.Hour).Of(parentCreatedAt), parentCreatedAt, parentID,
+	).Scan(&gotTlmRoom))
+	assert.Nil(t, gotTlmRoom, "messages_by_room.tlm must be NULL after last reply is deleted")
+}
+
 func TestRepository_SoftDeleteMessage_TopLevelDoesNotTouchTcount(t *testing.T) {
 	session := setupCassandra(t)
 	repo := NewRepository(session, msgbucket.New(24*time.Hour), 365, nil)

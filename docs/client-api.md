@@ -2110,6 +2110,7 @@ Used by every history-service method that returns messages. Mirrors the Cassandr
 | `cardAction` | [MessageCardAction](#messagecardaction) | Optional. |
 | `tshow` | boolean | Optional. Whether a thread reply is also shown in the parent room. |
 | `tcount` | number | Optional. Number of replies on a thread parent. |
+| `threadLastMsgAt` | string (ISO 8601) | Optional. Timestamp of the most recent reply in the thread. Absent if no replies or not a thread parent. |
 | `threadParentId` | string | Optional. Set when this message is a thread reply. |
 | `threadParentCreatedAt` | string | Optional. RFC 3339. |
 | `quotedParentMessage` | [QuotedParentMessage](#quotedparentmessage) | Optional. Embedded snapshot of the quoted message. |
@@ -4495,7 +4496,8 @@ Pushed by `broadcast-worker` whenever a thread reply is **created** (`action: "r
 | `roomId` | string | The room the thread lives in. |
 | `siteId` | string | |
 | `parentMessageId` | string | The thread parent message's ID. Clients use this to locate the message in their cache and update its badge. |
-| `newTcount` | number | Authoritative post-CAS reply count for the parent message. Replaces any locally-computed count — do not delta. |
+| `newTcount` | number | Authoritative reply count for the parent message. Replaces any locally-computed count — do not delta. |
+| `newThreadLastMsgAt` | string (ISO 8601) | Optional. Timestamp of the most recent surviving thread reply. Absent when `newTcount` is 0 (all replies deleted). |
 | `action` | string | `"reply_added"` or `"reply_deleted"`. |
 | `replyMessageId` | string | The reply that was added or deleted. |
 | `timestamp` | number | Milliseconds since Unix epoch (UTC). When broadcast-worker published this event. |
@@ -4508,6 +4510,7 @@ Pushed by `broadcast-worker` whenever a thread reply is **created** (`action: "r
   "siteId": "siteA",
   "parentMessageId": "01970a4f8c2d7c9aQRST",
   "newTcount": 4,
+  "newThreadLastMsgAt": "2026-06-18T10:00:00Z",
   "action": "reply_added",
   "replyMessageId": "01970a4f8c2d7c9aUVWX",
   "timestamp": 1746518100123
@@ -4521,7 +4524,7 @@ Pushed by `broadcast-worker` whenever a thread reply is **created** (`action: "r
 
 #### Client handling
 
-Apply `newTcount` directly to the parent message's badge — do not compute a delta. Events for the same parent may arrive out of order due to JetStream redelivery; always prefer the event with the larger `timestamp` for badge state.
+Apply `newTcount` directly to the parent message's badge — do not compute a delta. Apply `newThreadLastMsgAt` to the parent message's thread-freshness timestamp (or clear it when absent). Events for the same parent may arrive out of order due to JetStream redelivery; when `eventTimestamp` is present, prefer the event with the larger `eventTimestamp`. Fall back to `timestamp` only for legacy events that omit `eventTimestamp`.
 
 ---
 

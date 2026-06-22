@@ -3582,6 +3582,119 @@ func TestMessageEvent_NewTCount(t *testing.T) {
 		assert.EqualValues(t, 0, val, "zero BSON value must be 0, not missing")
 	})
 }
+func TestMessageEvent_NewThreadLastMsgAt(t *testing.T) {
+	ts := time.Date(2026, 6, 18, 10, 0, 0, 0, time.UTC)
+
+	t.Run("nil NewThreadLastMsgAt omitted from JSON", func(t *testing.T) {
+		e := model.MessageEvent{
+			Message:   model.Message{ID: "m1", RoomID: "r1", UserID: "u1", UserAccount: "alice", CreatedAt: ts},
+			SiteID:    "site-a",
+			Timestamp: ts.UnixMilli(),
+		}
+		data, err := json.Marshal(e)
+		require.NoError(t, err)
+		var raw map[string]any
+		require.NoError(t, json.Unmarshal(data, &raw))
+		_, present := raw["newThreadLastMsgAt"]
+		assert.False(t, present, "nil NewThreadLastMsgAt must be omitted from JSON")
+	})
+
+	t.Run("non-nil NewThreadLastMsgAt round-trips JSON", func(t *testing.T) {
+		e := model.MessageEvent{
+			Message:            model.Message{ID: "m1", RoomID: "r1", UserID: "u1", UserAccount: "alice", CreatedAt: ts},
+			SiteID:             "site-a",
+			Timestamp:          ts.UnixMilli(),
+			NewThreadLastMsgAt: &ts,
+		}
+		data, err := json.Marshal(e)
+		require.NoError(t, err)
+		var raw map[string]any
+		require.NoError(t, json.Unmarshal(data, &raw))
+		_, present := raw["newThreadLastMsgAt"]
+		assert.True(t, present, "non-nil NewThreadLastMsgAt must appear in JSON as newThreadLastMsgAt")
+		var dst model.MessageEvent
+		require.NoError(t, json.Unmarshal(data, &dst))
+		require.NotNil(t, dst.NewThreadLastMsgAt)
+		assert.True(t, dst.NewThreadLastMsgAt.Equal(ts))
+	})
+
+	t.Run("non-nil NewThreadLastMsgAt round-trips BSON", func(t *testing.T) {
+		e := model.MessageEvent{
+			Message:            model.Message{ID: "m1", RoomID: "r1"},
+			SiteID:             "site-a",
+			Timestamp:          ts.UnixMilli(),
+			NewThreadLastMsgAt: &ts,
+		}
+		data, err := bson.Marshal(e)
+		require.NoError(t, err)
+		var raw bson.M
+		require.NoError(t, bson.Unmarshal(data, &raw))
+		_, present := raw["newThreadLastMsgAt"]
+		assert.True(t, present, "non-nil NewThreadLastMsgAt must be present in BSON as newThreadLastMsgAt")
+	})
+
+	t.Run("nil NewThreadLastMsgAt omitted from BSON", func(t *testing.T) {
+		e := model.MessageEvent{
+			Message:   model.Message{ID: "m1", RoomID: "r1"},
+			SiteID:    "site-a",
+			Timestamp: ts.UnixMilli(),
+		}
+		data, err := bson.Marshal(e)
+		require.NoError(t, err)
+		var raw bson.M
+		require.NoError(t, bson.Unmarshal(data, &raw))
+		_, present := raw["newThreadLastMsgAt"]
+		assert.False(t, present, "nil NewThreadLastMsgAt must be omitted from BSON")
+	})
+}
+
+func TestThreadMetadataUpdatedEvent_NewThreadLastMsgAt(t *testing.T) {
+	ts := time.Date(2026, 6, 18, 10, 0, 0, 0, time.UTC)
+
+	t.Run("nil NewThreadLastMsgAt omitted from JSON", func(t *testing.T) {
+		e := model.ThreadMetadataUpdatedEvent{
+			Type:            model.RoomEventThreadMetadataUpdated,
+			RoomID:          "r1",
+			SiteID:          "site-a",
+			ParentMessageID: "p1",
+			ReplyMessageID:  "r1",
+			NewTCount:       1,
+			Action:          model.ThreadActionReplyAdded,
+			Timestamp:       ts.UnixMilli(),
+		}
+		data, err := json.Marshal(e)
+		require.NoError(t, err)
+		var raw map[string]any
+		require.NoError(t, json.Unmarshal(data, &raw))
+		_, present := raw["newThreadLastMsgAt"]
+		assert.False(t, present, "nil NewThreadLastMsgAt must be omitted from JSON")
+	})
+
+	t.Run("non-nil NewThreadLastMsgAt round-trips JSON", func(t *testing.T) {
+		e := model.ThreadMetadataUpdatedEvent{
+			Type:               model.RoomEventThreadMetadataUpdated,
+			RoomID:             "r1",
+			SiteID:             "site-a",
+			ParentMessageID:    "p1",
+			ReplyMessageID:     "r1",
+			NewTCount:          2,
+			NewThreadLastMsgAt: &ts,
+			Action:             model.ThreadActionReplyAdded,
+			Timestamp:          ts.UnixMilli(),
+		}
+		data, err := json.Marshal(e)
+		require.NoError(t, err)
+		var raw map[string]any
+		require.NoError(t, json.Unmarshal(data, &raw))
+		_, present := raw["newThreadLastMsgAt"]
+		assert.True(t, present, "non-nil NewThreadLastMsgAt must appear as newThreadLastMsgAt in JSON")
+		var dst model.ThreadMetadataUpdatedEvent
+		require.NoError(t, json.Unmarshal(data, &dst))
+		require.NotNil(t, dst.NewThreadLastMsgAt)
+		assert.True(t, dst.NewThreadLastMsgAt.Equal(ts))
+	})
+}
+
 func TestMessageReadEventJSON(t *testing.T) {
 	floor := time.Date(2026, 6, 9, 10, 30, 0, 0, time.UTC)
 

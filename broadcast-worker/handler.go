@@ -383,9 +383,9 @@ func (h *Handler) handleThreadDeleted(ctx context.Context, evt *model.MessageEve
 		// publishThreadMetadata handles unknown types by logging and skipping.
 	}
 
-	// Badge (tcount) update applies to all room types.
+	// Badge (tcount + tlm) update applies to all room types.
 	if evt.NewTCount != nil {
-		h.publishThreadBadge(ctx, room, *evt.NewTCount, parentMsgID, msg.ID, evt.Timestamp)
+		h.publishThreadBadge(ctx, room, *evt.NewTCount, evt.NewThreadLastMsgAt, parentMsgID, msg.ID, evt.Timestamp)
 	}
 
 	return nil
@@ -408,23 +408,24 @@ func (h *Handler) handleThreadTCountUpdated(ctx context.Context, evt *model.Mess
 	if err != nil {
 		return fmt.Errorf("get room %s: %w", evt.Message.RoomID, err)
 	}
-	return h.publishThreadMetadata(ctx, room, *evt.NewTCount,
+	return h.publishThreadMetadata(ctx, room, *evt.NewTCount, evt.NewThreadLastMsgAt,
 		evt.Message.ThreadParentMessageID, evt.Message.ID,
 		model.ThreadActionReplyAdded, evt.Timestamp)
 }
 
-func (h *Handler) publishThreadMetadata(ctx context.Context, room *model.Room, newTcount int,
+func (h *Handler) publishThreadMetadata(ctx context.Context, room *model.Room, newTcount int, newTlm *time.Time,
 	parentMsgID, replyMsgID string, action model.ThreadAction, eventTimestamp int64) error {
 	evt := model.ThreadMetadataUpdatedEvent{
-		Type:            model.RoomEventThreadMetadataUpdated,
-		RoomID:          room.ID,
-		SiteID:          room.SiteID,
-		ParentMessageID: parentMsgID,
-		ReplyMessageID:  replyMsgID,
-		NewTCount:       newTcount,
-		Action:          action,
-		Timestamp:       time.Now().UTC().UnixMilli(),
-		EventTimestamp:  eventTimestamp,
+		Type:               model.RoomEventThreadMetadataUpdated,
+		RoomID:             room.ID,
+		SiteID:             room.SiteID,
+		ParentMessageID:    parentMsgID,
+		ReplyMessageID:     replyMsgID,
+		NewTCount:          newTcount,
+		NewThreadLastMsgAt: newTlm,
+		Action:             action,
+		Timestamp:          time.Now().UTC().UnixMilli(),
+		EventTimestamp:     eventTimestamp,
 	}
 	payload, err := json.Marshal(evt)
 	if err != nil {
@@ -476,7 +477,7 @@ func (h *Handler) handleDeleted(ctx context.Context, evt *model.MessageEvent) er
 	// above) but still count toward the thread's reply-count badge. Since
 	// handleThreadDeleted is bypassed for TShow=true, we publish the badge update here.
 	if msg.ThreadParentMessageID != "" && evt.NewTCount != nil {
-		h.publishThreadBadge(ctx, room, *evt.NewTCount, msg.ThreadParentMessageID, msg.ID, evt.Timestamp)
+		h.publishThreadBadge(ctx, room, *evt.NewTCount, evt.NewThreadLastMsgAt, msg.ThreadParentMessageID, msg.ID, evt.Timestamp)
 	}
 	return nil
 }
@@ -484,8 +485,8 @@ func (h *Handler) handleDeleted(ctx context.Context, evt *model.MessageEvent) er
 // publishThreadBadge publishes a thread-metadata badge update for a deleted
 // reply. Errors are logged but not returned: badge updates are best-effort and
 // JetStream will redeliver the parent event on failure.
-func (h *Handler) publishThreadBadge(ctx context.Context, room *model.Room, newTCount int, parentMsgID, replyMsgID string, timestamp int64) {
-	if err := h.publishThreadMetadata(ctx, room, newTCount, parentMsgID, replyMsgID, model.ThreadActionReplyDeleted, timestamp); err != nil {
+func (h *Handler) publishThreadBadge(ctx context.Context, room *model.Room, newTCount int, newTlm *time.Time, parentMsgID, replyMsgID string, timestamp int64) {
+	if err := h.publishThreadMetadata(ctx, room, newTCount, newTlm, parentMsgID, replyMsgID, model.ThreadActionReplyDeleted, timestamp); err != nil {
 		slog.ErrorContext(ctx, "publish thread badge for deleted reply failed",
 			"error", err,
 			"parentMessageID", parentMsgID,

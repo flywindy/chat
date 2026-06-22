@@ -39,6 +39,9 @@ type MessageEvent struct {
 	// ThreadParentMessageID set). Nil for all other event types.
 	// bson tag omits omitempty — zero is a valid count when the last reply is deleted.
 	NewTCount *int `json:"newTcount,omitempty" bson:"newTcount"`
+	// NewThreadLastMsgAt is the timestamp of the most recent surviving thread reply
+	// after this operation (nil when no replies remain).
+	NewThreadLastMsgAt *time.Time `json:"newThreadLastMsgAt,omitempty" bson:"newThreadLastMsgAt,omitempty"`
 }
 
 // ReactionAction is the toggle direction on ReactionDelta.Action; defined
@@ -330,15 +333,16 @@ type PinStateRoomEvent struct {
 // thread reply is added or deleted, so clients can update the reply-count badge
 // on the parent message without re-fetching the full message.
 type ThreadMetadataUpdatedEvent struct {
-	Type            RoomEventType `json:"type" bson:"type"`
-	RoomID          string        `json:"roomId" bson:"roomId"`
-	SiteID          string        `json:"siteId" bson:"siteId"`
-	Timestamp       int64         `json:"timestamp" bson:"timestamp"`
-	EventTimestamp  int64         `json:"eventTimestamp,omitempty" bson:"eventTimestamp,omitempty"`
-	ParentMessageID string        `json:"parentMessageId" bson:"parentMessageId"`
-	ReplyMessageID  string        `json:"replyMessageId" bson:"replyMessageId"`
-	NewTCount       int           `json:"newTcount" bson:"newTcount"`
-	Action          ThreadAction  `json:"action" bson:"action"`
+	Type               RoomEventType `json:"type" bson:"type"`
+	RoomID             string        `json:"roomId" bson:"roomId"`
+	SiteID             string        `json:"siteId" bson:"siteId"`
+	Timestamp          int64         `json:"timestamp" bson:"timestamp"`
+	EventTimestamp     int64         `json:"eventTimestamp,omitempty" bson:"eventTimestamp,omitempty"`
+	ParentMessageID    string        `json:"parentMessageId" bson:"parentMessageId"`
+	ReplyMessageID     string        `json:"replyMessageId" bson:"replyMessageId"`
+	NewTCount          int           `json:"newTcount" bson:"newTcount"`
+	NewThreadLastMsgAt *time.Time    `json:"newThreadLastMsgAt,omitempty" bson:"newThreadLastMsgAt,omitempty"`
+	Action             ThreadAction  `json:"action" bson:"action"`
 }
 
 // RoomRenamedRoomEvent is the live event published when a channel is renamed.

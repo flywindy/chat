@@ -476,6 +476,7 @@ func (h *Handler) publishThreadSubOutboxIfRemote(ctx context.Context, sub *model
 // chat.server.broadcast.{siteID}.thread.tcount (not MESSAGES_CANONICAL) because
 // badge updates are best-effort and do not belong in the message CRUD event store.
 func (h *Handler) publishThreadReplyEvent(ctx context.Context, msg *model.Message, newTcount int) error {
+	tlm := msg.CreatedAt
 	evt := model.MessageEvent{
 		Event: model.EventThreadReplyAdded,
 		Message: model.Message{
@@ -483,9 +484,10 @@ func (h *Handler) publishThreadReplyEvent(ctx context.Context, msg *model.Messag
 			RoomID:                msg.RoomID,
 			ThreadParentMessageID: msg.ThreadParentMessageID,
 		},
-		SiteID:    h.siteID,
-		Timestamp: time.Now().UTC().UnixMilli(),
-		NewTCount: &newTcount,
+		SiteID:             h.siteID,
+		Timestamp:          time.Now().UTC().UnixMilli(),
+		NewTCount:          &newTcount,
+		NewThreadLastMsgAt: &tlm,
 	}
 	data, err := json.Marshal(evt)
 	if err != nil {

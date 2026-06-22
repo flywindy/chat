@@ -141,6 +141,7 @@ CREATE TABLE IF NOT EXISTS messages_by_room(
   card_action FROZEN<"CardAction">,
   tshow BOOLEAN, // means from thread [also send to channel]
   tcount INT, // message reply thread count
+  thread_last_msg_at TIMESTAMP, // timestamp of most recent thread reply; null until first reply
   thread_parent_id TEXT,
   thread_parent_created_at TIMESTAMP, // for FE to query thread parent message when also sent to channel (tshow=true)
   quoted_parent_message FROZEN<"QuotedParentMessage">,
@@ -259,6 +260,7 @@ CREATE TABLE IF NOT EXISTS messages_by_id(
   card_action FROZEN<"CardAction">,
   tshow BOOLEAN,
   tcount INT, // message reply thread count
+  thread_last_msg_at TIMESTAMP, // timestamp of most recent thread reply; null until first reply
   thread_parent_id TEXT,
   thread_parent_created_at TIMESTAMP,
   quoted_parent_message FROZEN<"QuotedParentMessage">,

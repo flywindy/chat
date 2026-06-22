@@ -504,6 +504,9 @@ func TestHandler_ProcessMessage_ThreadReply_PublishesBadgeEvent(t *testing.T) {
 	assert.Equal(t, "msg-reply", badgeEvt.Message.ID)
 	require.NotNil(t, badgeEvt.NewTCount)
 	assert.Equal(t, expectedTcount, *badgeEvt.NewTCount)
+	// NewThreadLastMsgAt must be set to the reply's CreatedAt.
+	require.NotNil(t, badgeEvt.NewThreadLastMsgAt, "NewThreadLastMsgAt must be set on the badge event")
+	assert.True(t, badgeEvt.NewThreadLastMsgAt.Equal(now), "NewThreadLastMsgAt must equal reply CreatedAt")
 }
 
 func TestHandler_HandleThreadRoomAndSubscriptions(t *testing.T) {
