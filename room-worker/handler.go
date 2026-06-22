@@ -1024,11 +1024,13 @@ func (h *Handler) processAddMembers(ctx context.Context, data []byte) (err error
 	h.bustRoomMeta(ctx, req.RoomID)
 
 	// Publish subscription.update BEFORE room.key so clients have a sub entry to store the key under.
+	// Channel-only handler: roomName is the already-fetched channel name.
 	for _, sub := range subs {
 		subEvt := model.SubscriptionUpdateEvent{
 			UserID:       sub.User.ID,
 			Subscription: *sub,
 			Action:       "added",
+			RoomName:     room.Name,
 			Timestamp:    now.UnixMilli(),
 		}
 		subEvtData, _ := json.Marshal(subEvt)
@@ -1229,7 +1231,7 @@ func newSub(id string, user *model.User, room *model.Room, roles []model.Role,
 	name string, isSubscribed bool, joinedAt time.Time) *model.Subscription {
 	return &model.Subscription{
 		ID:           id,
-		User:         model.SubscriptionUser{ID: user.ID, Account: user.Account, IsBot: model.IsBotAccount(user.Account)},
+		User:         model.SubscriptionUser{ID: user.ID, Account: user.Account, IsBot: model.IsBot(user.Account) || model.IsPlatformAdminAccount(user.Account)},
 		RoomID:       room.ID,
 		SiteID:       room.SiteID,
 		Roles:        roles,
@@ -1397,12 +1399,11 @@ func (h *Handler) existingRoomKey(ctx context.Context, roomID string, fallbackPa
 	return &roomkeystore.VersionedKeyPair{Version: ver, KeyPair: *fallbackPair}, nil
 }
 
-// determineRoomTypeFromPayload mirrors room-service's determineRoomType on the
-// canonical payload. model.IsBotAccount classifies webhook-style bots (".bot"
-// suffix or "p_" prefix) consistently with room-service/helper.go and pkg/pipelines.
+// determineRoomTypeFromPayload mirrors room-service's determineRoomType: a single
+// ".bot"/"p_" counterpart is a botDM (consistent with room-service + pkg/pipelines).
 func determineRoomTypeFromPayload(req *model.CreateRoomRequest) model.RoomType {
 	if req.Name == "" && len(req.Orgs) == 0 && len(req.Channels) == 0 && len(req.Users) == 1 {
-		if model.IsBotAccount(req.Users[0]) {
+		if model.IsBot(req.Users[0]) || model.IsPlatformAdminAccount(req.Users[0]) {
 			return model.RoomTypeBotDM
 		}
 		return model.RoomTypeDM
@@ -1500,11 +1501,16 @@ func (h *Handler) finishCreateRoom(ctx context.Context, req *model.CreateRoomReq
 	h.bustRoomMeta(ctx, room.ID)
 
 	// Task 35: subscription.update fan-out per sub
+	userByAccount := make(map[string]*model.User, len(allUsers))
+	for i := range allUsers {
+		userByAccount[allUsers[i].Account] = &allUsers[i]
+	}
 	for _, sub := range subs {
 		evt := model.SubscriptionUpdateEvent{
 			UserID:       sub.User.ID,
 			Subscription: *sub,
 			Action:       "added",
+			RoomName:     h.resolveSubUpdateRoomName(ctx, sub, userByAccount),
 			Timestamp:    now.UnixMilli(),
 		}
 		data, err := json.Marshal(evt)
@@ -1806,7 +1812,7 @@ func (h *Handler) serverCreateDM(c *natsrouter.Context, req model.SyncCreateDMRe
 		return nil, fmt.Errorf("re-read DM subs after write: %w", err)
 	}
 
-	h.publishSubscriptionUpdates(ctx, []*model.Subscription{requesterSub, otherSub}, requestID)
+	h.publishSubscriptionUpdates(ctx, []*model.Subscription{requesterSub, otherSub}, []*model.User{requester, other}, requestID)
 
 	// Outbox failure means the remote site won't learn about the room; fail the request.
 	if err := h.publishSyncDMOutbox(ctx, room, requester, other, requesterSub.JoinedAt); err != nil {
@@ -1848,7 +1854,7 @@ func (h *Handler) createSelfDM(ctx context.Context, requester *model.User, reque
 	}
 
 	// No read-back: a fresh room id means a pure insert, so sub is what persisted.
-	h.publishSubscriptionUpdates(ctx, []*model.Subscription{sub}, requestID)
+	h.publishSubscriptionUpdates(ctx, []*model.Subscription{sub}, []*model.User{requester}, requestID)
 	return &model.SyncCreateDMReply{Success: true, Subscription: *sub}, nil
 }
 
@@ -1868,12 +1874,44 @@ func validateSyncCreateDMShape(req *model.SyncCreateDMRequest) error {
 	return nil
 }
 
-func (h *Handler) publishSubscriptionUpdates(ctx context.Context, subs []*model.Subscription, requestID string) {
+// resolveSubUpdateRoomName computes a subscription.update's roomName: the room name for
+// channels; for dm/botDM, app.Name when the counterpart is a bot account, else its display name.
+func (h *Handler) resolveSubUpdateRoomName(ctx context.Context, sub *model.Subscription, userByAccount map[string]*model.User) string {
+	switch sub.RoomType {
+	case model.RoomTypeDM, model.RoomTypeBotDM:
+		cp := sub.Name
+		// Platform-admin (p_) accounts are users, not bots, for naming — only .bot takes the app path.
+		if model.IsBot(cp) {
+			app, err := h.store.GetApp(ctx, cp)
+			if err == nil && app.Name != "" {
+				return app.Name
+			}
+			if err != nil && !errors.Is(err, ErrAppNotFound) {
+				slog.WarnContext(ctx, "resolve roomName: GetApp failed, using account fallback",
+					"request_id", natsutil.RequestIDFromContext(ctx), "botAccount", cp, "error", err)
+			}
+			return cp
+		}
+		if u, ok := userByAccount[cp]; ok {
+			return displayName(u)
+		}
+		return cp
+	default:
+		return sub.Name
+	}
+}
+
+func (h *Handler) publishSubscriptionUpdates(ctx context.Context, subs []*model.Subscription, users []*model.User, requestID string) {
+	userByAccount := make(map[string]*model.User, len(users))
+	for _, u := range users {
+		userByAccount[u.Account] = u
+	}
 	for _, sub := range subs {
 		evt := model.SubscriptionUpdateEvent{
 			UserID:       sub.User.ID,
 			Subscription: *sub,
 			Action:       "added",
+			RoomName:     h.resolveSubUpdateRoomName(ctx, sub, userByAccount),
 			Timestamp:    time.Now().UTC().UnixMilli(),
 		}
 		data, err := json.Marshal(evt)

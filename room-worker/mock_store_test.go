@@ -161,6 +161,21 @@ func (mr *MockSubscriptionStoreMockRecorder) FindUsersByAccounts(ctx, accounts a
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindUsersByAccounts", reflect.TypeOf((*MockSubscriptionStore)(nil).FindUsersByAccounts), ctx, accounts)
 }
 
+// GetApp mocks base method.
+func (m *MockSubscriptionStore) GetApp(ctx context.Context, botAccount string) (*model.App, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetApp", ctx, botAccount)
+	ret0, _ := ret[0].(*model.App)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetApp indicates an expected call of GetApp.
+func (mr *MockSubscriptionStoreMockRecorder) GetApp(ctx, botAccount any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetApp", reflect.TypeOf((*MockSubscriptionStore)(nil).GetApp), ctx, botAccount)
+}
+
 // GetOrgMembersWithIndividualStatus mocks base method.
 func (m *MockSubscriptionStore) GetOrgMembersWithIndividualStatus(ctx context.Context, roomID, orgID string) ([]OrgMemberStatus, error) {
 	m.ctrl.T.Helper()

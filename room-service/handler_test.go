@@ -81,6 +81,7 @@ func TestHandler_UpdateRole_Success(t *testing.T) {
 	require.NoError(t, json.Unmarshal(coreData, &evt))
 	assert.Equal(t, "role_updated", evt.Action)
 	assert.Equal(t, []model.Role{model.RoleMember, model.RoleOwner}, evt.Subscription.Roles)
+	assert.Equal(t, "general", evt.RoomName, "role_updated carries the channel name")
 }
 
 func TestHandler_UpdateRole_NonOwnerRejected(t *testing.T) {
@@ -6098,4 +6099,66 @@ func TestHandler_threadUnreadSummary(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestHandler_MuteToggle_OmitsRoomName(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	store := NewMockRoomStore(ctrl)
+
+	store.EXPECT().ToggleSubscriptionMute(gomock.Any(), "dmroom", "alice", gomock.Any()).
+		Return(&model.Subscription{
+			ID: "s1", User: model.SubscriptionUser{ID: "u1", Account: "alice"},
+			RoomID: "dmroom", SiteID: "site-a", RoomType: model.RoomTypeDM, Name: "bob", Muted: true,
+		}, nil)
+	store.EXPECT().GetUserSiteID(gomock.Any(), "alice").Return("site-a", nil)
+
+	var coreBodies [][]byte
+	h := &Handler{
+		store:           store,
+		siteID:          "site-a",
+		publishToStream: func(_ context.Context, _ string, _ []byte, _ string) error { return nil },
+		publishCore: func(_ context.Context, _ string, data []byte) error {
+			coreBodies = append(coreBodies, data)
+			return nil
+		},
+	}
+
+	_, err := h.muteToggle(ctxParams(map[string]string{"account": "alice", "roomID": "dmroom"}))
+	require.NoError(t, err)
+
+	require.Len(t, coreBodies, 1)
+	var evt model.SubscriptionUpdateEvent
+	require.NoError(t, json.Unmarshal(coreBodies[0], &evt))
+	assert.Empty(t, evt.RoomName, "mute must not look up or set roomName")
+}
+
+func TestHandler_FavoriteToggle_OmitsRoomName(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	store := NewMockRoomStore(ctrl)
+
+	store.EXPECT().ToggleSubscriptionFavorite(gomock.Any(), "botroom", "alice", gomock.Any()).
+		Return(&model.Subscription{
+			ID: "s1", User: model.SubscriptionUser{ID: "u1", Account: "alice"},
+			RoomID: "botroom", SiteID: "site-a", RoomType: model.RoomTypeBotDM, Name: "helper.bot", Favorite: true,
+		}, nil)
+	store.EXPECT().GetUserSiteID(gomock.Any(), "alice").Return("site-a", nil)
+
+	var coreBodies [][]byte
+	h := &Handler{
+		store:           store,
+		siteID:          "site-a",
+		publishToStream: func(_ context.Context, _ string, _ []byte, _ string) error { return nil },
+		publishCore: func(_ context.Context, _ string, data []byte) error {
+			coreBodies = append(coreBodies, data)
+			return nil
+		},
+	}
+
+	_, err := h.favoriteToggle(ctxParams(map[string]string{"account": "alice", "roomID": "botroom"}))
+	require.NoError(t, err)
+
+	require.Len(t, coreBodies, 1)
+	var evt model.SubscriptionUpdateEvent
+	require.NoError(t, json.Unmarshal(coreBodies[0], &evt))
+	assert.Empty(t, evt.RoomName, "favorite must not look up or set roomName")
 }

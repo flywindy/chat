@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"time"
 
 	"github.com/hmchangw/chat/pkg/errcode"
@@ -105,8 +104,6 @@ var (
 	errResponseTooLarge = errcode.Internal("response payload exceeds maximum size")
 )
 
-var botPattern = regexp.MustCompile(`\.bot$|^p_`)
-
 // platformAdminRegex matches platform-admin / webhook accounts by their `p_`
 // prefix. Mentionable autocomplete hides these accounts entirely so they do
 // not appear as `@`-mention targets.
@@ -137,14 +134,11 @@ func hasRole(roles []model.Role, target model.Role) bool {
 	return false
 }
 
-// isBot returns true if an account name matches the bot naming pattern.
-func isBot(account string) bool { return botPattern.MatchString(account) }
-
 // filterBots removes bot accounts from a slice of account names.
 func filterBots(accounts []string) []string {
 	var filtered []string
 	for _, a := range accounts {
-		if !isBot(a) {
+		if !model.IsBot(a) && !model.IsPlatformAdminAccount(a) {
 			filtered = append(filtered, a)
 		}
 	}
@@ -164,26 +158,12 @@ func dedup(items []string) []string {
 	return result
 }
 
-// isPlatformAdmin returns true when u has the UserRoleAdmin role. Nil-safe.
-func isPlatformAdmin(u *model.User) bool {
-	if u == nil {
-		return false
-	}
-	for _, r := range u.Roles {
-		if r == model.UserRoleAdmin {
-			return true
-		}
-	}
-	return false
-}
-
 // determineRoomType classifies a post-strip request; caller must guarantee non-empty input.
-// Uses the shared isBot predicate so both ".bot" suffix and "p_" prefix accounts
-// classify as botDM, matching the bot-pattern guard used elsewhere in the service
-// (filterBots, errBotInChannel) and in pkg/pipelines.
+// A single-user DM with a bot (".bot") or platform-admin ("p_") counterpart is a botDM —
+// the same union enforced by the channel-membership guards (filterBots, errBotInChannel).
 func determineRoomType(req *model.CreateRoomRequest) model.RoomType {
 	if req.Name == "" && len(req.Orgs) == 0 && len(req.Channels) == 0 && len(req.Users) == 1 {
-		if isBot(req.Users[0]) {
+		if model.IsBot(req.Users[0]) || model.IsPlatformAdminAccount(req.Users[0]) {
 			return model.RoomTypeBotDM
 		}
 		return model.RoomTypeDM

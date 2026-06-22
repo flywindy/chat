@@ -3195,12 +3195,62 @@ func TestMongoStore_ListMemberStatuses_Integration(t *testing.T) {
 		}, byAcct["bob"])
 	})
 
+	t.Run("members with empty statusText are excluded", func(t *testing.T) {
+		db := setupMongo(t)
+		store := NewMongoStore(db)
+		mustInsertUser(t, db, &model.User{
+			ID: "u-alice", Account: "alice", EngName: "Alice", ChineseName: "愛",
+			StatusIsShow: true, StatusText: "available",
+		})
+		mustInsertUser(t, db, &model.User{
+			ID: "u-bob", Account: "bob", EngName: "Bob", ChineseName: "博", StatusText: "",
+		})
+		mustInsertSub(t, db, &model.Subscription{
+			ID: "sub-a", User: model.SubscriptionUser{ID: "u-alice", Account: "alice"},
+			RoomID: "r1", SiteID: "site-a",
+		})
+		mustInsertSub(t, db, &model.Subscription{
+			ID: "sub-b", User: model.SubscriptionUser{ID: "u-bob", Account: "bob"},
+			RoomID: "r1", SiteID: "site-a",
+		})
+
+		got, err := store.ListMemberStatuses(ctx, "r1", 5)
+		require.NoError(t, err)
+		require.Len(t, got, 1, "member with empty statusText must be excluded")
+		assert.Equal(t, "alice", got[0].Account)
+	})
+
+	t.Run("member whose user doc lacks statusText is excluded", func(t *testing.T) {
+		db := setupMongo(t)
+		store := NewMongoStore(db)
+		mustInsertUser(t, db, &model.User{
+			ID: "u-alice", Account: "alice", EngName: "Alice", ChineseName: "愛",
+			StatusIsShow: true, StatusText: "available",
+		})
+		// Raw insert with no statusText field at all (bypasses the model's zero value).
+		_, err := db.Collection("users").InsertOne(ctx, bson.M{"_id": "u-dave", "account": "dave", "engName": "Dave"})
+		require.NoError(t, err)
+		mustInsertSub(t, db, &model.Subscription{
+			ID: "sub-a", User: model.SubscriptionUser{ID: "u-alice", Account: "alice"},
+			RoomID: "r1", SiteID: "site-a",
+		})
+		mustInsertSub(t, db, &model.Subscription{
+			ID: "sub-d", User: model.SubscriptionUser{ID: "u-dave", Account: "dave"},
+			RoomID: "r1", SiteID: "site-a",
+		})
+
+		got, err := store.ListMemberStatuses(ctx, "r1", 5)
+		require.NoError(t, err)
+		require.Len(t, got, 1, "member whose user doc lacks statusText must be excluded")
+		assert.Equal(t, "alice", got[0].Account)
+	})
+
 	t.Run("limit caps the result count", func(t *testing.T) {
 		db := setupMongo(t)
 		store := NewMongoStore(db)
 		for i := 0; i < 5; i++ {
 			acct := fmt.Sprintf("user%d", i)
-			mustInsertUser(t, db, &model.User{ID: "u-" + acct, Account: acct, EngName: acct, ChineseName: acct})
+			mustInsertUser(t, db, &model.User{ID: "u-" + acct, Account: acct, EngName: acct, ChineseName: acct, StatusText: acct})
 			mustInsertSub(t, db, &model.Subscription{
 				ID: "sub-" + acct, User: model.SubscriptionUser{ID: "u-" + acct, Account: acct},
 				RoomID: "r1", SiteID: "site-a",
@@ -3251,7 +3301,7 @@ func TestMongoStore_ListMemberStatuses_Integration(t *testing.T) {
 		// Then 3 live subs.
 		for i := 0; i < 3; i++ {
 			acct := fmt.Sprintf("live%d", i)
-			mustInsertUser(t, db, &model.User{ID: "u-" + acct, Account: acct, EngName: acct})
+			mustInsertUser(t, db, &model.User{ID: "u-" + acct, Account: acct, EngName: acct, StatusText: acct})
 			mustInsertSub(t, db, &model.Subscription{
 				ID:     fmt.Sprintf("sub-live%d", i),
 				User:   model.SubscriptionUser{ID: "u-" + acct, Account: acct},

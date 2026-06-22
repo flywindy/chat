@@ -21,6 +21,7 @@ type MongoStore struct {
 	rooms         *mongo.Collection
 	roomMembers   *mongo.Collection
 	users         *mongo.Collection
+	apps          *mongo.Collection
 }
 
 func NewMongoStore(db *mongo.Database) *MongoStore {
@@ -29,6 +30,7 @@ func NewMongoStore(db *mongo.Database) *MongoStore {
 		rooms:         db.Collection("rooms"),
 		roomMembers:   db.Collection("room_members"),
 		users:         db.Collection("users"),
+		apps:          db.Collection("apps"),
 	}
 }
 
@@ -51,7 +53,7 @@ func (s *MongoStore) ListByRoom(ctx context.Context, roomID string) ([]model.Sub
 // ReconcileMemberCounts recomputes the room's AppCount (bot subs) and UserCount
 // (everyone else) and writes both back in a single updateOne. AppCount is an
 // index-backed CountDocuments on {roomId, u.isBot} (the flag is stamped at
-// sub-creation via model.IsBotAccount) and UserCount is total minus bots — both
+// sub-creation for ".bot"/"p_" accounts) and UserCount is total minus bots — both
 // counts use the index and no per-document regex runs. Deriving UserCount by
 // subtraction also means legacy docs written before u.isBot existed (and any
 // missing the field) correctly fall into UserCount rather than being dropped.
@@ -98,6 +100,22 @@ func (s *MongoStore) GetUser(ctx context.Context, account string) (*model.User, 
 		return nil, fmt.Errorf("get user %q: %w", account, err)
 	}
 	return &u, nil
+}
+
+// GetApp reads the apps collection, which room-service owns and indexes
+// (assistant.name); room-worker only reads it and creates no index of its own.
+// Projects only name — the one field callers use (the botDM roomName).
+func (s *MongoStore) GetApp(ctx context.Context, botAccount string) (*model.App, error) {
+	var a model.App
+	err := s.apps.FindOne(ctx, bson.M{"assistant.name": botAccount},
+		options.FindOne().SetProjection(bson.M{"name": 1})).Decode(&a)
+	if errors.Is(err, mongo.ErrNoDocuments) {
+		return nil, ErrAppNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get app for bot %q: %w", botAccount, err)
+	}
+	return &a, nil
 }
 
 func (s *MongoStore) CreateRoom(ctx context.Context, room *model.Room, key *roomkeystore.RoomKeyPair) (bool, error) {

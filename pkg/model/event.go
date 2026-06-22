@@ -74,6 +74,7 @@ type SubscriptionUpdateEvent struct {
 	UserID       string       `json:"userId"`
 	Subscription Subscription `json:"subscription"`
 	Action       string       `json:"action"` // "added" | "removed" | "role_updated" | "mute_toggled" | "favorite_toggled" | "read"
+	RoomName     string       `json:"roomName,omitempty"`
 	Timestamp    int64        `json:"timestamp" bson:"timestamp"`
 }
 

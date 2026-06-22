@@ -17,10 +17,8 @@ import (
 	"github.com/hmchangw/chat/pkg/pipelines"
 )
 
-// botAccountRegex matches bot/app accounts by the ".bot" suffix.
-// Distinct from helper.go::botPattern which also matches "^p_" — that
-// clause is a pre-existing bug (p_ accounts are platform admins, not
-// bots) and is out of scope for this change.
+// botAccountRegex matches bot/app accounts by the ".bot" suffix only — it excludes
+// "p_" platform-admin accounts, which have user records and are looked up as users here.
 const botAccountRegex = `\.bot$`
 
 var botAccountPattern = regexp.MustCompile(botAccountRegex)
@@ -1329,14 +1327,8 @@ func (s *MongoStore) ListActiveCmdMenus(ctx context.Context, assistantNames []st
 	return menus, nil
 }
 
-// ListMemberStatuses returns up to `limit` members of roomID, each projected
-// from the joined users document as MemberStatus. Subscriptions whose user
-// document has been deleted are dropped by the $unwind with
-// preserveNullAndEmptyArrays:false rather than returned half-populated.
-// $limit runs AFTER the join so the wire contract ("up to limit live rows")
-// holds even when the room contains orphan subscriptions whose user document
-// has been hard-deleted. Pre-join $limit would silently under-deliver in that
-// case. Mirrors ListReadReceipts.
+// ListMemberStatuses returns up to limit members of roomID (projected from the joined
+// user doc); orphan subs and empty-statusText members are dropped before the post-join $limit.
 func (s *MongoStore) ListMemberStatuses(ctx context.Context, roomID string, limit int) ([]model.MemberStatus, error) {
 	pipeline := mongo.Pipeline{
 		{{Key: "$match", Value: bson.M{"roomId": roomID}}},
@@ -1363,6 +1355,8 @@ func (s *MongoStore) ListMemberStatuses(ctx context.Context, roomID string, limi
 		}}},
 		{{Key: "$unwind", Value: bson.M{"path": "$user", "preserveNullAndEmptyArrays": false}}},
 		{{Key: "$replaceWith", Value: "$user"}},
+		// Exclude members with no status set; an empty statusText is not a presence to surface.
+		{{Key: "$match", Value: bson.M{"statusText": bson.M{"$nin": bson.A{"", nil}}}}},
 		{{Key: "$limit", Value: int64(limit)}},
 	}
 	cursor, err := s.subscriptions.Aggregate(ctx, pipeline)

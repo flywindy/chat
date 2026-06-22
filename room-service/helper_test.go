@@ -33,24 +33,6 @@ func TestHasRole(t *testing.T) {
 	}
 }
 
-func TestIsBot(t *testing.T) {
-	tests := []struct {
-		name    string
-		account string
-		want    bool
-	}{
-		{"bot suffix", "helper.bot", true},
-		{"bot prefix", "p_scheduler", true},
-		{"normal user", "alice", false},
-		{"contains bot but not suffix", "botmaster", false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, isBot(tt.account))
-		})
-	}
-}
-
 func TestFilterBots(t *testing.T) {
 	input := []string{"alice", "helper.bot", "bob", "p_scheduler"}
 	got := filterBots(input)
@@ -155,23 +137,6 @@ func TestStripAccount(t *testing.T) {
 			got := stripAccount(tc.in, tc.account)
 			assert.Equal(t, tc.want, got)
 		})
-	}
-}
-
-func TestIsPlatformAdmin(t *testing.T) {
-	tests := []struct {
-		name string
-		user *model.User
-		want bool
-	}{
-		{"nil", nil, false},
-		{"empty roles", &model.User{Account: "alice"}, false},
-		{"user only", &model.User{Account: "a", Roles: []model.UserRole{model.UserRoleUser}}, false},
-		{"admin", &model.User{Account: "a", Roles: []model.UserRole{model.UserRoleAdmin}}, true},
-		{"mixed", &model.User{Account: "a", Roles: []model.UserRole{model.UserRoleUser, model.UserRoleAdmin}}, true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) { assert.Equal(t, tt.want, isPlatformAdmin(tt.user)) })
 	}
 }
 

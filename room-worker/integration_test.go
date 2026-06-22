@@ -451,8 +451,8 @@ func TestReconcileMemberCountsSplitsBots(t *testing.T) {
 	mustInsertSub(t, db, &model.Subscription{
 		ID: "s3", User: model.SubscriptionUser{Account: "carol"}, RoomID: "r1",
 	})
-	// Bot subs carry u.isBot=true in production (stamped by newSub via
-	// model.IsBotAccount); set it explicitly here since the test inserts the
+	// Bot subs carry u.isBot=true in production (stamped by newSub for
+	// ".bot"/"p_" accounts); set it explicitly here since the test inserts the
 	// document directly. ReconcileMemberCounts now counts off this flag.
 	mustInsertSub(t, db, &model.Subscription{
 		ID: "s4", User: model.SubscriptionUser{Account: "weather.bot", IsBot: true}, RoomID: "r1",
@@ -1965,4 +1965,24 @@ func TestMongoStore_UpdateSubscriptionNamesForRoom_StampsTimestamp(t *testing.T)
 	gotName, gotTs = subName()
 	assert.Equal(t, "newest", gotName)
 	assert.Equal(t, newer.UnixMilli(), gotTs.UnixMilli())
+}
+
+func TestMongoStore_GetApp_Integration(t *testing.T) {
+	db := setupMongo(t)
+	store := NewMongoStore(db)
+	ctx := context.Background()
+
+	_, err := db.Collection("apps").InsertOne(ctx, model.App{
+		ID:        "app1",
+		Name:      "Helper Bot",
+		Assistant: &model.AppAssistant{Enabled: true, Name: "helper.bot"},
+	})
+	require.NoError(t, err)
+
+	app, err := store.GetApp(ctx, "helper.bot")
+	require.NoError(t, err)
+	assert.Equal(t, "Helper Bot", app.Name)
+
+	_, err = store.GetApp(ctx, "missing.bot")
+	assert.ErrorIs(t, err, ErrAppNotFound)
 }

@@ -2071,6 +2071,10 @@ func TestProcessCreateRoom_BotDM_HasIsSubscribed(t *testing.T) {
 			return capturedSubs[0], capturedSubs[1], nil
 		})
 
+	// finishCreateRoom calls resolveSubUpdateRoomName per sub; the human sub has
+	// Name="helper.bot" (RoomTypeBotDM), so GetApp is invoked once.
+	mockStore.EXPECT().GetApp(gomock.Any(), "helper.bot").Return(&model.App{Name: "Helper Bot"}, nil)
+
 	mockStore.EXPECT().ReconcileMemberCounts(gomock.Any(), "room-bot-1").Return(nil)
 
 	body := makeCreateRoomBody(t, &model.CreateRoomRequest{
@@ -2095,6 +2099,28 @@ func TestProcessCreateRoom_BotDM_HasIsSubscribed(t *testing.T) {
 	assert.False(t, botSub.IsSubscribed)
 
 	assert.Empty(t, messagesCanonical(getPublished(), "site-A"), "botDM must emit no sys-messages")
+
+	// human (alice) subscription.update must carry the resolved app name.
+	humanSubj := subject.SubscriptionUpdate("alice")
+	var humanEvt model.SubscriptionUpdateEvent
+	for _, p := range getPublished() {
+		if p.subj == humanSubj {
+			require.NoError(t, json.Unmarshal(p.data, &humanEvt))
+			break
+		}
+	}
+	assert.Equal(t, "Helper Bot", humanEvt.RoomName)
+
+	// bot (helper.bot) subscription.update must carry the human's display name.
+	botSubj := subject.SubscriptionUpdate("helper.bot")
+	var botEvt model.SubscriptionUpdateEvent
+	for _, p := range getPublished() {
+		if p.subj == botSubj {
+			require.NoError(t, json.Unmarshal(p.data, &botEvt))
+			break
+		}
+	}
+	assert.Equal(t, "Alice A 艾麗斯", botEvt.RoomName)
 }
 
 // ---- Task 34: Channel branch tests ----
@@ -5137,4 +5163,156 @@ func TestHandler_bustRoomMeta_FailOpen(t *testing.T) {
 	assert.NotPanics(t, func() { h.bustRoomMeta(context.Background(), "r123") })
 	// The Del was attempted (error swallowed inside BustMeta), not skipped.
 	assert.Equal(t, []string{roommetacache.MetaKey("r123")}, fake.dels)
+}
+
+func TestHandler_resolveSubUpdateRoomName(t *testing.T) {
+	alice := &model.User{Account: "alice", EngName: "Alice", ChineseName: "愛麗絲"}
+	users := map[string]*model.User{"alice": alice}
+
+	tests := []struct {
+		name      string
+		sub       model.Subscription
+		userMap   map[string]*model.User
+		setupMock func(s *MockSubscriptionStore)
+		want      string
+	}{
+		{
+			name: "channel uses sub.Name",
+			sub:  model.Subscription{RoomType: model.RoomTypeChannel, Name: "general"},
+			want: "general",
+		},
+		{
+			name:    "dm resolves counterpart from map",
+			sub:     model.Subscription{RoomType: model.RoomTypeDM, Name: "alice"},
+			userMap: users,
+			want:    "Alice 愛麗絲",
+		},
+		{
+			name:    "dm counterpart missing from map falls back to account",
+			sub:     model.Subscription{RoomType: model.RoomTypeDM, Name: "carol"},
+			userMap: users,
+			want:    "carol",
+		},
+		{
+			name: "botDM resolves app name",
+			sub:  model.Subscription{RoomType: model.RoomTypeBotDM, Name: "helper.bot"},
+			setupMock: func(s *MockSubscriptionStore) {
+				s.EXPECT().GetApp(gomock.Any(), "helper.bot").Return(&model.App{Name: "Helper Bot"}, nil)
+			},
+			want: "Helper Bot",
+		},
+		{
+			name: "botDM GetApp error falls back to bot account",
+			sub:  model.Subscription{RoomType: model.RoomTypeBotDM, Name: "broken.bot"},
+			setupMock: func(s *MockSubscriptionStore) {
+				s.EXPECT().GetApp(gomock.Any(), "broken.bot").Return(nil, ErrAppNotFound)
+			},
+			want: "broken.bot",
+		},
+		{
+			name: "botDM GetApp infra error falls back to bot account",
+			sub:  model.Subscription{RoomType: model.RoomTypeBotDM, Name: "flaky.bot"},
+			setupMock: func(s *MockSubscriptionStore) {
+				s.EXPECT().GetApp(gomock.Any(), "flaky.bot").Return(nil, context.DeadlineExceeded)
+			},
+			want: "flaky.bot",
+		},
+		{
+			name: "botDM empty app name falls back to bot account",
+			sub:  model.Subscription{RoomType: model.RoomTypeBotDM, Name: "nameless.bot"},
+			setupMock: func(s *MockSubscriptionStore) {
+				s.EXPECT().GetApp(gomock.Any(), "nameless.bot").Return(&model.App{Name: ""}, nil)
+			},
+			want: "nameless.bot",
+		},
+		{
+			name:    "botDM bot-side sub resolves human from map",
+			sub:     model.Subscription{RoomType: model.RoomTypeBotDM, Name: "alice"},
+			userMap: users,
+			want:    "Alice 愛麗絲",
+		},
+		{
+			name:    "botDM platform-admin (p_) counterpart resolves as a user from map",
+			sub:     model.Subscription{RoomType: model.RoomTypeBotDM, Name: "p_admin"},
+			userMap: map[string]*model.User{"p_admin": {Account: "p_admin", EngName: "Pat", ChineseName: "派特"}},
+			want:    "Pat 派特",
+		},
+		{
+			name:    "botDM platform-admin (p_) counterpart missing from map falls back to account",
+			sub:     model.Subscription{RoomType: model.RoomTypeBotDM, Name: "p_admin"},
+			userMap: users,
+			want:    "p_admin",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			store := NewMockSubscriptionStore(ctrl)
+			if tt.setupMock != nil {
+				tt.setupMock(store)
+			}
+			h := &Handler{store: store}
+			got := h.resolveSubUpdateRoomName(context.Background(), &tt.sub, tt.userMap)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// decodeSubUpdate finds the subscription.update published to account and decodes it.
+func decodeSubUpdate(t *testing.T, captured []dmCapturedPublish, account string) model.SubscriptionUpdateEvent {
+	t.Helper()
+	want := subject.SubscriptionUpdate(account)
+	for _, p := range captured {
+		if p.subject == want {
+			var evt model.SubscriptionUpdateEvent
+			require.NoError(t, json.Unmarshal(p.data, &evt))
+			return evt
+		}
+	}
+	t.Fatalf("no subscription.update published to %s", account)
+	return model.SubscriptionUpdateEvent{}
+}
+
+func TestServerCreateDM_DM_SetsCounterpartRoomName(t *testing.T) {
+	h, store, capture := newSyncDMTestHandler(t)
+
+	requester := &model.User{ID: "u-alice", Account: "alice", SiteID: "site-a", EngName: "Alice"}
+	other := &model.User{ID: "u-bob", Account: "bob", SiteID: "site-a", EngName: "Bob"}
+	store.EXPECT().FindUsersByAccounts(gomock.Any(), gomock.Any()).Return([]model.User{*requester, *other}, nil)
+	store.EXPECT().CreateRoom(gomock.Any(), gomock.Any(), gomock.Any()).Return(true, nil)
+	store.EXPECT().BulkCreateSubscriptions(gomock.Any(), gomock.Any()).Return(nil)
+	store.EXPECT().FindDMSubscriptionPair(gomock.Any(), gomock.Any(), "alice").Return(
+		&model.Subscription{User: model.SubscriptionUser{ID: "u-alice", Account: "alice"}, RoomType: model.RoomTypeDM, Name: "bob"},
+		&model.Subscription{User: model.SubscriptionUser{ID: "u-bob", Account: "bob"}, RoomType: model.RoomTypeDM, Name: "alice"},
+		nil)
+
+	req := model.SyncCreateDMRequest{RoomType: model.RoomTypeDM, RequesterAccount: "alice", OtherAccount: "bob"}
+	_, err := h.serverCreateDM(dmCtx(), req)
+	require.NoError(t, err)
+
+	assert.Equal(t, "Bob", decodeSubUpdate(t, capture.captured, "alice").RoomName)
+	assert.Equal(t, "Alice", decodeSubUpdate(t, capture.captured, "bob").RoomName)
+}
+
+func TestServerCreateDM_BotDM_SetsAppNameForHuman(t *testing.T) {
+	h, store, capture := newSyncDMTestHandler(t)
+
+	requester := &model.User{ID: "u-alice", Account: "alice", SiteID: "site-a", EngName: "Alice"}
+	bot := &model.User{ID: "u-bot", Account: "helper.bot", SiteID: "site-a"}
+	store.EXPECT().FindUsersByAccounts(gomock.Any(), gomock.Any()).Return([]model.User{*requester, *bot}, nil)
+	store.EXPECT().CreateRoom(gomock.Any(), gomock.Any(), gomock.Any()).Return(true, nil)
+	store.EXPECT().BulkCreateSubscriptions(gomock.Any(), gomock.Any()).Return(nil)
+	store.EXPECT().FindDMSubscriptionPair(gomock.Any(), gomock.Any(), "alice").Return(
+		&model.Subscription{User: model.SubscriptionUser{ID: "u-alice", Account: "alice"}, RoomType: model.RoomTypeBotDM, Name: "helper.bot"},
+		&model.Subscription{User: model.SubscriptionUser{ID: "u-bot", Account: "helper.bot"}, RoomType: model.RoomTypeBotDM, Name: "alice"},
+		nil)
+	store.EXPECT().GetApp(gomock.Any(), "helper.bot").Return(&model.App{Name: "Helper Bot"}, nil)
+
+	req := model.SyncCreateDMRequest{RoomType: model.RoomTypeBotDM, RequesterAccount: "alice", OtherAccount: "helper.bot"}
+	_, err := h.serverCreateDM(dmCtx(), req)
+	require.NoError(t, err)
+
+	assert.Equal(t, "Helper Bot", decodeSubUpdate(t, capture.captured, "alice").RoomName)
+	assert.Equal(t, "Alice", decodeSubUpdate(t, capture.captured, "helper.bot").RoomName)
 }

@@ -62,10 +62,54 @@ func TestIsPlatformAdmin(t *testing.T) {
 		{"admin role present", &model.User{Account: "alice", Roles: []model.UserRole{model.UserRoleAdmin}}, true},
 		{"admin among many", &model.User{Account: "alice", Roles: []model.UserRole{model.UserRoleUser, model.UserRoleAdmin, "auditor"}}, true},
 		{"case-sensitive (Admin not admin)", &model.User{Account: "alice", Roles: []model.UserRole{"Admin"}}, false},
+		{"p_ account without admin role is not a role admin", &model.User{Account: "p_webhook"}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equal(t, tt.want, model.IsPlatformAdmin(tt.u))
+		})
+	}
+}
+
+func TestIsPlatformAdminAccount(t *testing.T) {
+	tests := []struct {
+		name    string
+		account string
+		want    bool
+	}{
+		{"p_ prefix webhook", "p_webhook", true},
+		{"bare p_ prefix", "p_", true},
+		{"plain human account", "alice", false},
+		{"bot account", "weather.bot", false},
+		{"case-sensitive prefix (P_)", "P_upper", false},
+		{"p underscore not at start", "alice_p_x", false},
+		{"empty", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, model.IsPlatformAdminAccount(tt.account))
+		})
+	}
+}
+
+func TestIsBot(t *testing.T) {
+	tests := []struct {
+		name    string
+		account string
+		want    bool
+	}{
+		{"dot-bot suffix", "weather.bot", true},
+		{"bare dot-bot", ".bot", true},
+		{"p_ prefix is not a bot", "p_webhook", false},
+		{"plain human account", "alice", false},
+		{"ends with bot but no dot", "robot", false},
+		{"dot-bot not at end", "alice.bot.com", false},
+		{"case-sensitive suffix", "weather.BOT", false},
+		{"empty", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, model.IsBot(tt.account))
 		})
 	}
 }
@@ -3891,4 +3935,27 @@ func TestSubscriptionBaseMetadata_RoundTrip(t *testing.T) {
 		_, present := zero[k]
 		assert.False(t, present, "%q must be omitted when unset", k)
 	}
+}
+
+func TestSubscriptionUpdateEvent_RoomNameRoundTrips(t *testing.T) {
+	evt := model.SubscriptionUpdateEvent{
+		UserID:       "u1",
+		Subscription: model.Subscription{ID: "s1", RoomID: "r1", RoomType: model.RoomTypeDM},
+		Action:       "added",
+		RoomName:     "Alice Wang",
+		Timestamp:    1735689600000,
+	}
+	data, err := json.Marshal(&evt)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), `"roomName":"Alice Wang"`)
+
+	var dst model.SubscriptionUpdateEvent
+	require.NoError(t, json.Unmarshal(data, &dst))
+	assert.Equal(t, "Alice Wang", dst.RoomName)
+}
+
+func TestSubscriptionUpdateEvent_RoomNameOmittedWhenEmpty(t *testing.T) {
+	data, err := json.Marshal(&model.SubscriptionUpdateEvent{Action: "mute_toggled"})
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), "roomName")
 }

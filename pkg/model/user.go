@@ -1,5 +1,7 @@
 package model
 
+import "strings"
+
 // UserRole is a platform-level role flag on the User record.
 // Empty Roles reads as ["user"]; only positive marker is "admin".
 type UserRole string
@@ -27,8 +29,7 @@ type User struct {
 	Roles        []UserRole `json:"roles,omitempty"        bson:"roles,omitempty"`
 }
 
-// IsPlatformAdmin reports whether u holds the platform admin role.
-// Returns false for nil receivers and for users without the role.
+// IsPlatformAdmin reports whether u holds the platform admin role. Nil-safe.
 func IsPlatformAdmin(u *User) bool {
 	if u == nil {
 		return false
@@ -39,6 +40,17 @@ func IsPlatformAdmin(u *User) bool {
 		}
 	}
 	return false
+}
+
+// IsPlatformAdminAccount reports whether account is a platform-admin account
+// (a "p_" prefix).
+func IsPlatformAdminAccount(account string) bool {
+	return strings.HasPrefix(account, "p_")
+}
+
+// IsBot reports whether account is a bot account (a ".bot" suffix).
+func IsBot(account string) bool {
+	return strings.HasSuffix(account, ".bot")
 }
 
 // DisplayName renders the user's display label for Drive ownership metadata:

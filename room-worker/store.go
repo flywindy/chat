@@ -16,6 +16,7 @@ var (
 	ErrRoomNotFound       = errors.New("room not found")
 	ErrNotChannelRoom     = errors.New("not a channel room")
 	ErrOwnerNotSubscribed = errors.New("owner account is no longer subscribed")
+	ErrAppNotFound        = errors.New("app not found") // GetApp: no matching bot account
 )
 
 //go:generate mockgen -destination=mock_store_test.go -package=main . SubscriptionStore,RoomKeyStore
@@ -71,6 +72,8 @@ type SubscriptionStore interface {
 	GetRoom(ctx context.Context, roomID string) (*model.Room, error)
 	GetSubscription(ctx context.Context, account, roomID string) (*model.Subscription, error)
 	GetUser(ctx context.Context, account string) (*model.User, error)
+	// GetApp returns the app whose Assistant.Name == botAccount, or ErrAppNotFound.
+	GetApp(ctx context.Context, botAccount string) (*model.App, error)
 	// FindDMSubscriptionPair returns both subs of a DM/botDM room in a
 	// single query. The first return value is the sub owned by
 	// requesterAccount, the second is the counterpart's. Returns
