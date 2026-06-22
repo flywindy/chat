@@ -1569,9 +1569,13 @@ func (s *MongoStore) ApplySubscriptionVisibility(ctx context.Context, roomID str
 	return nil
 }
 
-// ListSubscriptionsByRoom returns every subscription in the room.
+// ListSubscriptionsByRoom returns every subscription in the room. Callers only
+// read the subscriber account, so project just that field.
 func (s *MongoStore) ListSubscriptionsByRoom(ctx context.Context, roomID string) ([]model.Subscription, error) {
-	cursor, err := s.subscriptions.Find(ctx, bson.M{"roomId": roomID})
+	cursor, err := s.subscriptions.Find(ctx,
+		bson.M{"roomId": roomID},
+		options.Find().SetProjection(bson.M{"_id": 0, "u.account": 1}),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("list subscriptions for room %q: find: %w", roomID, err)
 	}
@@ -1583,12 +1587,16 @@ func (s *MongoStore) ListSubscriptionsByRoom(ctx context.Context, roomID string)
 }
 
 // FindUsersByAccounts returns User docs for the supplied accounts. Empty input
-// returns nil, nil.
+// returns nil, nil. The sole caller only reads siteId (for cross-site outbox
+// fan-out), so project just that field.
 func (s *MongoStore) FindUsersByAccounts(ctx context.Context, accounts []string) ([]model.User, error) {
 	if len(accounts) == 0 {
 		return nil, nil
 	}
-	cursor, err := s.users.Find(ctx, bson.M{"account": bson.M{"$in": accounts}})
+	cursor, err := s.users.Find(ctx,
+		bson.M{"account": bson.M{"$in": accounts}},
+		options.Find().SetProjection(bson.M{"_id": 0, "siteId": 1}),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("find users by accounts: %w", err)
 	}

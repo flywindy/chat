@@ -285,10 +285,12 @@ All commands are wrapped in the root Makefile. Always use `make` targets — nev
 - Primary keys: application-generated via `pkg/idgen`, mapped to `bson:"_id"`. Format depends on the entity:
   - **Subscriptions, RoomMembers, ThreadRooms, ThreadSubscriptions**: UUIDv7 hex without hyphens (32 chars) via `idgen.GenerateUUIDv7()` — time-ordered for B-tree locality on high-write collections
   - **Channel Rooms**: 17-char base62 via `idgen.GenerateID()` — short, human-friendly
-  - **DM Rooms**: sorted concat of two `user.ID` strings (~34 chars) via `idgen.BuildDMRoomID(a, b)` — deterministic, no separate dedup needed
+  - **DM Rooms**: sorted concat of two `user.ID` strings (~34 chars) via `idgen.BuildDMRoomID(a, b)` — deterministic, no separate dedup needed. A DM room is **always exactly two participants** — a direct message is never among 3 people or more; any conversation of 3+ users is a channel room, never a DM
   - **Messages**: 20-char base62 via `idgen.GenerateMessageID()` for new IDs (or client-supplied for user messages). `idgen.IsValidMessageID` accepts **either 17 or 20 char** base62 — 17 is the legacy length retained for backward compatibility with messages written before the 20-char cutover (federation replays, JetStream redeliveries, historical records).
 - Check `mongo.ErrNoDocuments` explicitly when a missing record is expected
 - Create indexes in the store constructor or a dedicated `EnsureIndexes` method at startup
+- **No `$lookup`**: server-side joins (`$lookup` in aggregation pipelines) are forbidden unless there is a very good, documented reason — prefer separate queries or denormalized data, and justify any exception in the PR. Pre-existing `$lookup` sites are grandfathered; when you touch one, add an inline `// $lookup justification: …` comment explaining why a join is unavoidable
+- **Always project precisely**: every find/aggregation MUST specify an explicit projection that selects only the fields the caller needs — never fetch whole documents when a subset suffices
 
 ### Cassandra
 - Driver: `github.com/gocql/gocql`
