@@ -139,7 +139,6 @@ func subscriptionProjection(extra bson.M) bson.M {
 		"favorite":           1,
 		"restricted":         1,
 		"externalAccess":     1,
-		"avatarUrl":          1,
 		"favoritedAt":        1,
 		"_updatedAt":         1, // subscription's Mongo field (wire: updatedAt)
 		// room baseline copied to the top level (consumed by local enrichment)

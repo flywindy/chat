@@ -504,7 +504,6 @@ user-service endpoints via room-service's `GetRoomsInfo` enrichment. `room` is
 | `restricted` | boolean | Optional. Denormalized room restricted flag. |
 | `externalAccess` | boolean | Optional. Denormalized room external-access flag. |
 | `room` | [SubscriptionRoom](#subscriptionroom) | Optional. Room-derived view (read-time enrichment; user-service endpoints only). |
-| `avatarUrl` | string | Optional. Subscription avatar URL. |
 | `favoritedAt` | RFC3339 timestamp | Optional. When the user favorited the room. |
 | `updatedAt` | RFC3339 timestamp | Optional. When the subscription was last updated. |
 

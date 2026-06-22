@@ -74,7 +74,6 @@ type Subscription struct {
 	// Subscription-level metadata persisted on the Mongo subscriptions document.
 	// UpdatedAt is a nullable pointer so a creating writer that doesn't stamp it
 	// (e.g. room-worker's $setOnInsert) never persists a zero-time placeholder.
-	AvatarURL   string     `json:"avatarUrl,omitempty"   bson:"avatarUrl,omitempty"`
 	FavoritedAt *time.Time `json:"favoritedAt,omitempty" bson:"favoritedAt,omitempty"`
 	// Stored as `_updatedAt` in Mongo (matches the canonical subscriptions schema);
 	// serialized on the wire as `updatedAt`. Rooms keep the plain `updatedAt` field.

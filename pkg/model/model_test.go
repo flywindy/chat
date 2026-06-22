@@ -3911,7 +3911,6 @@ func TestSubscriptionBaseMetadata_RoundTrip(t *testing.T) {
 		JoinedAt:        time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 		HasGroupMention: true,
 		HasUnread:       true,
-		AvatarURL:       "https://cdn/avatar.png",
 		FavoritedAt:     &favoritedAt,
 		UpdatedAt:       &updatedAt,
 	}
@@ -3925,13 +3924,12 @@ func TestSubscriptionBaseMetadata_RoundTrip(t *testing.T) {
 	require.NoError(t, json.Unmarshal(b, &raw))
 	assert.Equal(t, true, raw["hasGroupMention"])
 	assert.Equal(t, true, raw["hasUnread"])
-	assert.Equal(t, "https://cdn/avatar.png", raw["avatarUrl"])
 
 	zero := map[string]any{}
 	zb, err := json.Marshal(&model.Subscription{ID: "z", JoinedAt: time.Now().UTC()})
 	require.NoError(t, err)
 	require.NoError(t, json.Unmarshal(zb, &zero))
-	for _, k := range []string{"avatarUrl", "favoritedAt", "updatedAt"} {
+	for _, k := range []string{"favoritedAt", "updatedAt"} {
 		_, present := zero[k]
 		assert.False(t, present, "%q must be omitted when unset", k)
 	}
