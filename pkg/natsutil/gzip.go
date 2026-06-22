@@ -33,8 +33,16 @@ const (
 
 // gzipWriterPool amortises gzip.Writer allocations across publishers; the writer holds
 // a ~64 KB internal buffer that would otherwise churn the GC under sustained publish load.
+// BestSpeed (level 1) is used deliberately: on the per-message publish hot path the CPU
+// cost of the default level 6 dominated profiles, while the ~10-20% larger output stays
+// well within the NATS max_payload headroom (push events decompress to ≤ ~25 KB vs a
+// 256 KiB cap). Decoders are level-agnostic, so this is transparent to consumers.
 var gzipWriterPool = sync.Pool{
-	New: func() any { return gzip.NewWriter(nil) },
+	New: func() any {
+		// NewWriterLevel only errors on an invalid level; BestSpeed is a valid constant.
+		w, _ := gzip.NewWriterLevel(nil, gzip.BestSpeed)
+		return w
+	},
 }
 
 // GzipPayload returns a gzip-compressed copy of payload. Allocates a fresh slice
@@ -59,25 +67,46 @@ func GzipPayload(payload []byte) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// NewGzipMsg builds a *nats.Msg with payload gzipped and Content-Encoding/Content-Type
-// headers set so a consumer using DecodePayload can transparently decompress.
-// contentType may be empty; the helper sets "application/json" by default for payload-encoded events.
-func NewGzipMsg(subject string, payload []byte, contentType string) (*nats.Msg, error) {
-	encoded, err := GzipPayload(payload)
-	if err != nil {
-		return nil, err
-	}
+// buildMsg builds a *nats.Msg with Content-Type set (defaulting to application/json
+// for payload-encoded events) and, when gz is true, Content-Encoding: gzip so a
+// consumer using DecodePayload knows whether to decompress.
+func buildMsg(subject string, data []byte, contentType string, gz bool) *nats.Msg {
 	if contentType == "" {
 		contentType = "application/json"
 	}
 	msg := &nats.Msg{
 		Subject: subject,
 		Header:  nats.Header{},
-		Data:    encoded,
+		Data:    data,
 	}
-	msg.Header.Set(HeaderContentEncoding, ContentEncodingGzip)
 	msg.Header.Set(HeaderContentType, contentType)
-	return msg, nil
+	if gz {
+		msg.Header.Set(HeaderContentEncoding, ContentEncodingGzip)
+	}
+	return msg
+}
+
+// NewGzipMsg builds a *nats.Msg with payload gzipped and Content-Encoding/Content-Type
+// headers set so a consumer using DecodePayload can transparently decompress.
+// contentType may be empty; the helper sets "application/json" by default for payload-encoded events.
+func NewGzipMsg(subject string, payload []byte, contentType string) (*nats.Msg, error) {
+	encoded, err := GzipPayload(payload)
+	if err != nil {
+		return nil, fmt.Errorf("build gzip message: %w", err)
+	}
+	return buildMsg(subject, encoded, contentType, true), nil
+}
+
+// NewMaybeGzipMsg gzips payload only when it is at least minGzipBytes; smaller
+// payloads are sent verbatim with no Content-Encoding, so DecodePayload passes
+// them through. This avoids spending CPU gzipping small payloads that barely
+// shrink (gzip framing alone is ~18 bytes). A minGzipBytes <= 0 always
+// compresses, matching NewGzipMsg.
+func NewMaybeGzipMsg(subject string, payload []byte, contentType string, minGzipBytes int) (*nats.Msg, error) {
+	if minGzipBytes > 0 && len(payload) < minGzipBytes {
+		return buildMsg(subject, payload, contentType, false), nil
+	}
+	return NewGzipMsg(subject, payload, contentType)
 }
 
 // DecodePayload decodes using the default MaxDecodedPayloadSize cap. For a

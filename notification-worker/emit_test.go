@@ -51,7 +51,7 @@ func (f *fakePublisher) PublishMsg(_ context.Context, msg *nats.Msg) error {
 
 func TestMobileEmitter_PublishesGzippedBatch(t *testing.T) {
 	pub := &fakePublisher{}
-	em := newMobileEmitter(pub, "site-a", 0)
+	em := newMobileEmitter(pub, "site-a", 0, 0)
 	evt := model.PushNotificationEvent{
 		ID:       "m1-b0",
 		Accounts: []string{"alice", "bob"},
@@ -77,14 +77,14 @@ func TestMobileEmitter_PublishesGzippedBatch(t *testing.T) {
 
 func TestMobileEmitter_PropagatesError(t *testing.T) {
 	pub := &fakePublisher{failNext: errors.New("nats: full")}
-	em := newMobileEmitter(pub, "site-a", 0)
+	em := newMobileEmitter(pub, "site-a", 0, 0)
 	err := em.Emit(context.Background(), model.PushNotificationEvent{ID: "m1-b0", Accounts: []string{"bob"}})
 	assert.Error(t, err)
 }
 
 func TestMobileEmitter_RejectsOversizedBatch(t *testing.T) {
 	pub := &fakePublisher{}
-	em := newMobileEmitter(pub, "site-a", 64) // absurdly low cap to force rejection
+	em := newMobileEmitter(pub, "site-a", 64, 0) // absurdly low cap to force rejection
 	err := em.Emit(context.Background(), model.PushNotificationEvent{
 		ID:       "m1-b0",
 		Accounts: []string{"alice", "bob", "carol", "dave"},
@@ -94,4 +94,35 @@ func TestMobileEmitter_RejectsOversizedBatch(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "exceeds NATS max_payload")
 	assert.Empty(t, pub.records, "oversized batch must not reach the publisher")
+}
+
+func TestMobileEmitter_GzipThreshold(t *testing.T) {
+	tests := []struct {
+		name         string
+		minGzipBytes int
+		wantEncoding string // "" means uncompressed
+	}{
+		{"high threshold sends small batch raw", 64 * 1024, ""},
+		{"tiny threshold compresses small batch", 16, "gzip"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pub := &fakePublisher{}
+			em := newMobileEmitter(pub, "site-a", 0, tt.minGzipBytes)
+			evt := model.PushNotificationEvent{ID: "m1-b0", Accounts: []string{"alice", "bob"}, RoomID: "r1", Body: "hello"}
+			require.NoError(t, em.Emit(context.Background(), evt))
+
+			require.Len(t, pub.records, 1)
+			r := pub.records[0]
+			assert.Equal(t, tt.wantEncoding, r.headers.Get("Content-Encoding"))
+			assert.Equal(t, "application/json", r.headers.Get("Content-Type"))
+
+			// Either branch must round-trip through the shared decoder so the push service is unaffected.
+			decoded, err := natsutil.DecodePayload(&nats.Msg{Data: r.payload, Header: r.headers})
+			require.NoError(t, err)
+			var got model.PushNotificationEvent
+			require.NoError(t, json.Unmarshal(decoded, &got))
+			assert.Equal(t, evt, got)
+		})
+	}
 }

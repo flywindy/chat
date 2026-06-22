@@ -44,7 +44,7 @@ func TestNotificationWorker_CacheBackedFanOut(t *testing.T) {
 
 	pushSub := subscribePush(t, nc, "site-a")
 
-	emitter := newMobileEmitter(&directNATSAsyncPub{nc: nc}, "site-a", 0)
+	emitter := newMobileEmitter(&directNATSAsyncPub{nc: nc}, "site-a", 0, 0)
 	handler := NewHandler(HandlerDeps{
 		Members:            lookup,
 		Followers:          newMongoThreadFollowers(threadRoomCol),

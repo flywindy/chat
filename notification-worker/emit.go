@@ -29,10 +29,11 @@ type mobileEmitter struct {
 	pub             publisher
 	siteID          string
 	maxPayloadBytes int
+	minGzipBytes    int
 }
 
-func newMobileEmitter(pub publisher, siteID string, maxPayloadBytes int) *mobileEmitter {
-	return &mobileEmitter{pub: pub, siteID: siteID, maxPayloadBytes: maxPayloadBytes}
+func newMobileEmitter(pub publisher, siteID string, maxPayloadBytes, minGzipBytes int) *mobileEmitter {
+	return &mobileEmitter{pub: pub, siteID: siteID, maxPayloadBytes: maxPayloadBytes, minGzipBytes: minGzipBytes}
 }
 
 func (e *mobileEmitter) Emit(ctx context.Context, evt model.PushNotificationEvent) error { //nolint:gocritic // hugeParam: spec requires value semantics for Emitter interface
@@ -40,12 +41,14 @@ func (e *mobileEmitter) Emit(ctx context.Context, evt model.PushNotificationEven
 	if err != nil {
 		return fmt.Errorf("marshal push batch %s: %w", evt.ID, err)
 	}
-	msg, err := natsutil.NewGzipMsg(subject.PushNotification(e.siteID), data, "application/json")
+	msg, err := natsutil.NewMaybeGzipMsg(subject.PushNotification(e.siteID), data, "application/json", e.minGzipBytes)
 	if err != nil {
 		return fmt.Errorf("encode push batch %s: %w", evt.ID, err)
 	}
+	// Guard the final wire size regardless of whether the payload was compressed:
+	// small (uncompressed) batches sit far below the cap, large ones are gzipped.
 	if e.maxPayloadBytes > 0 && len(msg.Data) > e.maxPayloadBytes {
-		return fmt.Errorf("push batch %s exceeds NATS max_payload: gzipped=%d, cap=%d", evt.ID, len(msg.Data), e.maxPayloadBytes)
+		return fmt.Errorf("push batch %s exceeds NATS max_payload: wire=%d, cap=%d", evt.ID, len(msg.Data), e.maxPayloadBytes)
 	}
 	msg.Header.Set("Nats-Msg-Id", evt.ID) // dedup key — see contract doc § Dedup
 	if err := e.pub.PublishMsg(ctx, msg); err != nil {

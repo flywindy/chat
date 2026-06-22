@@ -52,6 +52,7 @@ type config struct {
 	PresenceRPCTimeout     time.Duration           `env:"PRESENCE_RPC_TIMEOUT"      envDefault:"2s"`
 	PresenceEnabled        bool                    `env:"PRESENCE_RPC_ENABLED"      envDefault:"false"`  // false → noopPresenceSnapshotter; set true once presence service is available
 	NatsMaxPayloadBytes    int                     `env:"NATS_MAX_PAYLOAD_BYTES"    envDefault:"262144"` // must match broker max_payload; emitter rejects any gzipped batch exceeding this
+	PushGzipMinBytes       int                     `env:"PUSH_GZIP_MIN_BYTES"       envDefault:"1024"`   // batches smaller than this are published uncompressed to save CPU; 0 always compresses
 	Consumer               stream.ConsumerSettings `envPrefix:"CONSUMER_"`
 	Bootstrap              bootstrapConfig         `envPrefix:"BOOTSTRAP_"`
 	HealthAddr             string                  `env:"HEALTH_ADDR" envDefault:":8081"`
@@ -185,7 +186,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	emitter := newMobileEmitter(&jsPublisher{js: otelJS}, cfg.SiteID, cfg.NatsMaxPayloadBytes)
+	emitter := newMobileEmitter(&jsPublisher{js: otelJS}, cfg.SiteID, cfg.NatsMaxPayloadBytes, cfg.PushGzipMinBytes)
 
 	var presence PresenceSnapshotter = noopPresenceSnapshotter{}
 	if cfg.PresenceEnabled {
