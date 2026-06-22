@@ -381,7 +381,7 @@ func TestHandleEvent_MemberAdded(t *testing.T) {
 		t.Fatalf("marshal change: %v", err)
 	}
 
-	evt := model.OutboxEvent{
+	evt := model.InboxEvent{
 		Type:       "member_added",
 		SiteID:     "site-b",
 		DestSiteID: "site-a",
@@ -450,7 +450,7 @@ func TestHandleEvent_MemberAdded_SetsTimestamps(t *testing.T) {
 	}
 	changeData, _ := json.Marshal(change)
 
-	evt := model.OutboxEvent{
+	evt := model.InboxEvent{
 		Type:       "member_added",
 		SiteID:     "site-b",
 		DestSiteID: "site-a",
@@ -498,7 +498,7 @@ func TestHandleEvent_RoomSync(t *testing.T) {
 		t.Fatalf("marshal room: %v", err)
 	}
 
-	evt := model.OutboxEvent{
+	evt := model.InboxEvent{
 		Type:       "room_sync",
 		SiteID:     "site-b",
 		DestSiteID: "site-a",
@@ -548,7 +548,7 @@ func TestHandleEvent_RoomSync_Upsert(t *testing.T) {
 		UpdatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 	}
 	roomData1, _ := json.Marshal(room1)
-	evt1 := model.OutboxEvent{Type: "room_sync", SiteID: "site-b", DestSiteID: "site-a", Payload: roomData1}
+	evt1 := model.InboxEvent{Type: "room_sync", SiteID: "site-b", DestSiteID: "site-a", Payload: roomData1}
 	evtData1, _ := json.Marshal(evt1)
 	if err := h.HandleEvent(context.Background(), evtData1); err != nil {
 		t.Fatalf("first HandleEvent: %v", err)
@@ -562,7 +562,7 @@ func TestHandleEvent_RoomSync_Upsert(t *testing.T) {
 		UpdatedAt: time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC),
 	}
 	roomData2, _ := json.Marshal(room2)
-	evt2 := model.OutboxEvent{Type: "room_sync", SiteID: "site-b", DestSiteID: "site-a", Payload: roomData2}
+	evt2 := model.InboxEvent{Type: "room_sync", SiteID: "site-b", DestSiteID: "site-a", Payload: roomData2}
 	evtData2, _ := json.Marshal(evt2)
 	if err := h.HandleEvent(context.Background(), evtData2); err != nil {
 		t.Fatalf("second HandleEvent: %v", err)
@@ -585,7 +585,7 @@ func TestHandleEvent_UnknownType(t *testing.T) {
 	store := &stubInboxStore{}
 	h := NewHandler(store)
 
-	evt := model.OutboxEvent{
+	evt := model.InboxEvent{
 		Type:       "unknown_type",
 		SiteID:     "site-b",
 		DestSiteID: "site-a",
@@ -624,7 +624,7 @@ func TestHandleEvent_MemberAdded_InvalidPayload(t *testing.T) {
 	store := &stubInboxStore{}
 	h := NewHandler(store)
 
-	evt := model.OutboxEvent{
+	evt := model.InboxEvent{
 		Type:       "member_added",
 		SiteID:     "site-b",
 		DestSiteID: "site-a",
@@ -666,7 +666,7 @@ func TestHandleEvent_MemberAdded_AccountRoutedSubject(t *testing.T) {
 		t.Fatalf("marshal change: %v", err)
 	}
 
-	evt := model.OutboxEvent{
+	evt := model.InboxEvent{
 		Type:       "member_added",
 		SiteID:     "site-b",
 		DestSiteID: "site-a",
@@ -723,7 +723,7 @@ func TestHandleEvent_MemberAdded_EventSourcedFields(t *testing.T) {
 	}
 	changeData, _ := json.Marshal(change)
 
-	evt := model.OutboxEvent{
+	evt := model.InboxEvent{
 		Type:       "member_added",
 		SiteID:     "site-b",
 		DestSiteID: "site-a",
@@ -797,7 +797,7 @@ func TestHandleEvent_MemberAdded_HistoryAll(t *testing.T) {
 	}
 	changeData, _ := json.Marshal(change)
 
-	evt := model.OutboxEvent{
+	evt := model.InboxEvent{
 		Type:       "member_added",
 		SiteID:     "site-b",
 		DestSiteID: "site-a",
@@ -822,7 +822,7 @@ func TestHandleEvent_RoomSync_InvalidPayload(t *testing.T) {
 	store := &stubInboxStore{}
 	h := NewHandler(store)
 
-	evt := model.OutboxEvent{
+	evt := model.InboxEvent{
 		Type:       "room_sync",
 		SiteID:     "site-b",
 		DestSiteID: "site-a",
@@ -853,7 +853,7 @@ func TestHandleEvent_RoleUpdated(t *testing.T) {
 		Action: "role_updated", Timestamp: 1735689600000,
 	}
 	subEvtData, _ := json.Marshal(subEvt)
-	evt := model.OutboxEvent{
+	evt := model.InboxEvent{
 		Type: "role_updated", SiteID: "site-a", DestSiteID: "site-b",
 		Payload: subEvtData, Timestamp: 1735689600000,
 	}
@@ -883,7 +883,7 @@ func TestHandleEvent_RoleUpdated(t *testing.T) {
 func TestHandleEvent_RoleUpdated_InvalidPayload(t *testing.T) {
 	store := &stubInboxStore{}
 	h := NewHandler(store)
-	evt := model.OutboxEvent{
+	evt := model.InboxEvent{
 		Type: "role_updated", SiteID: "site-a", DestSiteID: "site-b",
 		Payload: []byte("not valid json"),
 	}
@@ -911,7 +911,7 @@ func TestHandleEvent_RoleUpdated_EmptyRoles(t *testing.T) {
 		},
 	}
 	payload, _ := json.Marshal(subEvt)
-	evt := model.OutboxEvent{Type: "role_updated", SiteID: "site-a", DestSiteID: "site-b", Payload: payload}
+	evt := model.InboxEvent{Type: "role_updated", SiteID: "site-a", DestSiteID: "site-b", Payload: payload}
 	evtData, _ := json.Marshal(evt)
 
 	err := h.HandleEvent(context.Background(), evtData)
@@ -944,7 +944,7 @@ func TestHandleEvent_MemberRemoved(t *testing.T) {
 		Type: "member-removed", RoomID: "r1", Accounts: []string{"bob"}, SiteID: "site-a",
 	}
 	payload, _ := json.Marshal(memberEvt)
-	evt := model.OutboxEvent{
+	evt := model.InboxEvent{
 		Type: "member_removed", SiteID: "site-a", DestSiteID: "site-b",
 		Payload: payload, Timestamp: time.Now().UnixMilli(),
 	}
@@ -961,7 +961,7 @@ func TestHandleEvent_MemberRemoved_InvalidPayload(t *testing.T) {
 	store := &stubInboxStore{}
 	h := NewHandler(store)
 
-	evt := model.OutboxEvent{
+	evt := model.InboxEvent{
 		Type: "member_removed", SiteID: "site-a", DestSiteID: "site-b",
 		Payload: []byte(`{invalid`), Timestamp: time.Now().UnixMilli(),
 	}
@@ -990,7 +990,7 @@ func TestHandleEvent_MemberRemoved_MultipleAccounts(t *testing.T) {
 		SiteID: "site-a", OrgID: "finance-org", Timestamp: time.Now().UnixMilli(),
 	}
 	payload, _ := json.Marshal(memberEvt)
-	evt := model.OutboxEvent{
+	evt := model.InboxEvent{
 		Type: "member_removed", SiteID: "site-a", DestSiteID: "site-b",
 		Payload: payload, Timestamp: time.Now().UnixMilli(),
 	}
@@ -1010,10 +1010,10 @@ func TestHandleEvent_MemberRemoved_EmptyAccountsNoOp(t *testing.T) {
 
 	memberEvt := model.MemberRemoveEvent{RoomID: "r1", Accounts: []string{}}
 	payload, _ := json.Marshal(memberEvt)
-	outboxPayload, _ := json.Marshal(model.OutboxEvent{
+	inboxPayload, _ := json.Marshal(model.InboxEvent{
 		Type: "member_removed", SiteID: "a", DestSiteID: "b", Payload: payload,
 	})
-	require.NoError(t, h.HandleEvent(context.Background(), outboxPayload))
+	require.NoError(t, h.HandleEvent(context.Background(), inboxPayload))
 }
 
 type errorDeleteStore struct {
@@ -1030,10 +1030,10 @@ func TestHandleEvent_MemberRemoved_DeleteError(t *testing.T) {
 
 	memberEvt := model.MemberRemoveEvent{RoomID: "r1", Accounts: []string{"alice"}}
 	payload, _ := json.Marshal(memberEvt)
-	outboxPayload, _ := json.Marshal(model.OutboxEvent{
+	inboxPayload, _ := json.Marshal(model.InboxEvent{
 		Type: "member_removed", SiteID: "a", DestSiteID: "b", Payload: payload,
 	})
-	err := h.HandleEvent(context.Background(), outboxPayload)
+	err := h.HandleEvent(context.Background(), inboxPayload)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "delete subscriptions")
 }
@@ -1051,8 +1051,8 @@ func TestHandler_HandleEvent_SubscriptionRead_HappyPath(t *testing.T) {
 	}
 	innerData, err := json.Marshal(inner)
 	require.NoError(t, err)
-	evt := model.OutboxEvent{
-		Type:       model.OutboxSubscriptionRead,
+	evt := model.InboxEvent{
+		Type:       model.InboxSubscriptionRead,
 		SiteID:     "site-a",
 		DestSiteID: "site-b",
 		Payload:    innerData,
@@ -1074,7 +1074,7 @@ func TestHandler_HandleEvent_SubscriptionRead_HappyPath(t *testing.T) {
 func TestHandler_HandleEvent_SubscriptionRead_MalformedPayload(t *testing.T) {
 	store := &stubInboxStore{}
 	h := NewHandler(store)
-	evt := model.OutboxEvent{Type: model.OutboxSubscriptionRead, Payload: []byte("not-json")}
+	evt := model.InboxEvent{Type: model.InboxSubscriptionRead, Payload: []byte("not-json")}
 	data, _ := json.Marshal(evt)
 	require.Error(t, h.HandleEvent(context.Background(), data))
 }
@@ -1100,7 +1100,7 @@ func TestHandleEvent_ThreadSubscriptionUpserted_Insert(t *testing.T) {
 	subData, err := json.Marshal(sub)
 	require.NoError(t, err)
 
-	evt := model.OutboxEvent{
+	evt := model.InboxEvent{
 		Type:       "thread_subscription_upserted",
 		SiteID:     "site-a",
 		DestSiteID: "site-b",
@@ -1128,7 +1128,7 @@ func TestHandleEvent_ThreadSubscriptionUpserted_MonotonicHasMention(t *testing.T
 		HasMention: true, CreatedAt: now, UpdatedAt: now,
 	}
 	mentionData, _ := json.Marshal(mentionSub)
-	mentionEvt, _ := json.Marshal(model.OutboxEvent{
+	mentionEvt, _ := json.Marshal(model.InboxEvent{
 		Type: "thread_subscription_upserted", SiteID: "site-a", DestSiteID: "site-b",
 		Payload: mentionData, Timestamp: now.UnixMilli(),
 	})
@@ -1139,7 +1139,7 @@ func TestHandleEvent_ThreadSubscriptionUpserted_MonotonicHasMention(t *testing.T
 	plainSub.HasMention = false
 	plainSub.UpdatedAt = now.Add(time.Minute)
 	plainData, _ := json.Marshal(plainSub)
-	plainEvt, _ := json.Marshal(model.OutboxEvent{
+	plainEvt, _ := json.Marshal(model.InboxEvent{
 		Type: "thread_subscription_upserted", SiteID: "site-a", DestSiteID: "site-b",
 		Payload: plainData, Timestamp: plainSub.UpdatedAt.UnixMilli(),
 	})
@@ -1154,7 +1154,7 @@ func TestHandleEvent_ThreadSubscriptionUpserted_InvalidPayload(t *testing.T) {
 	store := &stubInboxStore{}
 	h := NewHandler(store)
 
-	evt := model.OutboxEvent{
+	evt := model.InboxEvent{
 		Type: "thread_subscription_upserted", SiteID: "site-a", DestSiteID: "site-b",
 		Payload: []byte("not json"),
 	}
@@ -1174,7 +1174,7 @@ func TestHandleEvent_ThreadSubscriptionUpserted_StoreError(t *testing.T) {
 		CreatedAt: now, UpdatedAt: now,
 	}
 	subData, _ := json.Marshal(sub)
-	evtData, _ := json.Marshal(model.OutboxEvent{
+	evtData, _ := json.Marshal(model.InboxEvent{
 		Type: "thread_subscription_upserted", SiteID: "site-a", DestSiteID: "site-b",
 		Payload: subData, Timestamp: now.UnixMilli(),
 	})
@@ -1232,7 +1232,7 @@ func TestHandleMemberAdded_DM_BuildsRecipientSubWithCounterpartName(t *testing.T
 		Timestamp:        1740000000000,
 	}
 	changeData, _ := json.Marshal(change)
-	evt := model.OutboxEvent{Type: "member_added", SiteID: "site-A", DestSiteID: "site-B", Payload: changeData}
+	evt := model.InboxEvent{Type: "member_added", SiteID: "site-A", DestSiteID: "site-B", Payload: changeData}
 	evtData, _ := json.Marshal(evt)
 
 	require.NoError(t, h.HandleEvent(context.Background(), evtData))
@@ -1271,7 +1271,7 @@ func TestHandleMemberAdded_BotDM_BuildsBotSub(t *testing.T) {
 		Timestamp:        1740000000000,
 	}
 	changeData, _ := json.Marshal(change)
-	evt := model.OutboxEvent{Type: "member_added", SiteID: "site-A", DestSiteID: "site-B", Payload: changeData}
+	evt := model.InboxEvent{Type: "member_added", SiteID: "site-A", DestSiteID: "site-B", Payload: changeData}
 	evtData, _ := json.Marshal(evt)
 
 	require.NoError(t, h.HandleEvent(context.Background(), evtData))
@@ -1305,7 +1305,7 @@ func TestHandleMemberAdded_Channel_BuildsChannelSub(t *testing.T) {
 		Timestamp:        1,
 	}
 	changeData, _ := json.Marshal(change)
-	evt := model.OutboxEvent{Type: "member_added", SiteID: "site-A", DestSiteID: "site-B", Payload: changeData}
+	evt := model.InboxEvent{Type: "member_added", SiteID: "site-A", DestSiteID: "site-B", Payload: changeData}
 	evtData, _ := json.Marshal(evt)
 
 	require.NoError(t, h.HandleEvent(context.Background(), evtData))
@@ -1339,7 +1339,7 @@ func TestHandleMemberAdded_EmptyRoomType_DefaultsToChannel(t *testing.T) {
 		// RoomType intentionally left empty
 	}
 	changeData, _ := json.Marshal(change)
-	evt := model.OutboxEvent{Type: "member_added", Payload: changeData}
+	evt := model.InboxEvent{Type: "member_added", Payload: changeData}
 	evtData, _ := json.Marshal(evt)
 
 	require.NoError(t, h.HandleEvent(context.Background(), evtData))
@@ -1362,7 +1362,7 @@ func TestHandleMemberAdded_DuplicateKey_IsIdempotent(t *testing.T) {
 		Accounts: []string{"bob"}, SiteID: "site-A", JoinedAt: 1, Timestamp: 1,
 	}
 	changeData, _ := json.Marshal(change)
-	evt := model.OutboxEvent{Type: "member_added", Payload: changeData}
+	evt := model.InboxEvent{Type: "member_added", Payload: changeData}
 	evtData, _ := json.Marshal(evt)
 
 	require.NoError(t, h.HandleEvent(context.Background(), evtData),
@@ -1381,7 +1381,7 @@ func TestHandleMemberAdded_BulkCreate_NonDuplicateError_ReturnsError(t *testing.
 		Accounts: []string{"bob"}, SiteID: "site-A", JoinedAt: 1, Timestamp: 1,
 	}
 	changeData, _ := json.Marshal(change)
-	evtData, _ := json.Marshal(model.OutboxEvent{Type: "member_added", Payload: changeData})
+	evtData, _ := json.Marshal(model.InboxEvent{Type: "member_added", Payload: changeData})
 
 	err := h.HandleEvent(context.Background(), evtData)
 	require.Error(t, err)
@@ -1403,8 +1403,8 @@ func TestHandler_HandleEvent_ThreadRead_Happy(t *testing.T) {
 	}
 	inner, err := json.Marshal(&payload)
 	require.NoError(t, err)
-	outer := model.OutboxEvent{
-		Type:       model.OutboxThreadRead,
+	outer := model.InboxEvent{
+		Type:       model.InboxThreadRead,
 		SiteID:     "site-a",
 		DestSiteID: "site-b",
 		Payload:    inner,
@@ -1427,7 +1427,7 @@ func TestHandler_HandleEvent_ThreadRead_Happy(t *testing.T) {
 func TestHandler_HandleEvent_ThreadRead_MalformedPayload(t *testing.T) {
 	store := &stubInboxStore{}
 	h := NewHandler(store)
-	outer := model.OutboxEvent{Type: model.OutboxThreadRead, Payload: []byte("{")}
+	outer := model.InboxEvent{Type: model.InboxThreadRead, Payload: []byte("{")}
 	data, err := json.Marshal(&outer)
 	require.NoError(t, err)
 	err = h.HandleEvent(context.Background(), data)
@@ -1440,7 +1440,7 @@ func TestHandler_HandleEvent_ThreadRead_StoreError(t *testing.T) {
 	h := NewHandler(store)
 	payload := model.ThreadReadEvent{Account: "a", RoomID: "r", ThreadRoomID: "tr", ParentMessageID: "p"}
 	inner, _ := json.Marshal(&payload)
-	outer := model.OutboxEvent{Type: model.OutboxThreadRead, Payload: inner}
+	outer := model.InboxEvent{Type: model.InboxThreadRead, Payload: inner}
 	data, _ := json.Marshal(&outer)
 	err := h.HandleEvent(context.Background(), data)
 	require.Error(t, err)
@@ -1462,8 +1462,8 @@ func TestHandler_SubscriptionMuteToggled(t *testing.T) {
 		Account: "alice", RoomID: "r1", Muted: true, Timestamp: 12345,
 	})
 	require.NoError(t, err)
-	evt, err := json.Marshal(model.OutboxEvent{
-		Type: model.OutboxSubscriptionMuteToggled, SiteID: "site-a", DestSiteID: "site-b",
+	evt, err := json.Marshal(model.InboxEvent{
+		Type: model.InboxSubscriptionMuteToggled, SiteID: "site-a", DestSiteID: "site-b",
 		Payload: payload, Timestamp: 12345,
 	})
 	require.NoError(t, err)
@@ -1489,8 +1489,8 @@ func TestHandler_SubscriptionMuteToggled_MissingSubscriptionNoOp(t *testing.T) {
 		Account: "ghost", RoomID: "r1", Muted: true, Timestamp: 12345,
 	})
 	require.NoError(t, err)
-	evt, err := json.Marshal(model.OutboxEvent{
-		Type: model.OutboxSubscriptionMuteToggled, SiteID: "site-a", DestSiteID: "site-b",
+	evt, err := json.Marshal(model.InboxEvent{
+		Type: model.InboxSubscriptionMuteToggled, SiteID: "site-a", DestSiteID: "site-b",
 		Payload: payload, Timestamp: 12345,
 	})
 	require.NoError(t, err)
@@ -1502,8 +1502,8 @@ func TestHandler_SubscriptionMuteToggled_MalformedPayload(t *testing.T) {
 	store := &stubInboxStore{}
 	h := NewHandler(store)
 
-	evt, err := json.Marshal(model.OutboxEvent{
-		Type:    model.OutboxSubscriptionMuteToggled,
+	evt, err := json.Marshal(model.InboxEvent{
+		Type:    model.InboxSubscriptionMuteToggled,
 		Payload: []byte("not-json"),
 	})
 	require.NoError(t, err)
@@ -1527,8 +1527,8 @@ func TestHandler_SubscriptionFavoriteToggled(t *testing.T) {
 		Account: "alice", RoomID: "r1", Favorite: true, Timestamp: 12345,
 	})
 	require.NoError(t, err)
-	evt, err := json.Marshal(model.OutboxEvent{
-		Type: model.OutboxSubscriptionFavoriteToggled, SiteID: "site-a", DestSiteID: "site-b",
+	evt, err := json.Marshal(model.InboxEvent{
+		Type: model.InboxSubscriptionFavoriteToggled, SiteID: "site-a", DestSiteID: "site-b",
 		Payload: payload, Timestamp: 12345,
 	})
 	require.NoError(t, err)
@@ -1554,8 +1554,8 @@ func TestHandler_SubscriptionFavoriteToggled_MissingSubscriptionNoOp(t *testing.
 		Account: "ghost", RoomID: "r1", Favorite: true, Timestamp: 12345,
 	})
 	require.NoError(t, err)
-	evt, err := json.Marshal(model.OutboxEvent{
-		Type: model.OutboxSubscriptionFavoriteToggled, SiteID: "site-a", DestSiteID: "site-b",
+	evt, err := json.Marshal(model.InboxEvent{
+		Type: model.InboxSubscriptionFavoriteToggled, SiteID: "site-a", DestSiteID: "site-b",
 		Payload: payload, Timestamp: 12345,
 	})
 	require.NoError(t, err)
@@ -1567,8 +1567,8 @@ func TestHandler_SubscriptionFavoriteToggled_MalformedPayload(t *testing.T) {
 	store := &stubInboxStore{}
 	h := NewHandler(store)
 
-	evt, err := json.Marshal(model.OutboxEvent{
-		Type:    model.OutboxSubscriptionFavoriteToggled,
+	evt, err := json.Marshal(model.InboxEvent{
+		Type:    model.InboxSubscriptionFavoriteToggled,
 		Payload: []byte("not-json"),
 	})
 	require.NoError(t, err)
@@ -1580,12 +1580,12 @@ func TestHandler_RoomRenamed_ForwardsEventTimestamp(t *testing.T) {
 	store := &stubInboxStore{}
 	h := NewHandler(store)
 
-	payload, err := json.Marshal(model.RoomRenamedOutboxPayload{
+	payload, err := json.Marshal(model.RoomRenamedInboxPayload{
 		RoomID: "r1", NewName: "renamed", Timestamp: 12345,
 	})
 	require.NoError(t, err)
-	evt, err := json.Marshal(model.OutboxEvent{
-		Type: model.OutboxRoomRenamed, SiteID: "site-a", DestSiteID: "site-b",
+	evt, err := json.Marshal(model.InboxEvent{
+		Type: model.InboxRoomRenamed, SiteID: "site-a", DestSiteID: "site-b",
 		Payload: payload, Timestamp: 12345,
 	})
 	require.NoError(t, err)
@@ -1603,12 +1603,12 @@ func TestHandler_RoomVisibilityChanged_ForwardsEventTimestamp(t *testing.T) {
 	store := &stubInboxStore{}
 	h := NewHandler(store)
 
-	payload, err := json.Marshal(model.RoomRestrictedOutboxPayload{
+	payload, err := json.Marshal(model.RoomRestrictedInboxPayload{
 		RoomID: "r1", Restricted: true, ExternalAccess: false, OwnerAccount: "bob", Timestamp: 12345,
 	})
 	require.NoError(t, err)
-	evt, err := json.Marshal(model.OutboxEvent{
-		Type: model.OutboxRoomRestricted, SiteID: "site-a", DestSiteID: "site-b",
+	evt, err := json.Marshal(model.InboxEvent{
+		Type: model.InboxRoomRestricted, SiteID: "site-a", DestSiteID: "site-b",
 		Payload: payload, Timestamp: 12345,
 	})
 	require.NoError(t, err)
@@ -1631,8 +1631,8 @@ func TestHandler_UserStatusUpdated(t *testing.T) {
 		Account: "alice", StatusText: "out to lunch", StatusIsShow: &isShow, Timestamp: 12345,
 	})
 	require.NoError(t, err)
-	evt, err := json.Marshal(model.OutboxEvent{
-		Type: model.OutboxUserStatusUpdated, SiteID: "site-a", DestSiteID: "site-b",
+	evt, err := json.Marshal(model.InboxEvent{
+		Type: model.InboxUserStatusUpdated, SiteID: "site-a", DestSiteID: "site-b",
 		Payload: payload, Timestamp: 12345,
 	})
 	require.NoError(t, err)
@@ -1657,8 +1657,8 @@ func TestHandler_UserStatusUpdated_IsShowOmittedStaysNil(t *testing.T) {
 		Account: "alice", StatusText: "heads down", Timestamp: 12345,
 	})
 	require.NoError(t, err)
-	evt, err := json.Marshal(model.OutboxEvent{
-		Type: model.OutboxUserStatusUpdated, Payload: payload, Timestamp: 12345,
+	evt, err := json.Marshal(model.InboxEvent{
+		Type: model.InboxUserStatusUpdated, Payload: payload, Timestamp: 12345,
 	})
 	require.NoError(t, err)
 
@@ -1674,8 +1674,8 @@ func TestHandler_UserStatusUpdated_MalformedPayload(t *testing.T) {
 	store := &stubInboxStore{}
 	h := NewHandler(store)
 
-	evt, err := json.Marshal(model.OutboxEvent{
-		Type:    model.OutboxUserStatusUpdated,
+	evt, err := json.Marshal(model.InboxEvent{
+		Type:    model.InboxUserStatusUpdated,
 		Payload: []byte("not-json"),
 	})
 	require.NoError(t, err)
@@ -1693,8 +1693,8 @@ func TestHandler_UserStatusUpdated_StoreError(t *testing.T) {
 		Account: "alice", StatusText: "busy", Timestamp: 12345,
 	})
 	require.NoError(t, err)
-	evt, err := json.Marshal(model.OutboxEvent{
-		Type: model.OutboxUserStatusUpdated, Payload: payload, Timestamp: 12345,
+	evt, err := json.Marshal(model.InboxEvent{
+		Type: model.InboxUserStatusUpdated, Payload: payload, Timestamp: 12345,
 	})
 	require.NoError(t, err)
 

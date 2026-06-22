@@ -46,8 +46,8 @@ func benchMemberData(b *testing.B, n int) []byte {
 	if err != nil {
 		b.Fatal(err)
 	}
-	evt := model.OutboxEvent{
-		Type: model.OutboxMemberAdded, SiteID: "site-a", DestSiteID: "site-a",
+	evt := model.InboxEvent{
+		Type: model.InboxMemberAdded, SiteID: "site-a", DestSiteID: "site-a",
 		Payload: payloadData, Timestamp: 1735689600000,
 	}
 	data, err := json.Marshal(&evt)

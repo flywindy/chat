@@ -6,6 +6,8 @@ import (
 	"os"
 	"time"
 
+	"github.com/Marz32onE/instrumentation-go/otel-nats/oteljetstream"
+
 	"github.com/hmchangw/chat/pkg/mongoutil"
 	"github.com/hmchangw/chat/pkg/natsrouter"
 	"github.com/hmchangw/chat/pkg/natsutil"
@@ -50,6 +52,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	js, err := oteljetstream.New(nc)
+	if err != nil {
+		slog.Error("jetstream init failed", "error", err)
+		os.Exit(1)
+	}
+
 	mongoClient, err := mongoutil.Connect(ctx, cfg.Mongo.URI, cfg.Mongo.Username, cfg.Mongo.Password)
 	if err != nil {
 		slog.Error("mongo connect failed", "error", err)
@@ -73,7 +81,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	svc := service.New(subRepo, userRepo, appRepo, roomclient.New(nc, cfg.SiteID), publisher.New(nc), &cfg)
+	svc := service.New(subRepo, userRepo, appRepo, roomclient.New(nc, cfg.SiteID), publisher.New(js), &cfg)
 
 	router := natsrouter.New(nc, "user-service")
 	router.Use(natsrouter.Recovery())

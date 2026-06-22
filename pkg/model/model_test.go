@@ -1083,8 +1083,8 @@ func TestSubscriptionUpdateEventJSON(t *testing.T) {
 	}
 }
 
-func TestOutboxEventJSON(t *testing.T) {
-	src := model.OutboxEvent{
+func TestInboxEventJSON(t *testing.T) {
+	src := model.InboxEvent{
 		Type:       "member_added",
 		SiteID:     "site-a",
 		DestSiteID: "site-b",
@@ -1093,16 +1093,16 @@ func TestOutboxEventJSON(t *testing.T) {
 	}
 	data, err := json.Marshal(&src)
 	require.NoError(t, err)
-	var dst model.OutboxEvent
+	var dst model.InboxEvent
 	require.NoError(t, json.Unmarshal(data, &dst))
 	if !reflect.DeepEqual(src, dst) {
 		t.Errorf("round-trip mismatch:\n  got  %+v\n  want %+v", dst, src)
 	}
 }
 
-func TestOutboxEventJSON_ThreadSubscriptionUpserted(t *testing.T) {
-	src := model.OutboxEvent{
-		Type:       model.OutboxThreadSubscriptionUpserted,
+func TestInboxEventJSON_ThreadSubscriptionUpserted(t *testing.T) {
+	src := model.InboxEvent{
+		Type:       model.InboxThreadSubscriptionUpserted,
 		SiteID:     "site-a",
 		DestSiteID: "site-b",
 		Payload:    []byte(`{"id":"sub-1","threadRoomId":"tr-1"}`),
@@ -1111,7 +1111,7 @@ func TestOutboxEventJSON_ThreadSubscriptionUpserted(t *testing.T) {
 	data, err := json.Marshal(&src)
 	require.NoError(t, err)
 
-	var dst model.OutboxEvent
+	var dst model.InboxEvent
 	require.NoError(t, json.Unmarshal(data, &dst))
 	if !reflect.DeepEqual(src, dst) {
 		t.Errorf("round-trip mismatch:\n  got  %+v\n  want %+v", dst, src)
@@ -2513,9 +2513,9 @@ func TestPresenceTypesJSON(t *testing.T) {
 	}, &model.PresenceQueryResponse{})
 }
 
-func TestOutboxSubscriptionReadConstant(t *testing.T) {
-	if model.OutboxSubscriptionRead != "subscription_read" {
-		t.Errorf("got %q, want %q", model.OutboxSubscriptionRead, "subscription_read")
+func TestInboxSubscriptionReadConstant(t *testing.T) {
+	if model.InboxSubscriptionRead != "subscription_read" {
+		t.Errorf("got %q, want %q", model.InboxSubscriptionRead, "subscription_read")
 	}
 }
 
@@ -2889,8 +2889,8 @@ func TestSubscriptionMuteToggledEventJSON(t *testing.T) {
 	assert.Equal(t, src, dst)
 }
 
-func TestOutboxSubscriptionMuteToggledConst(t *testing.T) {
-	assert.Equal(t, model.OutboxEventType("subscription_mute_toggled"), model.OutboxSubscriptionMuteToggled)
+func TestInboxSubscriptionMuteToggledConst(t *testing.T) {
+	assert.Equal(t, model.InboxEventType("subscription_mute_toggled"), model.InboxSubscriptionMuteToggled)
 }
 
 func TestFavoriteToggleResponseJSON(t *testing.T) {
@@ -2926,8 +2926,8 @@ func TestSubscriptionFavoriteToggledEventJSON(t *testing.T) {
 	assert.Equal(t, src, dst)
 }
 
-func TestOutboxSubscriptionFavoriteToggledConst(t *testing.T) {
-	assert.Equal(t, model.OutboxEventType("subscription_favorite_toggled"), model.OutboxSubscriptionFavoriteToggled)
+func TestInboxSubscriptionFavoriteToggledConst(t *testing.T) {
+	assert.Equal(t, model.InboxEventType("subscription_favorite_toggled"), model.InboxSubscriptionFavoriteToggled)
 }
 
 func TestSyncCreateDMRequestJSON(t *testing.T) {
@@ -3208,7 +3208,7 @@ func TestThreadReadEventJSON(t *testing.T) {
 	roundTrip(t, &src, &model.ThreadReadEvent{})
 }
 
-func TestOutboxEventJSON_ThreadRead(t *testing.T) {
+func TestInboxEventJSON_ThreadRead(t *testing.T) {
 	payload := model.ThreadReadEvent{
 		Account: "alice", RoomID: "r1", ThreadRoomID: "tr1",
 		ParentMessageID: "p1", NewThreadUnread: []string{"t2"},
@@ -3216,8 +3216,8 @@ func TestOutboxEventJSON_ThreadRead(t *testing.T) {
 	}
 	data, err := json.Marshal(&payload)
 	require.NoError(t, err)
-	src := model.OutboxEvent{
-		Type:       model.OutboxThreadRead,
+	src := model.InboxEvent{
+		Type:       model.InboxThreadRead,
 		SiteID:     "site-a",
 		DestSiteID: "site-b",
 		Payload:    data,
@@ -3225,7 +3225,7 @@ func TestOutboxEventJSON_ThreadRead(t *testing.T) {
 	}
 	out, err := json.Marshal(&src)
 	require.NoError(t, err)
-	var dst model.OutboxEvent
+	var dst model.InboxEvent
 	require.NoError(t, json.Unmarshal(out, &dst))
 	if !reflect.DeepEqual(src, dst) {
 		t.Errorf("round-trip mismatch:\n  got  %+v\n  want %+v", dst, src)
@@ -3403,7 +3403,7 @@ func TestRoomRestrictedRequest_OwnerOmittedWhenEmpty(t *testing.T) {
 	assert.False(t, has)
 }
 
-// --- Sys message + outbox payloads ---
+// --- Sys message + inbox payloads ---
 
 func TestRoomRenamedSysDataJSON(t *testing.T) {
 	d := model.RoomRenamedSysData{NewName: "renamed", ByAccount: "alice"}
@@ -3445,26 +3445,26 @@ func TestRoomRestrictedSysDataJSON(t *testing.T) {
 	roundTrip(t, &d, &model.RoomRestrictedSysData{})
 }
 
-func TestRoomRenamedOutboxPayloadJSON(t *testing.T) {
-	p := model.RoomRenamedOutboxPayload{RoomID: "r1", NewName: "x", Timestamp: 1700000000000}
-	roundTrip(t, &p, &model.RoomRenamedOutboxPayload{})
+func TestRoomRenamedInboxPayloadJSON(t *testing.T) {
+	p := model.RoomRenamedInboxPayload{RoomID: "r1", NewName: "x", Timestamp: 1700000000000}
+	roundTrip(t, &p, &model.RoomRenamedInboxPayload{})
 }
 
-func TestRoomRestrictedOutboxPayloadJSON(t *testing.T) {
-	p := model.RoomRestrictedOutboxPayload{
+func TestRoomRestrictedInboxPayloadJSON(t *testing.T) {
+	p := model.RoomRestrictedInboxPayload{
 		RoomID: "r1", Restricted: true, ExternalAccess: false,
 		OwnerAccount: "alice", Timestamp: 1700000000000,
 	}
-	roundTrip(t, &p, &model.RoomRestrictedOutboxPayload{})
+	roundTrip(t, &p, &model.RoomRestrictedInboxPayload{})
 }
 
 // --- Constants ---
 
-func TestMessageAndOutboxAndAsyncOpConstants(t *testing.T) {
+func TestMessageAndInboxAndAsyncOpConstants(t *testing.T) {
 	assert.Equal(t, "room_renamed", model.MessageTypeRoomRenamed)
 	assert.Equal(t, "room_restricted", model.MessageTypeRoomRestricted)
-	assert.Equal(t, "room_renamed", model.OutboxRoomRenamed)
-	assert.Equal(t, "room_restricted", model.OutboxRoomRestricted)
+	assert.Equal(t, "room_renamed", model.InboxRoomRenamed)
+	assert.Equal(t, "room_restricted", model.InboxRoomRestricted)
 	assert.Equal(t, "room.rename", model.AsyncJobOpRoomRename)
 	assert.Equal(t, model.RoomEventType("room_renamed"), model.RoomEventRoomRenamed)
 	assert.Equal(t, model.RoomEventType("room_restricted"), model.RoomEventRoomRestricted)

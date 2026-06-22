@@ -23,7 +23,7 @@ type NATSConfig struct {
 
 // Config is the top-level configuration for user-service.
 type Config struct {
-	// SiteID is required: baked into subscription subjects and outbox routing; missing it would silently federate under a wrong ID.
+	// SiteID is required: baked into subscription subjects and inbox routing; missing it would silently federate under a wrong ID.
 	SiteID               string        `env:"SITE_ID,notEmpty"`
 	AllSiteIDs           []string      `env:"ALL_SITE_IDS"           envDefault:"" envSeparator:","`
 	MaxSubscriptionLimit int           `env:"MAX_SUBSCRIPTION_LIMIT" envDefault:"1000"`

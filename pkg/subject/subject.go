@@ -146,55 +146,43 @@ func Notification(account string) string {
 	return fmt.Sprintf("chat.user.%s.notification", account)
 }
 
-func Outbox(siteID, destSiteID, eventType string) string {
-	return fmt.Sprintf("outbox.%s.to.%s.%s", siteID, destSiteID, eventType)
+// InboxExternal is the subject a service uses to publish a cross-site
+// (remote-origin) federation event directly into the destination site's INBOX
+// stream: `chat.inbox.{siteID}.external.{eventType}`. The JetStream publish is
+// routed across the NATS supercluster to the destination's INBOX. inbox-worker
+// consumes this lane and applies the event to the destination's DB.
+func InboxExternal(siteID, eventType string) string {
+	return fmt.Sprintf("chat.inbox.%s.external.%s", siteID, eventType)
 }
 
-// InboxMemberAdded is the local-publish subject for a same-site member_added
-// event. It lands in the local INBOX stream without the `aggregate` segment.
-func InboxMemberAdded(siteID string) string {
-	return fmt.Sprintf("chat.inbox.%s.member_added", siteID)
+// InboxInternal is the subject a same-site service uses to publish a
+// local-origin event into its own INBOX stream:
+// `chat.inbox.{siteID}.internal.{eventType}`. The internal lane is a
+// search-indexing feed only — inbox-worker does NOT consume it, because the
+// originating service already applied the change to the local DB synchronously.
+func InboxInternal(siteID, eventType string) string {
+	return fmt.Sprintf("chat.inbox.%s.internal.%s", siteID, eventType)
 }
 
-// InboxMemberRemoved is the local-publish subject for a same-site
-// member_removed event. It lands in the local INBOX stream without the
-// `aggregate` segment.
-func InboxMemberRemoved(siteID string) string {
-	return fmt.Sprintf("chat.inbox.%s.member_removed", siteID)
+// InboxExternalAll returns the wildcard matching every external-lane event on a
+// site's INBOX stream: `chat.inbox.{siteID}.external.>`. Use with
+// jetstream.ConsumerConfig.FilterSubjects to scope a consumer to the remote-
+// origin lane only — excluding internal-lane publishes reserved for
+// search-sync-worker.
+func InboxExternalAll(siteID string) string {
+	return fmt.Sprintf("chat.inbox.%s.external.>", siteID)
 }
 
-// InboxMemberAddedAggregate is the transformed subject for a federated
-// member_added event after INBOX SubjectTransform rewrites
-// `outbox.{src}.to.{siteID}.member_added` to this form.
-func InboxMemberAddedAggregate(siteID string) string {
-	return fmt.Sprintf("chat.inbox.%s.aggregate.member_added", siteID)
-}
-
-// InboxMemberRemovedAggregate is the transformed subject for a federated
-// member_removed event.
-func InboxMemberRemovedAggregate(siteID string) string {
-	return fmt.Sprintf("chat.inbox.%s.aggregate.member_removed", siteID)
-}
-
-// InboxAggregateAll returns the wildcard pattern matching every federated
-// (aggregate-lane) event on a site's INBOX stream:
-// `chat.inbox.{siteID}.aggregate.>`. Use with
-// jetstream.ConsumerConfig.FilterSubjects to scope a consumer to the
-// federated lane only — excluding local-lane publishes that are reserved
-// for search-sync-worker.
-func InboxAggregateAll(siteID string) string {
-	return fmt.Sprintf("chat.inbox.%s.aggregate.>", siteID)
-}
-
-// InboxMemberEventSubjects returns the subject filters a consumer should use
-// to receive both local and federated member_added/member_removed events for
-// the given site. Use with jetstream.ConsumerConfig.FilterSubjects (NATS 2.10+).
+// InboxMemberEventSubjects returns the subject filters a consumer should use to
+// receive member_added/member_removed events on both the internal (same-site)
+// and external (cross-site) lanes for the given site. Use with
+// jetstream.ConsumerConfig.FilterSubjects (NATS 2.10+).
 func InboxMemberEventSubjects(siteID string) []string {
 	return []string{
-		InboxMemberAdded(siteID),
-		InboxMemberRemoved(siteID),
-		InboxMemberAddedAggregate(siteID),
-		InboxMemberRemovedAggregate(siteID),
+		InboxInternal(siteID, "member_added"),
+		InboxInternal(siteID, "member_removed"),
+		InboxExternal(siteID, "member_added"),
+		InboxExternal(siteID, "member_removed"),
 	}
 }
 
@@ -370,10 +358,6 @@ func MsgThreadWildcard(siteID string) string {
 
 func MsgCanonicalWildcard(siteID string) string {
 	return fmt.Sprintf("chat.msg.canonical.%s.>", siteID)
-}
-
-func OutboxWildcard(siteID string) string {
-	return fmt.Sprintf("outbox.%s.>", siteID)
 }
 
 // RoomsInfoBatchSubscribe is the per-site subscription subject for room-service.

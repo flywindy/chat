@@ -135,7 +135,7 @@ type RoomStore interface {
 	SetOwnerRole(ctx context.Context, roomID, account string, makeOwner bool, rolesUpdatedAt time.Time) (*model.Subscription, error)
 	// GetUserSiteID returns the home site of a user looked up by account.
 	// Returns ("", nil) when the user is not found locally; callers treat
-	// that as "skip cross-site outbox".
+	// that as "skip cross-site inbox".
 	GetUserSiteID(ctx context.Context, account string) (string, error)
 	// MinSubscriptionLastSeenByRoomID returns the room's strict read floor:
 	// the MIN(lastSeenAt) across ALL of the room's subscriptions, but only
@@ -208,7 +208,7 @@ type RoomStore interface {
 	// guards remote applies against it).
 	ApplySubscriptionVisibility(ctx context.Context, roomID string, restricted, externalAccess bool, ownerAccount string, visibilityUpdatedAt time.Time) error
 	// ListSubscriptionsByRoom returns every subscription in the room. Used to
-	// drive cross-site outbox fan-out (one event per remote site).
+	// drive cross-site inbox fan-out (one event per remote site).
 	ListSubscriptionsByRoom(ctx context.Context, roomID string) ([]model.Subscription, error)
 	// FindUsersByAccounts returns the User docs for the supplied accounts. Used
 	// to bucket subscriptions by home site for cross-site fan-out.

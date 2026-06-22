@@ -455,7 +455,7 @@ func main() {
 
 	inboxCfg := stream.Inbox(cfg.SiteID)
 
-	// Local lane is reserved for search-sync-worker; scope to aggregate.> only.
+	// Internal lane is reserved for search-sync-worker; scope to external.> only.
 	cons, err := js.CreateOrUpdateConsumer(ctx, inboxCfg.Name, buildConsumerConfig(cfg.Consumer, cfg.SiteID))
 	if err != nil {
 		slog.Error("create consumer failed", "error", err)
@@ -464,7 +464,7 @@ func main() {
 
 	handler := NewHandler(store)
 
-	// Two-lane pull pattern over the single INBOX aggregate consumer:
+	// Two-lane pull pattern over the single INBOX external consumer:
 	//
 	//   - Membership events (member_added/member_removed) run on ONE
 	//     sequential lane. They are NOT individually order-safe — a physical
@@ -585,23 +585,23 @@ func main() {
 	)
 }
 
-// isMembershipSubject reports whether an INBOX aggregate-lane subject carries a
+// isMembershipSubject reports whether an INBOX external-lane subject carries a
 // membership event (member_added/member_removed) for this site. Those events
 // are routed to a single sequential lane because, unlike the read-receipt and
 // role/mute/room_sync handlers, they have no per-document high-water-mark guard
 // and so must be applied in order to avoid the add/remove resurrection race.
 func isMembershipSubject(subj, siteID string) bool {
-	return subj == subject.InboxMemberAddedAggregate(siteID) ||
-		subj == subject.InboxMemberRemovedAggregate(siteID)
+	return subj == subject.InboxExternal(siteID, model.InboxMemberAdded) ||
+		subj == subject.InboxExternal(siteID, model.InboxMemberRemoved)
 }
 
 // buildConsumerConfig returns the durable consumer config for
 // inbox-worker. The site-scoped FilterSubjects keeps inbox-worker on the
-// federated `aggregate.>` lane only; same-site direct publishes are
+// cross-site `external.>` lane only; same-site internal publishes are
 // reserved for search-sync-worker.
 func buildConsumerConfig(s stream.ConsumerSettings, siteID string) jetstream.ConsumerConfig {
 	cc := stream.DurableConsumerDefaults(s)
 	cc.Durable = "inbox-worker"
-	cc.FilterSubjects = []string{subject.InboxAggregateAll(siteID)}
+	cc.FilterSubjects = []string{subject.InboxExternalAll(siteID)}
 	return cc
 }

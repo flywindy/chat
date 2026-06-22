@@ -1581,7 +1581,7 @@ func (s *MongoStore) ListSubscriptionsByRoom(ctx context.Context, roomID string)
 }
 
 // FindUsersByAccounts returns User docs for the supplied accounts. Empty input
-// returns nil, nil. The sole caller only reads siteId (for cross-site outbox
+// returns nil, nil. The sole caller only reads siteId (for cross-site inbox
 // fan-out), so project just that field.
 func (s *MongoStore) FindUsersByAccounts(ctx context.Context, accounts []string) ([]model.User, error) {
 	if len(accounts) == 0 {

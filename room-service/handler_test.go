@@ -285,7 +285,7 @@ func TestHandler_UpdateRole_Demote_Success(t *testing.T) {
 	assert.Equal(t, []model.Role{model.RoleMember}, evt.Subscription.Roles)
 }
 
-func TestHandler_UpdateRole_CrossSiteOutbox(t *testing.T) {
+func TestHandler_UpdateRole_CrossSiteInbox(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	store := NewMockRoomStore(ctrl)
 
@@ -307,13 +307,13 @@ func TestHandler_UpdateRole_CrossSiteOutbox(t *testing.T) {
 		})
 	store.EXPECT().GetUserSiteID(gomock.Any(), "bob").Return("site-b", nil)
 
-	var outboxSubj string
-	var outboxData []byte
+	var inboxSubj string
+	var inboxData []byte
 	h := &Handler{store: store, siteID: "site-a", maxRoomSize: 1000,
 		publishCore: func(_ context.Context, _ string, _ []byte) error { return nil },
 		publishToStream: func(_ context.Context, subj string, data []byte, _ string) error {
-			outboxSubj = subj
-			outboxData = data
+			inboxSubj = subj
+			inboxData = data
 			return nil
 		},
 	}
@@ -323,20 +323,20 @@ func TestHandler_UpdateRole_CrossSiteOutbox(t *testing.T) {
 	_, err := h.updateRole(ctxParams(map[string]string{"account": "alice", "roomID": "r1"}), req)
 	require.NoError(t, err)
 
-	require.NotNil(t, outboxData, "cross-site target must publish a role_updated outbox event")
-	assert.Equal(t, subject.Outbox("site-a", "site-b", "role_updated"), outboxSubj)
-	var outbox model.OutboxEvent
-	require.NoError(t, json.Unmarshal(outboxData, &outbox))
-	assert.Equal(t, "role_updated", outbox.Type)
-	assert.Equal(t, "site-a", outbox.SiteID)
-	assert.Equal(t, "site-b", outbox.DestSiteID)
+	require.NotNil(t, inboxData, "cross-site target must publish a role_updated inbox event")
+	assert.Equal(t, subject.InboxExternal("site-b", "role_updated"), inboxSubj)
+	var inboxEnv model.InboxEvent
+	require.NoError(t, json.Unmarshal(inboxData, &inboxEnv))
+	assert.Equal(t, "role_updated", inboxEnv.Type)
+	assert.Equal(t, "site-a", inboxEnv.SiteID)
+	assert.Equal(t, "site-b", inboxEnv.DestSiteID)
 	var evt model.SubscriptionUpdateEvent
-	require.NoError(t, json.Unmarshal(outbox.Payload, &evt))
+	require.NoError(t, json.Unmarshal(inboxEnv.Payload, &evt))
 	assert.Equal(t, []model.Role{model.RoleMember, model.RoleOwner}, evt.Subscription.Roles)
 	// The origin doc's rolesUpdatedAt and the published event timestamp must be the
 	// same instant so remote replicas guard against one high-water mark.
 	assert.False(t, roleTs.IsZero())
-	assert.Equal(t, roleTs.UnixMilli(), outbox.Timestamp)
+	assert.Equal(t, roleTs.UnixMilli(), inboxEnv.Timestamp)
 	assert.Equal(t, roleTs.UnixMilli(), evt.Timestamp)
 }
 
@@ -573,7 +573,7 @@ func TestHandler_UpdateRole_PublishError(t *testing.T) {
 	req := model.UpdateRoleRequest{Account: "bob", NewRole: model.RoleOwner}
 	_, err := h.updateRole(ctxParams(map[string]string{"account": "alice", "roomID": "r1"}), req)
 	if err == nil {
-		t.Fatal("expected error for outbox publish failure")
+		t.Fatal("expected error for inbox publish failure")
 	}
 }
 
@@ -2771,7 +2771,7 @@ func TestHandler_MessageRead_RoomLastMsgNil_EarlyReturn(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestHandler_MessageRead_CrossSite_PublishesOutbox(t *testing.T) {
+func TestHandler_MessageRead_CrossSite_PublishesInbox(t *testing.T) {
 	f := newMessageReadFixture(t)
 	joined := time.Now().UTC().Add(-2 * time.Hour)
 	lastSeen := joined.Add(time.Hour)
@@ -2791,16 +2791,16 @@ func TestHandler_MessageRead_CrossSite_PublishesOutbox(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, f.publishCalls)
-	assert.Equal(t, "outbox.site-a.to.site-b.subscription_read", f.publishedSubj)
+	assert.Equal(t, "chat.inbox.site-b.external.subscription_read", f.publishedSubj)
 
-	var outbox model.OutboxEvent
-	require.NoError(t, json.Unmarshal(f.publishedData, &outbox))
-	assert.Equal(t, model.OutboxSubscriptionRead, outbox.Type)
-	assert.Equal(t, "site-a", outbox.SiteID)
-	assert.Equal(t, "site-b", outbox.DestSiteID)
+	var inboxEnv model.InboxEvent
+	require.NoError(t, json.Unmarshal(f.publishedData, &inboxEnv))
+	assert.Equal(t, model.InboxSubscriptionRead, inboxEnv.Type)
+	assert.Equal(t, "site-a", inboxEnv.SiteID)
+	assert.Equal(t, "site-b", inboxEnv.DestSiteID)
 
 	var inner model.SubscriptionReadEvent
-	require.NoError(t, json.Unmarshal(outbox.Payload, &inner))
+	require.NoError(t, json.Unmarshal(inboxEnv.Payload, &inner))
 	assert.Equal(t, "alice", inner.Account)
 	assert.Equal(t, "r1", inner.RoomID)
 	assert.True(t, inner.Alert)
@@ -3142,7 +3142,7 @@ func TestHandler_MessageRead_PublishFailure_NonFatal(t *testing.T) {
 	require.NoError(t, err, "publishCore failure on subscription.update must not fail the RPC")
 }
 
-// Cross-site messageRead: outbox publish fires for the floor fan-out, AND the
+// Cross-site messageRead: inbox publish fires for the floor fan-out, AND the
 // subscription.update still goes to core NATS for the reader's own account.
 func TestHandler_MessageRead_CrossSite_AlsoPublishesSubscriptionUpdate(t *testing.T) {
 	f := newMessageReadFixture(t)
@@ -3163,7 +3163,7 @@ func TestHandler_MessageRead_CrossSite_AlsoPublishesSubscriptionUpdate(t *testin
 	_, err := f.handler.messageRead(ctxParams(map[string]string{"account": "alice", "roomID": "r1"}))
 	require.NoError(t, err)
 
-	// Outbox publish for cross-site floor fan-out.
+	// Inbox publish for cross-site floor fan-out.
 	assert.Equal(t, 1, f.publishCalls)
 	// subscription.update via core NATS.
 	require.Len(t, f.coreSubjects, 1)
@@ -3629,7 +3629,7 @@ func TestHandler_MessageThreadRead_AlertAlreadyFalse(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestHandler_MessageThreadRead_CrossSite_PublishesOutbox(t *testing.T) {
+func TestHandler_MessageThreadRead_CrossSite_PublishesInbox(t *testing.T) {
 	f := newThreadReadFixture(t)
 	withNopFloor(f)
 	f.store.EXPECT().GetSubscription(gomock.Any(), "alice", "r1").
@@ -3646,11 +3646,11 @@ func TestHandler_MessageThreadRead_CrossSite_PublishesOutbox(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Equal(t, 1, f.publishCalls)
-	assert.Equal(t, "outbox.site-a.to.site-b.thread_read", f.publishedSubj)
+	assert.Equal(t, "chat.inbox.site-b.external.thread_read", f.publishedSubj)
 
-	var outer model.OutboxEvent
+	var outer model.InboxEvent
 	require.NoError(t, json.Unmarshal(f.publishedData, &outer))
-	assert.Equal(t, model.OutboxThreadRead, outer.Type)
+	assert.Equal(t, model.InboxThreadRead, outer.Type)
 	assert.Equal(t, "site-a", outer.SiteID)
 	assert.Equal(t, "site-b", outer.DestSiteID)
 
@@ -3702,7 +3702,7 @@ func TestHandler_MessageThreadRead_GetUserSiteID_Error(t *testing.T) {
 	assert.Equal(t, 0, f.publishCalls)
 }
 
-func TestHandler_MessageThreadRead_OutboxPublishError(t *testing.T) {
+func TestHandler_MessageThreadRead_InboxPublishError(t *testing.T) {
 	f := newThreadReadFixture(t)
 	f.publishCallErr = fmt.Errorf("nats down")
 	f.store.EXPECT().GetSubscription(gomock.Any(), "alice", "r1").
@@ -3876,7 +3876,7 @@ func TestHandler_MuteToggle_Success(t *testing.T) {
 		})
 	store.EXPECT().
 		GetUserSiteID(gomock.Any(), "alice").
-		Return("site-a", nil) // same site → no outbox publish
+		Return("site-a", nil) // same site → no inbox publish
 
 	var coreSubjects []string
 	var coreBodies [][]byte
@@ -3927,7 +3927,7 @@ func TestHandler_MuteToggle_Success(t *testing.T) {
 	assert.True(t, canon.Muted)
 }
 
-func TestHandler_MuteToggle_CrossSitePublishesOutbox(t *testing.T) {
+func TestHandler_MuteToggle_CrossSitePublishesInbox(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	store := NewMockRoomStore(ctrl)
 
@@ -3962,24 +3962,24 @@ func TestHandler_MuteToggle_CrossSitePublishesOutbox(t *testing.T) {
 	_, err := h.muteToggle(ctxParams(map[string]string{"account": "alice", "roomID": "r1"}))
 	require.NoError(t, err)
 
-	assert.Equal(t, subject.Outbox("site-a", "site-b", model.OutboxSubscriptionMuteToggled), streamSubj)
+	assert.Equal(t, subject.InboxExternal("site-b", model.InboxSubscriptionMuteToggled), streamSubj)
 
-	var outbox model.OutboxEvent
-	require.NoError(t, json.Unmarshal(streamData, &outbox))
-	assert.Equal(t, model.OutboxSubscriptionMuteToggled, outbox.Type)
-	assert.Equal(t, "site-a", outbox.SiteID)
-	assert.Equal(t, "site-b", outbox.DestSiteID)
+	var inboxEnv model.InboxEvent
+	require.NoError(t, json.Unmarshal(streamData, &inboxEnv))
+	assert.Equal(t, model.InboxSubscriptionMuteToggled, inboxEnv.Type)
+	assert.Equal(t, "site-a", inboxEnv.SiteID)
+	assert.Equal(t, "site-b", inboxEnv.DestSiteID)
 
 	var payload model.SubscriptionMuteToggledEvent
-	require.NoError(t, json.Unmarshal(outbox.Payload, &payload))
+	require.NoError(t, json.Unmarshal(inboxEnv.Payload, &payload))
 	assert.Equal(t, "alice", payload.Account)
 	assert.Equal(t, "r1", payload.RoomID)
 	assert.True(t, payload.Muted)
 	assert.NotZero(t, payload.Timestamp)
-	// Origin write, outbox envelope, and payload must all carry the same instant
+	// Origin write, inbox envelope, and payload must all carry the same instant
 	// so the remote replica guards against one high-water mark.
 	assert.False(t, muteTs.IsZero())
-	assert.Equal(t, muteTs.UnixMilli(), outbox.Timestamp)
+	assert.Equal(t, muteTs.UnixMilli(), inboxEnv.Timestamp)
 	assert.Equal(t, muteTs.UnixMilli(), payload.Timestamp)
 }
 
@@ -4035,7 +4035,7 @@ func TestHandler_MuteToggle_GetUserSiteIDError(t *testing.T) {
 	h := &Handler{
 		store: store, siteID: "site-a",
 		// Canonical member event publish happens before GetUserSiteID and is
-		// independent of the outbox path — it represents the successful DB mutation.
+		// independent of the inbox path — it represents the successful DB mutation.
 		publishToStream: func(_ context.Context, _ string, _ []byte, _ string) error { return nil },
 		publishCore:     func(_ context.Context, _ string, _ []byte) error { return nil },
 	}
@@ -4045,7 +4045,7 @@ func TestHandler_MuteToggle_GetUserSiteIDError(t *testing.T) {
 	assert.Contains(t, err.Error(), "get user siteId")
 }
 
-func TestHandler_MuteToggle_CrossSiteOutboxPublishFailure(t *testing.T) {
+func TestHandler_MuteToggle_CrossSiteInboxPublishFailure(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	store := NewMockRoomStore(ctrl)
 
@@ -4071,7 +4071,7 @@ func TestHandler_MuteToggle_CrossSiteOutboxPublishFailure(t *testing.T) {
 
 	_, err := h.muteToggle(ctxParams(map[string]string{"account": "alice", "roomID": "r1"}))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "publish mute-toggled outbox")
+	assert.Contains(t, err.Error(), "publish mute-toggled inbox")
 }
 
 func TestHandler_natsGetRoomKey(t *testing.T) {
@@ -4877,7 +4877,7 @@ func TestHandler_FavoriteToggle_Success(t *testing.T) {
 	assert.Equal(t, "alice", evt.Subscription.User.Account)
 }
 
-func TestHandler_FavoriteToggle_CrossSitePublishesOutbox(t *testing.T) {
+func TestHandler_FavoriteToggle_CrossSitePublishesInbox(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	store := NewMockRoomStore(ctrl)
 
@@ -4912,16 +4912,16 @@ func TestHandler_FavoriteToggle_CrossSitePublishesOutbox(t *testing.T) {
 	_, err := h.favoriteToggle(ctxParams(map[string]string{"account": "alice", "roomID": "r1"}))
 	require.NoError(t, err)
 
-	assert.Equal(t, subject.Outbox("site-a", "site-b", model.OutboxSubscriptionFavoriteToggled), streamSubj)
+	assert.Equal(t, subject.InboxExternal("site-b", model.InboxSubscriptionFavoriteToggled), streamSubj)
 
-	var outbox model.OutboxEvent
-	require.NoError(t, json.Unmarshal(streamData, &outbox))
-	assert.Equal(t, model.OutboxSubscriptionFavoriteToggled, outbox.Type)
-	assert.Equal(t, "site-a", outbox.SiteID)
-	assert.Equal(t, "site-b", outbox.DestSiteID)
+	var inboxEnv model.InboxEvent
+	require.NoError(t, json.Unmarshal(streamData, &inboxEnv))
+	assert.Equal(t, model.InboxSubscriptionFavoriteToggled, inboxEnv.Type)
+	assert.Equal(t, "site-a", inboxEnv.SiteID)
+	assert.Equal(t, "site-b", inboxEnv.DestSiteID)
 
 	var payload model.SubscriptionFavoriteToggledEvent
-	require.NoError(t, json.Unmarshal(outbox.Payload, &payload))
+	require.NoError(t, json.Unmarshal(inboxEnv.Payload, &payload))
 	assert.Equal(t, "alice", payload.Account)
 	assert.Equal(t, "r1", payload.RoomID)
 	assert.True(t, payload.Favorite)
@@ -4929,7 +4929,7 @@ func TestHandler_FavoriteToggle_CrossSitePublishesOutbox(t *testing.T) {
 	// The origin doc's favoriteUpdatedAt and the published event timestamp must
 	// be the same instant so remote replicas guard against one high-water mark.
 	assert.False(t, favoriteTs.IsZero())
-	assert.Equal(t, favoriteTs.UnixMilli(), outbox.Timestamp)
+	assert.Equal(t, favoriteTs.UnixMilli(), inboxEnv.Timestamp)
 	assert.Equal(t, favoriteTs.UnixMilli(), payload.Timestamp)
 }
 
@@ -4996,7 +4996,7 @@ func TestHandler_FavoriteToggle_GetUserSiteIDError(t *testing.T) {
 	assert.Contains(t, err.Error(), "get user siteId")
 }
 
-func TestHandler_FavoriteToggle_CrossSiteOutboxPublishFailure(t *testing.T) {
+func TestHandler_FavoriteToggle_CrossSiteInboxPublishFailure(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	store := NewMockRoomStore(ctrl)
 
@@ -5022,7 +5022,7 @@ func TestHandler_FavoriteToggle_CrossSiteOutboxPublishFailure(t *testing.T) {
 
 	_, err := h.favoriteToggle(ctxParams(map[string]string{"account": "alice", "roomID": "r1"}))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "publish favorite-toggled outbox")
+	assert.Contains(t, err.Error(), "publish favorite-toggled inbox")
 }
 
 func TestHandler_FavoriteToggle_CorePublishFailureIsNonFatal(t *testing.T) {

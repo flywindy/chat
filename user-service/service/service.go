@@ -45,8 +45,10 @@ type RoomClient interface {
 	CreateDMRoom(ctx context.Context, account, otherAccount string, roomType model.RoomType) (model.Subscription, error)
 }
 
-// EventPublisher is the consumer-defined interface for fire-and-forget outbox publishing.
-// Core NATS only (no JetStream); status is last-write-wins so no msgID/dedup is needed.
+// EventPublisher is the consumer-defined interface for fire-and-forget
+// federation publishing — a JetStream publish directly into the destination
+// site's INBOX stream. Status is last-write-wins and idempotent, so no
+// msgID/dedup is needed.
 type EventPublisher interface {
 	Publish(ctx context.Context, subject string, data []byte) error
 }

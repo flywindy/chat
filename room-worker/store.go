@@ -131,7 +131,7 @@ type SubscriptionStore interface {
 
 	// ListByRoom returns all subscriptions for roomID across every site.
 	// Used by the rename processor to bucket accounts by remote site for
-	// outbox fan-out.
+	// cross-site fan-out.
 	ListByRoom(ctx context.Context, roomID string) ([]model.Subscription, error)
 }
 

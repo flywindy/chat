@@ -43,7 +43,7 @@ func TestInboxWorker_MemberAdded_Integration(t *testing.T) {
 		t.Fatalf("seed user: %v", err)
 	}
 
-	// Create outbox event for member_added
+	// Create inbox event for member_added
 	hssMillis := time.Now().UTC().UnixMilli()
 	change := model.MemberAddEvent{
 		Type: "member_added", RoomID: "r1", Accounts: []string{"u2"}, SiteID: "site-b",
@@ -52,7 +52,7 @@ func TestInboxWorker_MemberAdded_Integration(t *testing.T) {
 		Timestamp:          time.Now().UTC().UnixMilli(),
 	}
 	changeData, _ := json.Marshal(change)
-	evt := model.OutboxEvent{Type: "member_added", SiteID: "site-a", DestSiteID: "site-b", Payload: changeData}
+	evt := model.InboxEvent{Type: "member_added", SiteID: "site-a", DestSiteID: "site-b", Payload: changeData}
 	evtData, _ := json.Marshal(evt)
 
 	if err := handler.HandleEvent(ctx, evtData); err != nil {
@@ -87,7 +87,7 @@ func TestInboxWorker_RoomSync_Integration(t *testing.T) {
 
 	room := model.Room{ID: "r1", Name: "synced-room", Type: model.RoomTypeChannel, UserCount: 5}
 	roomData, _ := json.Marshal(room)
-	evt := model.OutboxEvent{Type: "room_sync", Payload: roomData}
+	evt := model.InboxEvent{Type: "room_sync", Payload: roomData}
 	evtData, _ := json.Marshal(evt)
 
 	if err := handler.HandleEvent(ctx, evtData); err != nil {
@@ -134,7 +134,7 @@ func TestInboxWorker_RoleUpdated_Integration(t *testing.T) {
 	}
 	subEvtData, _ := json.Marshal(subEvt)
 
-	evt := model.OutboxEvent{
+	evt := model.InboxEvent{
 		Type: "role_updated", SiteID: "site-a", DestSiteID: "site-b",
 		Payload: subEvtData, Timestamp: time.Now().UTC().UnixMilli(),
 	}
@@ -185,7 +185,7 @@ func TestInboxWorker_BulkCreateSubscriptions_IdempotentUpsert(t *testing.T) {
 	require.NoError(t, store.BulkCreateSubscriptions(ctx, []*model.Subscription{original}))
 
 	// Re-issue with a "fresher" copy that has no LastSeenAt — simulates a
-	// redelivered outbox event materializing the same sub.
+	// redelivered inbox event materializing the same sub.
 	redelivered := &model.Subscription{
 		ID:       "sub-redelivered",
 		User:     model.SubscriptionUser{ID: "u1", Account: "alice"},
@@ -242,7 +242,7 @@ func TestInboxWorker_MemberRemoved_Integration(t *testing.T) {
 		Type: "member-removed", RoomID: "r1", Accounts: []string{"bob"}, SiteID: "site-a",
 	}
 	payload, _ := json.Marshal(memberEvt)
-	evt := model.OutboxEvent{
+	evt := model.InboxEvent{
 		Type: "member_removed", SiteID: "site-a", DestSiteID: "site-b",
 		Payload: payload, Timestamp: time.Now().UnixMilli(),
 	}
@@ -375,7 +375,7 @@ func TestInboxWorker_ThreadSubscriptionUpserted_Insert_Integration(t *testing.T)
 	}
 	subData, err := json.Marshal(sub)
 	require.NoError(t, err)
-	evtData, err := json.Marshal(model.OutboxEvent{
+	evtData, err := json.Marshal(model.InboxEvent{
 		Type: "thread_subscription_upserted", SiteID: "site-a", DestSiteID: "site-b",
 		Payload: subData, Timestamp: now.UnixMilli(),
 	})
@@ -417,7 +417,7 @@ func TestInboxWorker_ThreadSubscriptionUpserted_MonotonicMention_Integration(t *
 	}
 	mentionData, err := json.Marshal(mentionSub)
 	require.NoError(t, err)
-	mentionEvt, err := json.Marshal(model.OutboxEvent{
+	mentionEvt, err := json.Marshal(model.InboxEvent{
 		Type: "thread_subscription_upserted", SiteID: "site-a", DestSiteID: "site-b",
 		Payload: mentionData, Timestamp: now.UnixMilli(),
 	})
@@ -431,7 +431,7 @@ func TestInboxWorker_ThreadSubscriptionUpserted_MonotonicMention_Integration(t *
 	plainSub.UpdatedAt = later
 	plainData, err := json.Marshal(plainSub)
 	require.NoError(t, err)
-	plainEvt, err := json.Marshal(model.OutboxEvent{
+	plainEvt, err := json.Marshal(model.InboxEvent{
 		Type: "thread_subscription_upserted", SiteID: "site-a", DestSiteID: "site-b",
 		Payload: plainData, Timestamp: later.UnixMilli(),
 	})
@@ -455,7 +455,7 @@ func TestInboxWorker_ThreadSubscriptionUpserted_MonotonicMention_Integration(t *
 	thirdSub.UpdatedAt = evenLater
 	thirdData, err := json.Marshal(thirdSub)
 	require.NoError(t, err)
-	thirdEvt, err := json.Marshal(model.OutboxEvent{
+	thirdEvt, err := json.Marshal(model.InboxEvent{
 		Type: "thread_subscription_upserted", SiteID: "site-a", DestSiteID: "site-b",
 		Payload: thirdData, Timestamp: evenLater.UnixMilli(),
 	})
@@ -509,7 +509,7 @@ func TestHandleMemberAdded_Channel_PersistsRemoteSubs(t *testing.T) {
 		Timestamp:        time.Now().UTC().UnixMilli(),
 	})
 	require.NoError(t, err)
-	evt, err := json.Marshal(model.OutboxEvent{
+	evt, err := json.Marshal(model.InboxEvent{
 		Type:       "member_added",
 		SiteID:     "site-A",
 		DestSiteID: "site-B",
@@ -551,7 +551,7 @@ func TestHandleMemberAdded_DM_PersistsRemoteCounterpartSub(t *testing.T) {
 		Timestamp:        time.Now().UTC().UnixMilli(),
 	})
 	require.NoError(t, err)
-	evt, err := json.Marshal(model.OutboxEvent{
+	evt, err := json.Marshal(model.InboxEvent{
 		Type:       "member_added",
 		SiteID:     "site-A",
 		DestSiteID: "site-B",
@@ -608,13 +608,13 @@ func TestInboxWorker_FilterScoping_Integration(t *testing.T) {
 	cons, err := js.CreateOrUpdateConsumer(ctx, inboxCfg.Name, jetstream.ConsumerConfig{
 		Durable:        "inbox-worker",
 		AckPolicy:      jetstream.AckExplicitPolicy,
-		FilterSubjects: []string{subject.InboxAggregateAll(siteID)},
+		FilterSubjects: []string{subject.InboxExternalAll(siteID)},
 	})
 	require.NoError(t, err)
 
-	_, err = js.Publish(ctx, subject.InboxMemberAdded(siteID), []byte(`{"type":"member_added"}`))
+	_, err = js.Publish(ctx, subject.InboxInternal(siteID, model.InboxMemberAdded), []byte(`{"type":"member_added"}`))
 	require.NoError(t, err)
-	_, err = js.Publish(ctx, subject.InboxMemberAddedAggregate(siteID), []byte(`{"type":"member_added"}`))
+	_, err = js.Publish(ctx, subject.InboxExternal(siteID, model.InboxMemberAdded), []byte(`{"type":"member_added"}`))
 	require.NoError(t, err)
 
 	require.Eventually(t, func() bool {
@@ -628,7 +628,7 @@ func TestInboxWorker_FilterScoping_Integration(t *testing.T) {
 	info, err := cons.Info(ctx)
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, info.NumPending,
-		"FilterSubjects must scope inbox-worker to the aggregate.> lane only")
+		"FilterSubjects must scope inbox-worker to the external.> lane only")
 }
 
 func TestInboxStore_ApplyThreadRead_HappyPath(t *testing.T) {
@@ -918,16 +918,16 @@ func TestIntegration_HandleRoomRenamed(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Construct and marshal the outbox event.
-	renamePayload := model.RoomRenamedOutboxPayload{
+	// Construct and marshal the inbox event.
+	renamePayload := model.RoomRenamedInboxPayload{
 		RoomID:    "r1",
 		NewName:   "renamed",
 		Timestamp: time.Now().UTC().UnixMilli(),
 	}
 	payloadData, err := json.Marshal(renamePayload)
 	require.NoError(t, err)
-	evt := model.OutboxEvent{
-		Type:       string(model.OutboxRoomRenamed),
+	evt := model.InboxEvent{
+		Type:       string(model.InboxRoomRenamed),
 		SiteID:     "site-a",
 		DestSiteID: "site-b",
 		Payload:    payloadData,
@@ -967,8 +967,8 @@ func TestIntegration_HandleRoomVisibilityChanged(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Construct and marshal the outbox event: bob becomes new owner.
-	visPayload := model.RoomRestrictedOutboxPayload{
+	// Construct and marshal the inbox event: bob becomes new owner.
+	visPayload := model.RoomRestrictedInboxPayload{
 		RoomID:         "r1",
 		Restricted:     true,
 		ExternalAccess: false,
@@ -977,8 +977,8 @@ func TestIntegration_HandleRoomVisibilityChanged(t *testing.T) {
 	}
 	payloadData, err := json.Marshal(visPayload)
 	require.NoError(t, err)
-	evt := model.OutboxEvent{
-		Type:       string(model.OutboxRoomRestricted),
+	evt := model.InboxEvent{
+		Type:       string(model.InboxRoomRestricted),
 		SiteID:     "site-a",
 		DestSiteID: "site-b",
 		Payload:    payloadData,

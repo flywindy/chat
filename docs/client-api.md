@@ -68,7 +68,7 @@ This doc covers the public client-facing API surface only.
 
 **Out of scope (backend-internal — clients never see these):**
 
-- Backend-only JetStream subjects (MESSAGES, MESSAGES_CANONICAL, OUTBOX, INBOX, ROOMS streams).
+- Backend-only JetStream subjects (MESSAGES, MESSAGES_CANONICAL, INBOX, ROOMS streams).
 - Server-to-server subjects (`chat.server.request.…`).
 
 Room-encryption key events that clients consume are documented under the RPC that triggers them (Create Room, Add Members, Remove Member) and in [§5 Room Encryption](#5-room-encryption). Multi-site federation is transparent to clients: a cross-site action delivers the **same** events on the same `chat.user.{account}.…` / `chat.room.…` subjects as a same-site action, so this doc does not distinguish them.
@@ -1114,7 +1114,7 @@ The event uses a **dedicated flat struct** (`type: "room_renamed"`) — mirrorin
 
 **2. `chat.user.{requesterAccount}.response.{requestID}`** — an [`AsyncJobResult`](#asyncjobresult) to the requester when the rename finishes (requires `X-Request-ID`). `operation` is `"room.rename"`. `status` is `"ok"` on success or `"error"` if the async job fails.
 
-**3. Outbox events** — one event per remote site that has federated members. Delivered via the `OUTBOX_{siteID}` → `INBOX_{remoteSiteID}` pipeline; remote `inbox-worker` mirrors the rename.
+**3. Cross-site inbox events** — one event per remote site that has federated members. Published directly to `chat.inbox.{remoteSiteID}.external.room_renamed` (the destination's `INBOX_{remoteSiteID}` stream); remote `inbox-worker` mirrors the rename.
 
 ##### Triggered events — error path
 
@@ -1131,7 +1131,7 @@ When the synchronous reply is an error envelope, the request was rejected before
 > - `externalAccess` — whether the room is reachable from outside the company network (e.g. internet-side / off-VPN clients). This is a network-access gate, NOT a cross-site federation flag
 > - `ownerAccount` — required on the unrestricted-to-restricted transition
 >
-> room-service does the Mongo writes, fans out an `OutboxRoomRestricted` event per remote federated site, and replies `{"status":"ok","requestId":"…"}` once the work is committed. No `AsyncJobResult` is emitted — the reply *is* the result.
+> room-service does the Mongo writes, fans out an `InboxRoomRestricted` event per remote federated site (published to `chat.inbox.{remoteSiteID}.external.room_restricted`), and replies `{"status":"ok","requestId":"…"}` once the work is committed. No `AsyncJobResult` is emitted — the reply *is* the result.
 >
 > Clients learn about the change via a **`RoomRestrictedRoomEvent`** (`type: "room_restricted"`) on the same `chat.room.{roomID}.event` stream they already subscribe to for chat messages. Like `RoomRenamedRoomEvent`, it's a flat struct with no zero-valued envelope fields:
 >
@@ -1455,7 +1455,7 @@ See [Error envelope](#6-error-envelope-reference). Common errors:
 **Subject:** `chat.user.{account}.request.room.{roomID}.{siteID}.message.thread.read`
 **Reply subject:** auto-generated `_INBOX.>` (NATS request/reply)
 
-A **synchronous RPC** that clears a single thread's unread state for the caller. `room-service` validates room membership and thread-subscription existence, removes the threadId from the user's `Subscription.ThreadUnread`, recomputes the per-subscription `alert` flag, refreshes the `ThreadSubscription` (`lastSeenAt`, `updatedAt`, `hasMention=false`), and — for cross-site users — publishes a `thread_read` event to the user's home-site outbox so the destination `inbox-worker` can mirror both updates.
+A **synchronous RPC** that clears a single thread's unread state for the caller. `room-service` validates room membership and thread-subscription existence, removes the threadId from the user's `Subscription.ThreadUnread`, recomputes the per-subscription `alert` flag, refreshes the `ThreadSubscription` (`lastSeenAt`, `updatedAt`, `hasMention=false`), and — for cross-site users — publishes a `thread_read` event directly to the user's home-site INBOX so the destination `inbox-worker` can mirror both updates.
 
 ##### Request body
 
@@ -1490,14 +1490,14 @@ See [Error envelope](#6-error-envelope-reference). Common errors:
 
 - **Alert recomputation:** `alert = oldSub.alert && len(newThreadUnread) > 0`. A thread-read can only clear an alert, never set one. When the post-removal `threadUnread` is empty, `alert` becomes false. This computation runs atomically inside the MongoDB aggregation pipeline on the handler's site — not derived client-side.
 - **Concurrent local writes:** the room-`Subscription` update and the `ThreadSubscription` update run in parallel inside an `errgroup`. Both must succeed before the handler proceeds.
-- **Cross-site federation:** if the user's home site differs from the handler's site, a `thread_read` event is published to `outbox.{handlerSite}.to.{userSite}.thread_read` with payload `{account, roomId, threadRoomId, parentMessageId, newThreadUnread, alert, lastSeenAt, timestamp}` (timestamps as `int64` UnixMilli). The destination `inbox-worker` applies the supplied `newThreadUnread`+`alert` to the local Subscription cache and applies `lastSeenAt`+`updatedAt`+`hasMention=false` to the local ThreadSubscription with an `$lt` order-safety guard so out-of-order delivery cannot regress the thread's read position.
+- **Cross-site federation:** if the user's home site differs from the handler's site, a `thread_read` event is published directly to `chat.inbox.{userSite}.external.thread_read` with payload `{account, roomId, threadRoomId, parentMessageId, newThreadUnread, alert, lastSeenAt, timestamp}` (timestamps as `int64` UnixMilli). The destination `inbox-worker` applies the supplied `newThreadUnread`+`alert` to the local Subscription cache and applies `lastSeenAt`+`updatedAt`+`hasMention=false` to the local ThreadSubscription with an `$lt` order-safety guard so out-of-order delivery cannot regress the thread's read position.
 - **Defensive `roomId` filter:** the thread-subscription lookup additionally enforces that the supplied `threadId` belongs to the room named in the subject. Mismatches return `thread subscription not found` (rather than silently clearing an unrelated thread).
 - **Thread-room read-floor recompute:** after both writes succeed, `room-service` recomputes `thread_rooms.minUserLastSeenAt` = `MIN(lastSeenAt)` across all `thread_subscriptions` for the thread room. The floor is set only when every subscriber has a usable `lastSeenAt`; otherwise it is cleared. The recompute is best-effort — a failure is logged but does not fail the RPC. Live fan-out of the floor advance to clients is deferred to a follow-up; the stored value is available immediately via [Get Thread Messages](#get-thread-messages).
 - **No system message:** thread reads are silent; only the requester receives the `accepted` reply.
 
 ##### Triggered events — success path
 
-`None — reply only.` (Cross-site users may observe a delayed cache update on their home site via the outbox/inbox flow above; this is treated as cache convergence rather than a client-visible event for this RPC.)
+`None — reply only.` (Cross-site users may observe a delayed cache update on their home site via the cross-site inbox flow above; this is treated as cache convergence rather than a client-visible event for this RPC.)
 
 ##### Triggered events — error path
 
@@ -1601,7 +1601,7 @@ See [Error envelope](#6-error-envelope-reference). Common errors:
 
 ##### Cross-site behaviour
 
-When the requester's home site differs from the room's site, `room-service` additionally publishes a `subscription_favorite_toggled` OutboxEvent to `outbox.{roomSite}.to.{userSite}.subscription_favorite_toggled`. `inbox-worker` on the user's home site mirrors the flip onto the local `Subscription` document. Missing-subscription on the home site (e.g., a federation race) is a silent no-op — no NACK, no redelivery loop.
+When the requester's home site differs from the room's site, `room-service` additionally publishes a `subscription_favorite_toggled` InboxEvent directly to `chat.inbox.{userSite}.external.subscription_favorite_toggled`. `inbox-worker` on the user's home site mirrors the flip onto the local `Subscription` document. Missing-subscription on the home site (e.g., a federation race) is a silent no-op — no NACK, no redelivery loop.
 
 ---
 

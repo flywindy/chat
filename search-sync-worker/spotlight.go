@@ -71,7 +71,7 @@ func (c *spotlightCollection) BuildAction(data []byte) ([]searchengine.BulkActio
 		docID := fmt.Sprintf("%s_%s", account, payload.RoomID)
 
 		switch evt.Type {
-		case model.OutboxMemberAdded:
+		case model.InboxMemberAdded:
 			doc := newSpotlightSearchIndex(account, payload)
 			body, err := json.Marshal(doc)
 			if err != nil {
@@ -84,7 +84,7 @@ func (c *spotlightCollection) BuildAction(data []byte) ([]searchengine.BulkActio
 				Version: evt.Timestamp,
 				Doc:     body,
 			})
-		case model.OutboxMemberRemoved:
+		case model.InboxMemberRemoved:
 			actions = append(actions, searchengine.BulkAction{
 				Action:  searchengine.ActionDelete,
 				Index:   c.indexName,

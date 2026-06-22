@@ -140,7 +140,7 @@ func main() {
 	}
 	handler := NewHandler(store, us, threadStore, cfg.SiteID, func(ctx context.Context, subj string, data []byte, msgID string) error {
 		// NewMsg re-stamps X-Request-ID and X-Debug from ctx so correlation and
-		// verbose-tracing intent ride onto downstream badge/outbox events.
+		// verbose-tracing intent ride onto downstream badge/inbox events.
 		msg := natsutil.NewMsg(ctx, subj, data)
 		if msgID == "" {
 			if err := nc.PublishMsg(ctx, msg); err != nil {

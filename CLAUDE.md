@@ -20,9 +20,9 @@
 | Testing | `go.uber.org/mock` (mockgen), `stretchr/testify` (assertions), `testcontainers-go` (integration) |
 | Containers | Docker multi-stage builds, Docker Compose |
 
-**Event flow:** User publishes message to MESSAGES stream → `message-gatekeeper` validates and publishes to MESSAGES_CANONICAL → `message-worker` persists to Cassandra, `broadcast-worker` delivers to room members, `notification-worker` sends notifications → cross-site events flow via OUTBOX/INBOX streams.
+**Event flow:** User publishes message to MESSAGES stream → `message-gatekeeper` validates and publishes to MESSAGES_CANONICAL → `message-worker` persists to Cassandra, `broadcast-worker` delivers to room members, `notification-worker` sends notifications → cross-site events are published directly into remote sites' INBOX streams.
 
-**Multi-site federation:** Each site runs independently with its own NATS, MongoDB, and Cassandra. Cross-site events use the Outbox/Inbox pattern — local events go to the OUTBOX stream, remote sites source from it into their INBOX stream. User subscriptions and room metadata are scoped by `siteID`.
+**Multi-site federation:** Each site runs independently with its own NATS, MongoDB, and Cassandra. Cross-site events are published directly into the destination site's INBOX stream — a service at the origin site issues a JetStream publish to `chat.inbox.{destSiteID}.external.{eventType}`, routed across the NATS supercluster (no OUTBOX stream, no sourcing/SubjectTransform). User subscriptions and room metadata are scoped by `siteID`.
 
 **Repo structure:** Monorepo with single `go.mod` at root. Services are flat `package main` directories at the repo root — no `cmd/` or `internal/`. Shared code lives in `pkg/`. Each service has a `deploy/` subdirectory with Dockerfile, docker-compose.yml, and azure-pipelines.yml. Claude discovers services by exploring the repo.
 
@@ -249,7 +249,7 @@ All commands are wrapped in the root Makefile. Always use `make` targets — nev
 - **Tier 3 — specialist, you'll know when.** Don't use these in ordinary request/reply handlers:
   - `errcode.Permanent` / `IsPermanent` — JetStream **workers only**, to Ack-poison vs Nak-retry.
   - `errcode.Parse` — **cross-site consumers** decoding a remote envelope (e.g. `memberlist_client.go`).
-  - `errnats.Marshal` / `MarshalQuiet` / `ReplyQuiet` — outbox/already-logged paths; the plain `Reply` already classifies-and-logs once, so `Quiet` exists only to avoid a double-log.
+  - `errnats.Marshal` / `MarshalQuiet` / `ReplyQuiet` — already-logged paths; the plain `Reply` already classifies-and-logs once, so `Quiet` exists only to avoid a double-log.
   - `errcode.Classify`, `WithLogger`, `WithLogValues` — boundary/observability plumbing; handlers get request-id logging for free from the router middleware.
 - **Never log AND return.** `Reply`/`Write` run `Classify`, which logs once at a category-aware level. A `slog.Error(...)` before returning the same error double-logs.
 - **`WithCause` wraps an infra error, never another `*errcode.Error`** (one-errcode-per-chain; it panics otherwise, and semgrep guards it). Never put a raw token/body/subject in a cause or message — it reaches the server log.
@@ -265,17 +265,17 @@ All commands are wrapped in the root Makefile. Always use `make` targets — nev
 - User-scoped: `chat.user.{account}.…`
 - Room-scoped: `chat.room.{roomID}.…`
 - MESSAGES_CANONICAL: `chat.msg.canonical.{siteID}.created` (`.edited`, `.deleted` for future)
-- Outbox: `outbox.{siteID}.to.{destSiteID}.{eventType}`
+- Inbox (cross-site, remote-origin): `chat.inbox.{destSiteID}.external.{eventType}` — published directly into the destination site's INBOX
+- Inbox (same-site search feed): `chat.inbox.{siteID}.internal.{eventType}`
 - Wildcards: `*` for single-token, `>` for multi-token tail — define patterns in `pkg/subject`
 
 ### JetStream Streams
 - `MESSAGES_{siteID}` — User message submissions
 - `MESSAGES_CANONICAL_{siteID}` — Validated messages (single source of truth for downstream workers)
 - `ROOMS_{siteID}` — Member invite requests
-- `OUTBOX_{siteID}` — Cross-site outbound events
-- `INBOX_{siteID}` — Cross-site inbound events (sourced from remote OUTBOX)
+- `INBOX_{siteID}` — Cross-site federation events, published directly by remote sites onto the `external.>` lane (no OUTBOX, no sourcing); same-site services also publish a search-only feed onto the `internal.>` lane
 - **Stream bootstrap is opt-in.** Services that consume from or publish to a stream MUST NOT create it in production — streams are owned by ops/IaC. Each such service's `config` includes `Bootstrap bootstrapConfig` (env prefix `BOOTSTRAP_`) with a single `Enabled` field tagged `env:"STREAMS" envDefault:"false"`. The service's `bootstrap.go` defines a `bootstrapStreams(ctx, js, siteID, enabled) error` helper that no-ops when `Enabled=false`. Local `deploy/docker-compose.yml` sets `BOOTSTRAP_STREAMS=true` so any service can stand up against a fresh NATS in dev. New services that interact with JetStream MUST follow this convention.
-- **Stream bootstrap ownership.** When a service does bootstrap a stream in dev, the helper sets ONLY the stream's schema — `Name + Subjects` from `pkg/stream.<Stream>(siteID)`. Federation config (`Sources` + `SubjectTransforms` for cross-site sourcing) is owned by ops/IaC and MUST NOT appear in any service's `bootstrap.go`. INBOX has a single owning service (`inbox-worker`); other services that consume from INBOX (e.g., `search-sync-worker`) skip it in their bootstrap loop and rely on `inbox-worker` to create the stream.
+- **Stream bootstrap ownership.** When a service does bootstrap a stream in dev, the helper sets ONLY the stream's schema — `Name + Subjects` from `pkg/stream.<Stream>(siteID)`. Cross-site federation is direct-publish: a service at the origin site JetStream-publishes to the destination's `chat.inbox.{destSiteID}.external.>` lane, routed by the NATS supercluster/gateway topology (an ops/IaC concern that MUST NOT appear in any service's `bootstrap.go`). INBOX has a single owning service (`inbox-worker`); other services that consume from or publish to a remote INBOX (e.g., `search-sync-worker`, and the cross-site publishers room-worker/room-service/message-worker/user-service) rely on `inbox-worker` to create the local stream and on ops/IaC for the routing that makes a remote publish land.
 
 ### MongoDB
 - Never use ORMs (no GORM, no ent) — use native drivers directly

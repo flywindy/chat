@@ -17,7 +17,7 @@ const (
 	EventThreadReplyAdded EventType = "thread_reply_added"
 )
 
-// UserStatusUpdated is the cross-site outbox event user-service publishes on
+// UserStatusUpdated is the cross-site inbox event user-service publishes on
 // status.set; the remote inbox-worker applies it. Timestamp is the event-level
 // time set at publish via time.Now().UTC().UnixMilli().
 type UserStatusUpdated struct {
@@ -98,7 +98,7 @@ type UpdateRoleRequest struct {
 	Timestamp int64 `json:"timestamp" bson:"timestamp"`
 }
 
-// InboxMemberEvent is the payload of an OutboxEvent{Type: "member_added" |
+// InboxMemberEvent is the payload of an InboxEvent{Type: "member_added" |
 // "member_removed"} carried on the INBOX stream for local consumers like
 // search-sync-worker. One event represents a bulk add/remove of N Accounts
 // against a single room; downstream consumers fan out per-account.
@@ -133,24 +133,24 @@ type NotificationEvent struct {
 	Timestamp     int64          `json:"timestamp"               bson:"timestamp"`
 }
 
-// OutboxEventType is the type tag on an OutboxEvent used to route it to the
+// InboxEventType is the type tag on an InboxEvent used to route it to the
 // correct handler on the destination site.
-type OutboxEventType = string
+type InboxEventType = string
 
 const (
-	OutboxMemberAdded                 OutboxEventType = "member_added"
-	OutboxMemberRemoved               OutboxEventType = "member_removed"
-	OutboxSubscriptionRead            OutboxEventType = "subscription_read"
-	OutboxSubscriptionMuteToggled     OutboxEventType = "subscription_mute_toggled"
-	OutboxSubscriptionFavoriteToggled OutboxEventType = "subscription_favorite_toggled"
-	OutboxThreadSubscriptionUpserted  OutboxEventType = "thread_subscription_upserted"
-	OutboxThreadRead                  OutboxEventType = "thread_read"
-	OutboxRoomRenamed                 OutboxEventType = "room_renamed"
-	OutboxRoomRestricted              OutboxEventType = "room_restricted"
-	OutboxUserStatusUpdated           OutboxEventType = "user_status_updated"
+	InboxMemberAdded                 InboxEventType = "member_added"
+	InboxMemberRemoved               InboxEventType = "member_removed"
+	InboxSubscriptionRead            InboxEventType = "subscription_read"
+	InboxSubscriptionMuteToggled     InboxEventType = "subscription_mute_toggled"
+	InboxSubscriptionFavoriteToggled InboxEventType = "subscription_favorite_toggled"
+	InboxThreadSubscriptionUpserted  InboxEventType = "thread_subscription_upserted"
+	InboxThreadRead                  InboxEventType = "thread_read"
+	InboxRoomRenamed                 InboxEventType = "room_renamed"
+	InboxRoomRestricted              InboxEventType = "room_restricted"
+	InboxUserStatusUpdated           InboxEventType = "user_status_updated"
 )
 
-// SubscriptionReadEvent is the OutboxEvent.Payload for type
+// SubscriptionReadEvent is the InboxEvent.Payload for type
 // "subscription_read". Sent from a room's home site to the user's home site
 // when a user marks the room as read; the destination updates its local
 // subscription cache. LastSeenAt is UnixMilli (UTC) for cross-language wire
@@ -163,7 +163,7 @@ type SubscriptionReadEvent struct {
 	Timestamp  int64  `json:"timestamp"  bson:"timestamp"`
 }
 
-// ThreadReadEvent is the OutboxEvent.Payload for type "thread_read". The source site
+// ThreadReadEvent is the InboxEvent.Payload for type "thread_read". The source site
 // ships the authoritative NewThreadUnread+Alert; the destination applies them as-is.
 type ThreadReadEvent struct {
 	Account         string   `json:"account"`
@@ -176,12 +176,12 @@ type ThreadReadEvent struct {
 	Timestamp       int64    `json:"timestamp"`
 }
 
-type OutboxEvent struct {
-	Type       OutboxEventType `json:"type"`
-	SiteID     string          `json:"siteId"`
-	DestSiteID string          `json:"destSiteId"`
-	Payload    []byte          `json:"payload"` // JSON-encoded inner event
-	Timestamp  int64           `json:"timestamp" bson:"timestamp"`
+type InboxEvent struct {
+	Type       InboxEventType `json:"type"`
+	SiteID     string         `json:"siteId"`
+	DestSiteID string         `json:"destSiteId"`
+	Payload    []byte         `json:"payload"` // JSON-encoded inner event
+	Timestamp  int64          `json:"timestamp" bson:"timestamp"`
 }
 
 type MemberAddEvent struct {
@@ -459,7 +459,7 @@ type MuteToggleResponse struct {
 	Muted  bool   `json:"muted"`
 }
 
-// SubscriptionMuteToggledEvent is the OutboxEvent.Payload for type "subscription_mute_toggled".
+// SubscriptionMuteToggledEvent is the InboxEvent.Payload for type "subscription_mute_toggled".
 type SubscriptionMuteToggledEvent struct {
 	Account   string `json:"account"              bson:"account"`
 	RoomID    string `json:"roomId"               bson:"roomId"`
@@ -473,7 +473,7 @@ type FavoriteToggleResponse struct {
 	Favorite bool   `json:"favorite"`
 }
 
-// SubscriptionFavoriteToggledEvent is the OutboxEvent.Payload for type "subscription_favorite_toggled".
+// SubscriptionFavoriteToggledEvent is the InboxEvent.Payload for type "subscription_favorite_toggled".
 type SubscriptionFavoriteToggledEvent struct {
 	Account   string `json:"account"              bson:"account"`
 	RoomID    string `json:"roomId"               bson:"roomId"`
@@ -555,17 +555,17 @@ const CreateRoomReplyAccepted = "accepted"
 // the existing room. Clients treat it as success and open that room.
 const CreateRoomStatusExists = "exists"
 
-// RoomRenamedOutboxPayload is wrapped in OutboxEvent.Payload for OutboxRoomRenamed.
-type RoomRenamedOutboxPayload struct {
+// RoomRenamedInboxPayload is wrapped in InboxEvent.Payload for InboxRoomRenamed.
+type RoomRenamedInboxPayload struct {
 	RoomID    string `json:"roomId"    bson:"roomId"`
 	NewName   string `json:"newName"   bson:"newName"`
 	Timestamp int64  `json:"timestamp" bson:"timestamp"`
 }
 
-// RoomRestrictedOutboxPayload is wrapped in OutboxEvent.Payload for
-// OutboxRoomRestricted. When OwnerAccount is non-empty AND Restricted is
+// RoomRestrictedInboxPayload is wrapped in InboxEvent.Payload for
+// InboxRoomRestricted. When OwnerAccount is non-empty AND Restricted is
 // true, the destination $cond promotes that account to sole owner.
-type RoomRestrictedOutboxPayload struct {
+type RoomRestrictedInboxPayload struct {
 	RoomID         string `json:"roomId"                 bson:"roomId"`
 	Restricted     bool   `json:"restricted"             bson:"restricted"`
 	ExternalAccess bool   `json:"externalAccess"         bson:"externalAccess"`

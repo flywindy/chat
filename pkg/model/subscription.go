@@ -41,7 +41,7 @@ type Subscription struct {
 	Muted              bool             `json:"muted" bson:"muted"`
 	Favorite           bool             `json:"favorite" bson:"favorite"`
 	// Denormalized from Room.{Restricted,ExternalAccess}; the only place remote sites carry restricted state
-	// (cross-site outbox mirrors subscriptions, not Room docs). Treat missing as false.
+	// (cross-site inbox mirrors subscriptions, not Room docs). Treat missing as false.
 	Restricted     bool `json:"restricted,omitempty"     bson:"restricted,omitempty"`
 	ExternalAccess bool `json:"externalAccess,omitempty" bson:"externalAccess,omitempty"`
 

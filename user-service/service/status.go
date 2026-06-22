@@ -81,22 +81,36 @@ func (s *UserService) SetStatus(c *natsrouter.Context, req models.StatusSetReque
 	}, nil
 }
 
-// publishStatus broadcasts via core NATS to every configured site except self; errors are logged, not returned.
+// publishStatus broadcasts a user_status_updated InboxEvent via JetStream to
+// every configured site except self, publishing directly into each destination
+// site's external INBOX lane; errors are logged, not returned.
 func (s *UserService) publishStatus(c *natsrouter.Context, account, text string, isShow *bool) {
-	evt := model.UserStatusUpdated{
+	now := time.Now().UTC().UnixMilli()
+	payload, _ := json.Marshal(model.UserStatusUpdated{
 		Account:      account,
 		StatusText:   text,
 		StatusIsShow: isShow,
-		Timestamp:    time.Now().UTC().UnixMilli(),
-	}
-	data, _ := json.Marshal(evt) // UserStatusUpdated is all primitives — Marshal cannot fail
+		Timestamp:    now,
+	}) // UserStatusUpdated is all primitives — Marshal cannot fail
 	for _, dest := range s.allSiteIDs {
 		if dest == "" || dest == s.siteID {
 			continue
 		}
-		if err := s.pub.Publish(c, subject.Outbox(s.siteID, dest, model.OutboxUserStatusUpdated), data); err != nil {
+		evt := model.InboxEvent{
+			Type:       model.InboxUserStatusUpdated,
+			SiteID:     s.siteID,
+			DestSiteID: dest,
+			Payload:    payload,
+			Timestamp:  now,
+		}
+		data, err := json.Marshal(evt)
+		if err != nil {
+			slog.WarnContext(c, "marshal status inbox event", "error", err, "site", s.siteID, "dest", dest, "account", account, "request_id", natsutil.RequestIDFromContext(c))
+			continue
+		}
+		if err := s.pub.Publish(c, subject.InboxExternal(dest, model.InboxUserStatusUpdated), data); err != nil {
 			// Non-fatal: status is last-write-wins, the next SetStatus re-broadcasts.
-			slog.WarnContext(c, "publish status outbox", "error", err, "site", s.siteID, "dest", dest, "account", account, "request_id", natsutil.RequestIDFromContext(c))
+			slog.WarnContext(c, "publish status inbox event", "error", err, "site", s.siteID, "dest", dest, "account", account, "request_id", natsutil.RequestIDFromContext(c))
 		}
 	}
 }

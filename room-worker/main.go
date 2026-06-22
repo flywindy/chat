@@ -153,7 +153,7 @@ func main() {
 			}
 			return nil
 		}
-		// JetStream-backed (MESSAGES_CANONICAL, OUTBOX) — block on PubAck; server honors Nats-Msg-Id for dedup.
+		// JetStream-backed (MESSAGES_CANONICAL, INBOX) — block on PubAck; server honors Nats-Msg-Id for dedup.
 		if _, err := js.PublishMsg(ctx, msg, jetstream.WithMsgID(msgID)); err != nil {
 			return fmt.Errorf("publish to %q: %w", subj, err)
 		}
@@ -278,7 +278,7 @@ func runJobWithRecovery(msgCtx context.Context, handler jobProcessor, msg jetstr
 	// RequestID middleware mints one when the client omits it), so by the time a
 	// message lands on the ROOMS stream the header should always be a valid UUID.
 	// If we end up minting here, room-service failed to stamp one — an anomaly
-	// worth an Error log, because downstream OutboxDedupID / message-ID generation
+	// worth an Error log, because downstream InboxDedupID / message-ID generation
 	// derives dedup keys from the request ID. Note: clients that retry without a
 	// stable X-Request-ID still defeat dedup upstream (room-service mints a fresh
 	// ID each attempt); the boundary no longer rejects them. See

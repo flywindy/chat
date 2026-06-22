@@ -68,10 +68,10 @@ func TestSetStatus_TooLong(t *testing.T) {
 	requireCode(t, err, errcode.CodeBadRequest)
 }
 
-func TestSetStatus_OutboxExcludesSelf(t *testing.T) {
+func TestSetStatus_InboxExcludesSelf(t *testing.T) {
 	svc, _, users, _, _, pub := newSvc(t)
 	users.EXPECT().SetUserStatus(gomock.Any(), "alice", "busy", gomock.Any()).Return(&model.User{Account: "alice", StatusText: "busy"}, nil)
-	pub.EXPECT().Publish(gomock.Any(), subject.Outbox("site-a", "site-b", model.OutboxUserStatusUpdated), gomock.Any()).Return(nil)
+	pub.EXPECT().Publish(gomock.Any(), subject.InboxExternal("site-b", model.InboxUserStatusUpdated), gomock.Any()).Return(nil)
 	_, err := svc.SetStatus(ctx("alice", "site-a"), models.StatusSetRequest{Text: "busy"})
 	require.NoError(t, err)
 }
@@ -93,7 +93,7 @@ func TestSetStatus_StoreError(t *testing.T) {
 func TestSetStatus_PublishError_StillSucceeds(t *testing.T) {
 	svc, _, users, _, _, pub := newSvc(t)
 	users.EXPECT().SetUserStatus(gomock.Any(), "alice", "here", gomock.Any()).Return(&model.User{Account: "alice", StatusText: "here"}, nil)
-	pub.EXPECT().Publish(gomock.Any(), subject.Outbox("site-a", "site-b", model.OutboxUserStatusUpdated), gomock.Any()).
+	pub.EXPECT().Publish(gomock.Any(), subject.InboxExternal("site-b", model.InboxUserStatusUpdated), gomock.Any()).
 		Return(errors.New("no responders"))
 	_, err := svc.SetStatus(ctx("alice", "site-a"), models.StatusSetRequest{Text: "here"})
 	require.NoError(t, err)
@@ -121,7 +121,7 @@ func TestSetStatus_NilIsShow_TextOnly(t *testing.T) {
 	// (leave-flag-untouched semantics) and the write still publishes cross-site.
 	svc, _, users, _, _, pub := newSvc(t)
 	users.EXPECT().SetUserStatus(gomock.Any(), "alice", "brb", gomock.Nil()).Return(&model.User{Account: "alice", StatusText: "brb"}, nil)
-	pub.EXPECT().Publish(gomock.Any(), subject.Outbox("site-a", "site-b", model.OutboxUserStatusUpdated), gomock.Any()).Return(nil)
+	pub.EXPECT().Publish(gomock.Any(), subject.InboxExternal("site-b", model.InboxUserStatusUpdated), gomock.Any()).Return(nil)
 	resp, err := svc.SetStatus(ctx("alice", "site-a"), models.StatusSetRequest{Text: "brb"})
 	require.NoError(t, err)
 	assert.Equal(t, "brb", resp.StatusText)
@@ -131,7 +131,7 @@ func TestSetStatus_AtLimit(t *testing.T) {
 	svc, _, users, _, _, pub := newSvc(t)
 	text512 := string(make([]byte, 512))
 	users.EXPECT().SetUserStatus(gomock.Any(), "alice", text512, gomock.Any()).Return(&model.User{Account: "alice", StatusText: text512}, nil)
-	pub.EXPECT().Publish(gomock.Any(), subject.Outbox("site-a", "site-b", model.OutboxUserStatusUpdated), gomock.Any()).Return(nil)
+	pub.EXPECT().Publish(gomock.Any(), subject.InboxExternal("site-b", model.InboxUserStatusUpdated), gomock.Any()).Return(nil)
 	_, err := svc.SetStatus(ctx("alice", "site-a"), models.StatusSetRequest{Text: text512})
 	require.NoError(t, err)
 }
@@ -146,6 +146,6 @@ func TestPublishStatus_SkipsEmptyDest(t *testing.T) {
 	cfg := &config.Config{SiteID: "site-a", AllSiteIDs: []string{"site-a", "", "site-b"}, MaxSubscriptionLimit: 1000}
 	svc := New(subs, users, apps, rooms, pub, cfg)
 	// Only "site-b" must receive a publish; self "site-a" and the blank "" are skipped.
-	pub.EXPECT().Publish(gomock.Any(), subject.Outbox("site-a", "site-b", model.OutboxUserStatusUpdated), gomock.Any()).Return(nil)
+	pub.EXPECT().Publish(gomock.Any(), subject.InboxExternal("site-b", model.InboxUserStatusUpdated), gomock.Any()).Return(nil)
 	svc.publishStatus(ctx("alice", "site-a"), "alice", "busy", nil)
 }
