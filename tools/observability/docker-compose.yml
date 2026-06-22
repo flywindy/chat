@@ -36,11 +36,32 @@ services:
       retries: 10
       start_period: 5s
 
+  # Scrapes the local NATS server's monitoring endpoint (:8222) and re-exposes
+  # JetStream stream/consumer state as Prometheus metrics on :7777. `-jsz=all`
+  # turns on the consumer-level detail (num_pending, num_ack_pending,
+  # num_redelivered) the JetStream Backlog dashboard needs. Targets the deps
+  # NATS container by name on the shared chat-local network; if NATS is down the
+  # /metrics endpoint still serves (with fewer series), so the healthcheck holds.
+  nats-exporter:
+    image: natsio/prometheus-nats-exporter:0.16.0
+    container_name: chat-local-nats-exporter
+    command: ["-port=7777", "-jsz=all", "http://chat-local-nats:8222"]
+    ports:
+      - "127.0.0.1:7777:7777"   # localhost-only; raw exporter metrics for debugging
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:7777/metrics"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
   prometheus:
     image: prom/prometheus:v2.55.1
     container_name: chat-local-prometheus
     depends_on:
       cadvisor:
+        condition: service_healthy
+      nats-exporter:
         condition: service_healthy
     command:
       - --config.file=/etc/prometheus/prometheus.yml

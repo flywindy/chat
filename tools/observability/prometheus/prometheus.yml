@@ -8,3 +8,8 @@ scrape_configs:
   - job_name: cadvisor
     static_configs:
       - targets: ['cadvisor:8080']
+
+  # JetStream stream/consumer metrics from prometheus-nats-exporter (jsz).
+  - job_name: nats-jetstream
+    static_configs:
+      - targets: ['nats-exporter:7777']

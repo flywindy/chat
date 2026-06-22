@@ -1,9 +1,10 @@
-# Local Observability — Container CPU & Memory
+# Local Observability — Container Metrics & JetStream Backlog
 
 Run cAdvisor + Prometheus + Grafana locally to observe container-level CPU,
 memory, and network trends for every service and dependency in the local dev
-environment. Useful when load-testing the messaging pipeline or hunting a hot
-service.
+environment, plus a `prometheus-nats-exporter` that surfaces JetStream
+stream/consumer state. Useful when load-testing the messaging pipeline, hunting
+a hot service, or checking how many messages are pending on a stream/consumer.
 
 ## Prerequisites
 
@@ -20,8 +21,17 @@ make obs-up
 
 Then open Grafana: **http://localhost:3001**
 
-The dashboard **"Containers - CPU & Memory"** is pre-loaded and refreshes every
-5 seconds. Anonymous Admin is enabled, so no login is required.
+Two dashboards are pre-loaded and refresh every 5 seconds (Anonymous Admin is
+enabled, so no login is required):
+
+- **Containers - CPU & Memory** — per-container CPU/memory from cAdvisor.
+- **JetStream - Pending & Backlog** — per-consumer pending (`num_pending`),
+  in-flight/unacked (`num_ack_pending`), and redelivered (`num_redelivered`),
+  broken out by stream + durable, plus total messages per stream. This is where
+  you answer "how many messages are pending?".
+
+The JetStream dashboard only has data once a NATS server is running
+(`make deps-up`) and streams/consumers exist (`make up` and send some traffic).
 
 ## Stop
 
@@ -31,16 +41,17 @@ make obs-down
 
 Storage is ephemeral — Prometheus metrics are lost on teardown. UI-made
 dashboard edits are blocked by the provisioning config (`allowUiUpdates: false`);
-edit `grafana/dashboards/containers-cpu.json` directly to change a dashboard,
-then run `make obs-down && make obs-up` to reload.
+edit the JSON under `grafana/dashboards/` directly to change a dashboard, then
+run `make obs-down && make obs-up` to reload.
 
 ## Ports
 
-| Port  | Service     | Notes                                                       |
-|-------|-------------|-------------------------------------------------------------|
-| 3001  | Grafana UI  | `:3001` avoids collision with the frontend dev server :3000 |
-| 9091  | Prometheus  | `:9091` avoids collision with `search-service`'s :9090      |
-| 8088  | cAdvisor    | `:8088` avoids collision with `auth-service`'s :8080        |
+| Port  | Service       | Notes                                                       |
+|-------|---------------|-------------------------------------------------------------|
+| 3001  | Grafana UI    | `:3001` avoids collision with the frontend dev server :3000 |
+| 9091  | Prometheus    | `:9091` avoids collision with `search-service`'s :9090      |
+| 8088  | cAdvisor      | `:8088` avoids collision with `auth-service`'s :8080        |
+| 7777  | NATS exporter | Raw `prometheus-nats-exporter` `/metrics` for debugging     |
 
 ## What's instrumented
 
@@ -57,6 +68,14 @@ from the cgroup path via `label_replace`, which works on every cAdvisor build.
 Cross-reference with `docker ps --format 'table {{.ID}}\t{{.Names}}'` to map
 ID → name.
 
+JetStream stream/consumer state is scraped from `prometheus-nats-exporter`,
+which polls the deps NATS container's monitoring endpoint
+(`http://chat-local-nats:8222`) over the shared `chat-local` network. The
+exporter runs with `-jsz=all`, so Prometheus gets per-consumer
+`jetstream_consumer_num_pending`, `..._num_ack_pending`, `..._num_redelivered`,
+and per-stream `jetstream_stream_total_messages` (labelled by `stream_name` and
+`consumer_name`). No per-service code changes are required.
+
 Application-level Go metrics (goroutines, GC, heap) are out of scope here.
 When a service exposes `/metrics`, add a scrape job to `prometheus/prometheus.yml`.
 
@@ -64,11 +83,12 @@ When a service exposes `/metrics`, add a scrape job to `prometheus/prometheus.ym
 
 | File | Purpose |
 |------|---------|
-| `docker-compose.yml` | The three-container stack definition. |
+| `docker-compose.yml` | The four-container stack definition (cAdvisor, nats-exporter, Prometheus, Grafana). |
 | `prometheus/prometheus.yml` | Prometheus scrape config. |
 | `grafana/provisioning/datasources/prometheus.yml` | Auto-wires the Prometheus datasource. |
 | `grafana/provisioning/dashboards/dashboards.yml` | Tells Grafana to load every JSON file in `./dashboards`. |
-| `grafana/dashboards/containers-cpu.json` | The pre-built dashboard. |
+| `grafana/dashboards/containers-cpu.json` | Container CPU/memory dashboard. |
+| `grafana/dashboards/jetstream-pending.json` | JetStream pending/backlog dashboard. |
 
 ## Scope
 
