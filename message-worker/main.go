@@ -46,6 +46,7 @@ type config struct {
 	UserCacheSize      int                     `env:"USER_CACHE_SIZE"      envDefault:"10000"`
 	UserCacheTTL       time.Duration           `env:"USER_CACHE_TTL"       envDefault:"5m"`
 	HealthAddr         string                  `env:"HEALTH_ADDR"          envDefault:":8081"`
+	PProfEnabled       bool                    `env:"PPROF_ENABLED" envDefault:"false"`
 	Consumer           stream.ConsumerSettings `envPrefix:"CONSUMER_"`
 	Bootstrap          bootstrapConfig         `envPrefix:"BOOTSTRAP_"`
 	Atrest             atrest.Config
@@ -201,7 +202,7 @@ func main() {
 		}
 	}()
 
-	healthStop, err := health.Serve(cfg.HealthAddr, 5*time.Second,
+	healthStop, err := health.ServeWithPprof(cfg.HealthAddr, 5*time.Second, cfg.PProfEnabled,
 		natsutil.HealthCheck(nc),
 	)
 	if err != nil {

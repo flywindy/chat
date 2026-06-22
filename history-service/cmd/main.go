@@ -186,7 +186,7 @@ func main() {
 
 	svc.RegisterHandlers(router, cfg.SiteID)
 
-	healthStop, err := health.Serve(cfg.HealthAddr, 5*time.Second,
+	healthStop, err := health.ServeWithPprof(cfg.HealthAddr, 5*time.Second, cfg.PProfEnabled,
 		natsutil.HealthCheck(nc),
 	)
 	if err != nil {

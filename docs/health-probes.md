@@ -49,3 +49,24 @@ addition, since that is the failure neither current probe catches.)
 
 `HEALTH_ADDR` is a standard `caarlos0/env` var; override per deployment if
 `:8081` clashes with another container port.
+
+## Optional pprof profiling surface
+
+The nine message-pipeline NATS services (`broadcast-worker`, `history-service`,
+`inbox-worker`, `message-gatekeeper`, `message-worker`, `notification-worker`,
+`room-service`, `room-worker`, `search-sync-worker`) can mount the standard
+`net/http/pprof` handlers (`/debug/pprof/*`) on the same health listener, gated
+by `PPROF_ENABLED` (default `false`). It is wired via
+`health.ServeWithPprof(addr, timeout, cfg.PProfEnabled, checks...)` — no extra
+port and off unless explicitly enabled, so the operator-exposed health port
+never leaks profiling by default.
+
+This is a local-dev / load-test aid: bring the stack up with
+`PPROF_ENABLED=true make up` and snapshot every service with `make profile`
+(see `tools/profilecapture/`). Leave it `false` in production.
+
+When pprof is enabled the listener's write timeout is disabled, because CPU and
+trace profiles stream the response for a client-chosen duration
+(`/debug/pprof/profile?seconds=30`) that exceeds the hardened 10s write timeout —
+otherwise the profile is truncated mid-capture. The default (pprof off) path
+keeps the hardened timeouts.

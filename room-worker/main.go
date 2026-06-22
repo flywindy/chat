@@ -42,6 +42,7 @@ type config struct {
 	Consumer         stream.ConsumerSettings `envPrefix:"CONSUMER_"`
 	Bootstrap        bootstrapConfig         `envPrefix:"BOOTSTRAP_"`
 	HealthAddr       string                  `env:"HEALTH_ADDR" envDefault:":8081"`
+	PProfEnabled     bool                    `env:"PPROF_ENABLED" envDefault:"false"`
 	DebugLog         logctx.Config           `envPrefix:"DEBUG_LOG_"`
 
 	// Grace window during which a rotated-out previous key remains valid for decrypt.
@@ -203,7 +204,7 @@ func main() {
 		}
 	}()
 
-	healthStop, err := health.Serve(cfg.HealthAddr, 5*time.Second,
+	healthStop, err := health.ServeWithPprof(cfg.HealthAddr, 5*time.Second, cfg.PProfEnabled,
 		natsutil.HealthCheck(nc),
 	)
 	if err != nil {

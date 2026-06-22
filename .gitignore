@@ -69,3 +69,6 @@ tmp/
 
 # stray local build of the data-migration service
 /oplog-connector
+
+# Captured pprof profiles from `make profile`.
+profiles/

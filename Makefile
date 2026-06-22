@@ -1,5 +1,6 @@
-.PHONY: lint fmt test test-integration generate build deps-up deps-down up down dev \
-        obs-up obs-down tools sast sast-gosec sast-vuln sast-semgrep
+.PHONY: lint fmt test test-integration generate build deps-up deps-down \
+        require-deps up up-detached down dev \
+        obs-up obs-down profile tools sast sast-gosec sast-vuln sast-semgrep
 
 DEPS_COMPOSE     := docker-local/compose.deps.yaml
 SERVICES_COMPOSE := docker-local/compose.services.yaml
@@ -106,21 +107,31 @@ deps-up:
 deps-down:
 	docker compose -f $(DEPS_COMPOSE) down
 
-# Start microservices. With SERVICE=<name>, starts just that service's compose;
-# without, starts every service via compose.services.yaml. Foreground either way
-# so container logs stream to the terminal; Ctrl-C stops.
-up:
+# Guard: the shared deps must be running and NATS creds/conf present before any
+# service starts. A prerequisite of both `up` and `up-detached` so the check
+# lives in one place.
+require-deps:
 	@docker container inspect -f '{{.State.Running}}' $(NATS_CONTAINER) 2>/dev/null | grep -q true || { \
 	  echo "Deps are not running. Run 'make deps-up' first."; exit 1; \
 	}
 	@test -f $(NATS_CREDS) && test -f $(NATS_CONF) || { \
 	  echo "Missing $(NATS_CREDS) or $(NATS_CONF). Run './docker-local/setup.sh'."; exit 1; \
 	}
+
+# Start microservices. With SERVICE=<name>, starts just that service's compose;
+# without, starts every service via compose.services.yaml.
+#   up           — foreground, so container logs stream to the terminal; Ctrl-C stops.
+#   up-detached  — same bring-up but detached, the single entry point for
+#                  orchestration that needs the services in the background
+#                  (e.g. the loadgen deploy). Keeping one shared recipe means the
+#                  compose command can't drift between the two.
+up up-detached: require-deps
 ifdef SERVICE
-	docker compose -f $(SERVICE)/deploy/docker-compose.yml up --build
+	docker compose -f $(SERVICE)/deploy/docker-compose.yml up $(UP_DETACH) --build
 else
-	docker compose -f $(SERVICES_COMPOSE) up --build
+	docker compose -f $(SERVICES_COMPOSE) up $(UP_DETACH) --build
 endif
+up-detached: UP_DETACH := -d
 
 # Hot-reload a single service against the shared deps stack. Requires
 # `make deps-up` first. Uses air; install via `make tools`.
@@ -151,6 +162,28 @@ obs-up:
 # Stop the observability stack.
 obs-down:
 	docker compose -f $(OBS_COMPOSE) down
+
+# --- Profiling capture --------------------------------------------------------
+# Snapshot pprof profiles (cpu/heap/goroutine) from every message-pipeline
+# service into profiles/<UTC-timestamp>[-<label>]/. Requires the stack running
+# with profiling enabled (`PPROF_ENABLED=true make up`) and the chat-local
+# network (`make deps-up`). Fans out over the network from a one-shot curl
+# container — no host ports are published. Tunables:
+#   DURATION=<seconds>  CPU profile window (default 30)
+#   LABEL=<tag>         appended to the run folder name
+#   SERVICES="a b c"    override the default nine-service manifest
+PROFILE_IMAGE := curlimages/curl:8.11.1
+
+profile:
+	@docker network inspect chat-local >/dev/null 2>&1 || { \
+	  echo "chat-local network missing. Run 'make deps-up' first."; exit 1; \
+	}
+	@mkdir -p profiles
+	docker run --rm --network chat-local \
+	  -e DURATION="$(DURATION)" -e LABEL="$(LABEL)" -e SERVICES="$(SERVICES)" \
+	  -v "$(PWD)/tools/profilecapture/capture.sh:/capture.sh:ro" \
+	  -v "$(PWD)/profiles:/out" \
+	  --entrypoint sh $(PROFILE_IMAGE) /capture.sh
 
 # --- SAST -------------------------------------------------------------------
 # Install pinned dev/SAST tooling. Go tools install into $(GOBIN_DIR) with

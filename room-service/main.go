@@ -45,6 +45,7 @@ type config struct {
 	CassandraPassword        string          `env:"CASSANDRA_PASSWORD"        envDefault:""`
 	CassandraNumConns        int             `env:"CASSANDRA_NUM_CONNS"       envDefault:"8"`
 	HealthAddr               string          `env:"HEALTH_ADDR" envDefault:":8081"`
+	PProfEnabled             bool            `env:"PPROF_ENABLED" envDefault:"false"`
 	Bootstrap                bootstrapConfig `envPrefix:"BOOTSTRAP_"`
 	RestrictedRoomMinMembers int             `env:"RESTRICTED_ROOM_MIN_MEMBERS" envDefault:"5"`
 	// Microsoft Teams integration. Teams* credentials are required only for the
@@ -212,7 +213,7 @@ func main() {
 	router.Use(natsrouter.Recovery(), natsrouter.RequestID(), natsrouter.Logging())
 	handler.Register(router)
 
-	healthStop, err := health.Serve(cfg.HealthAddr, 5*time.Second,
+	healthStop, err := health.ServeWithPprof(cfg.HealthAddr, 5*time.Second, cfg.PProfEnabled,
 		natsutil.HealthCheck(nc),
 	)
 	if err != nil {

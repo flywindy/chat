@@ -55,6 +55,7 @@ type config struct {
 	SpotlightIndex      string `env:"SPOTLIGHT_INDEX,required"`
 	UserRoomIndex       string `env:"USER_ROOM_INDEX,required"`
 	HealthAddr          string `env:"HEALTH_ADDR" envDefault:":8081"`
+	PProfEnabled        bool   `env:"PPROF_ENABLED" envDefault:"false"`
 
 	// SyncMessagesFrom is an optional YYYY-MM-DD cutoff (UTC) that the
 	// messages collection compares against Message.CreatedAt. Events
@@ -258,7 +259,7 @@ func main() {
 		go runConsumer(ctx, cons, handler, cfg.FetchBatchSize, cfg.BulkBatchSize, bulkFlushInterval, stopCh, doneCh)
 	}
 
-	healthStop, err := health.Serve(cfg.HealthAddr, 5*time.Second,
+	healthStop, err := health.ServeWithPprof(cfg.HealthAddr, 5*time.Second, cfg.PProfEnabled,
 		natsutil.HealthCheck(nc),
 	)
 	if err != nil {

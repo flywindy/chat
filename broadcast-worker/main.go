@@ -55,6 +55,7 @@ type config struct {
 	ValkeyPassword       string                  `env:"VALKEY_PASSWORD"           envDefault:""`
 	ValkeyKeyGracePeriod time.Duration           `env:"VALKEY_KEY_GRACE_PERIOD" envDefault:"24h"`
 	HealthAddr           string                  `env:"HEALTH_ADDR"              envDefault:":8081"`
+	PProfEnabled         bool                    `env:"PPROF_ENABLED" envDefault:"false"`
 	Consumer             stream.ConsumerSettings `envPrefix:"CONSUMER_"`
 	Bootstrap            bootstrapConfig         `envPrefix:"BOOTSTRAP_"`
 	Encryption           encryptionConfig        `envPrefix:"ENCRYPTION_"`
@@ -206,7 +207,7 @@ func main() {
 	var wg sync.WaitGroup
 	go consumeLoop(iter, broadcastProcessor(handler), cfg.MaxWorkers, &wg)
 
-	healthStop, err := health.Serve(cfg.HealthAddr, 5*time.Second,
+	healthStop, err := health.ServeWithPprof(cfg.HealthAddr, 5*time.Second, cfg.PProfEnabled,
 		natsutil.HealthCheck(nc),
 	)
 	if err != nil {

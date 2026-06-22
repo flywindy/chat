@@ -41,6 +41,7 @@ type config struct {
 	Consumer      stream.ConsumerSettings `envPrefix:"CONSUMER_"`
 	Bootstrap     bootstrapConfig         `envPrefix:"BOOTSTRAP_"`
 	HealthAddr    string                  `env:"HEALTH_ADDR" envDefault:":8081"`
+	PProfEnabled  bool                    `env:"PPROF_ENABLED" envDefault:"false"`
 }
 
 // mongoInboxStore implements InboxStore using MongoDB.
@@ -552,7 +553,7 @@ func main() {
 		}
 	}()
 
-	healthStop, err := health.Serve(cfg.HealthAddr, 5*time.Second,
+	healthStop, err := health.ServeWithPprof(cfg.HealthAddr, 5*time.Second, cfg.PProfEnabled,
 		natsutil.HealthCheck(nc),
 	)
 	if err != nil {

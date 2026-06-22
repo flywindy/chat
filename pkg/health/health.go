@@ -127,24 +127,35 @@ func Register(mux *http.ServeMux, timeout time.Duration, checks ...Check) {
 // The timeouts guard the operator-exposed port against hung scrapers tying up a
 // goroutine indefinitely.
 func NewServer(addr string, timeout time.Duration, checks ...Check) *http.Server {
-	srv := newServer(timeout, checks...)
+	srv := newServer(timeout, serverOptions{}, checks...)
 	srv.Addr = addr
 	return srv
 }
 
 // newServer builds the health http.Server with hardened timeouts. The timeouts
 // guard the operator-exposed port against hung scrapers tying up a goroutine
-// indefinitely.
-func newServer(timeout time.Duration, checks ...Check) *http.Server {
+// indefinitely. When opts.pprof is set the standard net/http/pprof handlers are
+// mounted alongside the probe endpoints on the same mux.
+func newServer(timeout time.Duration, opts serverOptions, checks ...Check) *http.Server {
 	mux := http.NewServeMux()
 	Register(mux, timeout, checks...)
-	return &http.Server{
+	srv := &http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
+	if opts.pprof {
+		registerPprof(mux)
+		// CPU and trace profiles stream the response for a client-chosen
+		// duration that routinely exceeds the hardened write timeout
+		// (e.g. /debug/pprof/profile?seconds=30), so the server would cut the
+		// response off mid-profile and the capture would fail. pprof is a
+		// dev/load-test-only opt-in, so drop the write timeout when it's mounted.
+		srv.WriteTimeout = 0
+	}
+	return srv
 }
 
 // Serve binds addr and serves the health endpoints in a background goroutine.
@@ -164,7 +175,14 @@ func Serve(addr string, timeout time.Duration, checks ...Check) (stop func(conte
 // takes ownership of the listener; the returned stop func closes it via the
 // server's graceful Shutdown.
 func ServeListener(listener net.Listener, timeout time.Duration, checks ...Check) func(context.Context) error {
-	srv := newServer(timeout, checks...)
+	return serveListenerWithOptions(listener, timeout, serverOptions{}, checks...)
+}
+
+// serveListenerWithOptions serves the health endpoints on an already-bound
+// listener with the given server options. It takes ownership of the listener;
+// the returned stop func closes it via the server's graceful Shutdown.
+func serveListenerWithOptions(listener net.Listener, timeout time.Duration, opts serverOptions, checks ...Check) func(context.Context) error {
+	srv := newServer(timeout, opts, checks...)
 	go func() {
 		slog.Info("health server listening", "addr", listener.Addr().String())
 		if err := srv.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
