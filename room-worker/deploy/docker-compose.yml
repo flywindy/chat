@@ -11,7 +11,7 @@ services:
     networks:
       - chat-local
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8200/v1/sys/health"]
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8200/v1/sys/health"]
       interval: 5s
       timeout: 3s
       retries: 10
