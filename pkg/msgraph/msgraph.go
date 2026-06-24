@@ -8,6 +8,7 @@ package msgraph
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -57,6 +58,9 @@ type Config struct {
 	TenantID     string
 	ClientID     string
 	ClientSecret string
+	// TLSInsecureSkipVerify disables Graph TLS verification. Opt-in, dev/on-prem
+	// only (e.g. a self-signed cert fronting Graph). Never enable in production.
+	TLSInsecureSkipVerify bool
 }
 
 const (
@@ -99,9 +103,19 @@ func WithTokenURL(u string) Option {
 
 // New constructs a live Graph client for the given config.
 func New(cfg Config, opts ...Option) Client {
+	hc := &http.Client{Timeout: 30 * time.Second}
+	if cfg.TLSInsecureSkipVerify {
+		// Clone the default transport so proxy (ProxyFromEnvironment) and dial
+		// settings survive — an on-prem Graph behind a self-signed cert is the
+		// scenario most likely to also sit behind a corporate proxy.
+		tr := http.DefaultTransport.(*http.Transport).Clone()
+		// #nosec G402 -- InsecureSkipVerify is opt-in via TLSInsecureSkipVerify config for dev/on-prem environments
+		tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12} //nolint:gosec
+		hc.Transport = tr
+	}
 	g := &graphClient{
 		cfg:        cfg,
-		httpClient: &http.Client{Timeout: 30 * time.Second},
+		httpClient: hc,
 		baseURL:    defaultGraphBaseURL,
 		tokenURL: fmt.Sprintf(
 			"https://login.microsoftonline.com/%s/oauth2/v2.0/token",

@@ -171,3 +171,16 @@ func TestCreateOnlineMeeting_MissingJoinURL(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "joinWebUrl")
 }
+
+func TestNew_TLSInsecureSkipVerify(t *testing.T) {
+	// Default: no custom transport, so the stdlib default (verifying) is used.
+	def := New(Config{TenantID: "t"}).(*graphClient)
+	assert.Nil(t, def.httpClient.Transport, "default client must keep TLS verification")
+
+	// Enabled: transport carries InsecureSkipVerify.
+	ins := New(Config{TenantID: "t", TLSInsecureSkipVerify: true}).(*graphClient)
+	tr, ok := ins.httpClient.Transport.(*http.Transport)
+	require.True(t, ok)
+	require.NotNil(t, tr.TLSClientConfig)
+	assert.True(t, tr.TLSClientConfig.InsecureSkipVerify)
+}

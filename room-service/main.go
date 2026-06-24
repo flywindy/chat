@@ -52,12 +52,15 @@ type config struct {
 	// meetings RPC (Graph onlineMeeting create); the deep-link RPCs use only
 	// EmailDomain. When TenantID/ClientID/ClientSecret are unset the meetings RPC
 	// returns errTeamsNotConfigured; the deep-link RPCs still work.
-	TeamsTenantID        string `env:"TEAMS_TENANT_ID"          envDefault:""`
-	TeamsClientID        string `env:"TEAMS_CLIENT_ID"          envDefault:""`
-	TeamsClientSecret    string `env:"TEAMS_CLIENT_SECRET"      envDefault:""`
-	TeamsEmailDomain     string `env:"TEAMS_EMAIL_DOMAIN"       envDefault:"dev.local"`
-	RoomMembersLimit     int    `env:"ROOM_MEMBERS_LIMIT"       envDefault:"500"`
-	RoomMembersCallLimit int    `env:"ROOM_MEMBERS_CALL_LIMIT"  envDefault:"20"`
+	TeamsTenantID     string `env:"TEAMS_TENANT_ID"          envDefault:""`
+	TeamsClientID     string `env:"TEAMS_CLIENT_ID"          envDefault:""`
+	TeamsClientSecret string `env:"TEAMS_CLIENT_SECRET"      envDefault:""`
+	TeamsEmailDomain  string `env:"TEAMS_EMAIL_DOMAIN"       envDefault:"dev.local"`
+	// TeamsTLSInsecure disables Graph TLS verification (dev/on-prem self-signed
+	// certs only). Never enable in production.
+	TeamsTLSInsecure     bool `env:"TEAMS_TLS_INSECURE" envDefault:"false"`
+	RoomMembersLimit     int  `env:"ROOM_MEMBERS_LIMIT"       envDefault:"500"`
+	RoomMembersCallLimit int  `env:"ROOM_MEMBERS_CALL_LIMIT"  envDefault:"20"`
 	// Atrest/Vault drive eager at-rest DEK provisioning at room creation.
 	// When Atrest.Enabled is false the DEK is created lazily by message-worker.
 	Atrest   atrest.Config      // env vars already prefixed ATREST_*
@@ -156,10 +159,14 @@ func main() {
 	// while the deep-link RPCs keep working.
 	var graphClient msgraph.Client
 	if cfg.TeamsTenantID != "" && cfg.TeamsClientID != "" && cfg.TeamsClientSecret != "" {
+		if cfg.TeamsTLSInsecure {
+			slog.Warn("Graph TLS verification disabled — dev/on-prem only, never production", "TEAMS_TLS_INSECURE", true)
+		}
 		graphClient = msgraph.New(msgraph.Config{
-			TenantID:     cfg.TeamsTenantID,
-			ClientID:     cfg.TeamsClientID,
-			ClientSecret: cfg.TeamsClientSecret,
+			TenantID:              cfg.TeamsTenantID,
+			ClientID:              cfg.TeamsClientID,
+			ClientSecret:          cfg.TeamsClientSecret,
+			TLSInsecureSkipVerify: cfg.TeamsTLSInsecure,
 		})
 	}
 
