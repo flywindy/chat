@@ -74,7 +74,7 @@ func NewMetrics() *Metrics {
 		[]string{"preset", "phase", "inject", "shape"},
 	)
 	m.MemberPublishErrors = prometheus.NewCounterVec(
-		prometheus.CounterOpts{Name: "loadgen_member_publish_errors_total", Help: "Member-add publish-side errors by reason (publish|room_service|timeout|marshal|saturated)."},
+		prometheus.CounterOpts{Name: "loadgen_member_publish_errors_total", Help: "Member-add publish-side errors by reason (publish|room_service|timeout|marshal|saturated|underrun)."},
 		[]string{"reason"},
 	)
 	m.MemberE1Latency = prometheus.NewHistogramVec(
