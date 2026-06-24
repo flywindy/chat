@@ -2,12 +2,13 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
 	"sync"
 	"time"
+
+	"github.com/bytedance/sonic"
 
 	"github.com/caarlos0/env/v11"
 	"github.com/nats-io/nats.go/jetstream"
@@ -114,6 +115,7 @@ func (m *mongoMemberLoader) Load(ctx context.Context, roomID string) ([]roomsubc
 
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
+	pretouchJSON()
 
 	cfg, err := env.ParseAs[config]()
 	if err != nil {
@@ -247,7 +249,7 @@ func main() {
 				return
 			}
 			var evt model.CanonicalMemberEvent
-			if err := json.Unmarshal(msg.Data(), &evt); err != nil {
+			if err := sonic.Unmarshal(msg.Data(), &evt); err != nil {
 				slog.Warn("canonical member event decode failed", "error", err)
 				_ = msg.Ack()
 				continue

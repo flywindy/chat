@@ -2,12 +2,13 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
 	"time"
+
+	"github.com/bytedance/sonic"
 
 	"github.com/hmchangw/chat/pkg/mention"
 	"github.com/hmchangw/chat/pkg/model"
@@ -73,7 +74,7 @@ func NewHandler(deps HandlerDeps) *Handler { //nolint:gocritic // hugeParam: one
 
 func (h *Handler) HandleMessage(ctx context.Context, data []byte) error {
 	var evt model.MessageEvent
-	if err := json.Unmarshal(data, &evt); err != nil {
+	if err := sonic.Unmarshal(data, &evt); err != nil {
 		return fmt.Errorf("unmarshal message event: %w", err)
 	}
 	// Non-created events are filtered at the broker; defensive backstop only.

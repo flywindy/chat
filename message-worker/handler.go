@@ -2,11 +2,12 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"time"
+
+	"github.com/bytedance/sonic"
 
 	"github.com/nats-io/nats.go/jetstream"
 
@@ -71,7 +72,7 @@ func (h *Handler) HandleJetStreamMsg(ctx context.Context, msg jetstream.Msg) {
 
 func (h *Handler) processMessage(ctx context.Context, data []byte) error {
 	var evt model.MessageEvent
-	if err := json.Unmarshal(data, &evt); err != nil {
+	if err := sonic.Unmarshal(data, &evt); err != nil {
 		return fmt.Errorf("unmarshal message event: %w", err)
 	}
 
@@ -443,7 +444,7 @@ func (h *Handler) publishThreadSubInboxIfRemote(ctx context.Context, sub *model.
 		return nil
 	}
 
-	payload, err := json.Marshal(sub)
+	payload, err := sonic.Marshal(sub)
 	if err != nil {
 		return fmt.Errorf("marshal thread subscription: %w", err)
 	}
@@ -454,7 +455,7 @@ func (h *Handler) publishThreadSubInboxIfRemote(ctx context.Context, sub *model.
 		Payload:    payload,
 		Timestamp:  time.Now().UTC().UnixMilli(),
 	}
-	data, err := json.Marshal(externalEvt)
+	data, err := sonic.Marshal(externalEvt)
 	if err != nil {
 		return fmt.Errorf("marshal inbox event: %w", err)
 	}
@@ -493,7 +494,7 @@ func (h *Handler) publishThreadReplyEvent(ctx context.Context, msg *model.Messag
 		NewTCount:          &newTcount,
 		NewThreadLastMsgAt: &tlm,
 	}
-	data, err := json.Marshal(evt)
+	data, err := sonic.Marshal(evt)
 	if err != nil {
 		return fmt.Errorf("marshal thread reply event: %w", err)
 	}

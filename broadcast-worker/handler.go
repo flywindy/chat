@@ -13,6 +13,8 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/bytedance/sonic"
+
 	"github.com/hmchangw/chat/pkg/logctx"
 	"github.com/hmchangw/chat/pkg/mention"
 	"github.com/hmchangw/chat/pkg/model"
@@ -63,7 +65,7 @@ func NewHandler(store Store, userStore userstore.UserStore, pub Publisher, keySt
 // HandleMessage processes a single MESSAGES_CANONICAL message payload.
 func (h *Handler) HandleMessage(ctx context.Context, data []byte) error {
 	var evt model.MessageEvent
-	if err := json.Unmarshal(data, &evt); err != nil {
+	if err := sonic.Unmarshal(data, &evt); err != nil {
 		return fmt.Errorf("unmarshal message event: %w", err)
 	}
 
@@ -94,7 +96,7 @@ func (h *Handler) HandleMessage(ctx context.Context, data []byte) error {
 // badge events published by message-worker.
 func (h *Handler) HandleServerBroadcast(ctx context.Context, data []byte) {
 	var evt model.MessageEvent
-	if err := json.Unmarshal(data, &evt); err != nil {
+	if err := sonic.Unmarshal(data, &evt); err != nil {
 		slog.ErrorContext(ctx, "unmarshal server-broadcast event failed; dropping",
 			"error", err,
 			"request_id", natsutil.RequestIDFromContext(ctx))
@@ -233,7 +235,7 @@ func (h *Handler) handleThreadCreated(ctx context.Context, evt *model.MessageEve
 		if len(resolved.Participants) > 0 {
 			roomEvt.Mentions = resolved.Participants
 		}
-		payload, err := json.Marshal(roomEvt)
+		payload, err := sonic.Marshal(roomEvt)
 		if err != nil {
 			return fmt.Errorf("marshal thread created event for parent %s: %w", parentMsgID, err)
 		}
@@ -311,7 +313,7 @@ func (h *Handler) handleThreadUpdated(ctx context.Context, evt *model.MessageEve
 				"request_id", natsutil.RequestIDFromContext(ctx))
 			return nil
 		}
-		payload, err := json.Marshal(&edit)
+		payload, err := sonic.Marshal(&edit)
 		if err != nil {
 			return fmt.Errorf("marshal thread edit event for parent %s: %w", parentMsgID, err)
 		}
@@ -359,7 +361,7 @@ func (h *Handler) handleThreadDeleted(ctx context.Context, evt *model.MessageEve
 			return fmt.Errorf("channel thread fan-out for thread delete of parent %s: %w", parentMsgID, err)
 		}
 		if len(fanOut) > 0 {
-			payload, err := json.Marshal(&del)
+			payload, err := sonic.Marshal(&del)
 			if err != nil {
 				return fmt.Errorf("marshal thread delete event for parent %s: %w", parentMsgID, err)
 			}
@@ -427,7 +429,7 @@ func (h *Handler) publishThreadMetadata(ctx context.Context, room *model.Room, n
 		Timestamp:          time.Now().UTC().UnixMilli(),
 		EventTimestamp:     eventTimestamp,
 	}
-	payload, err := json.Marshal(evt)
+	payload, err := sonic.Marshal(evt)
 	if err != nil {
 		return fmt.Errorf("marshal thread metadata event for room %s: %w", room.ID, err)
 	}
@@ -605,7 +607,7 @@ func (h *Handler) handleReacted(ctx context.Context, evt *model.MessageEvent) er
 		ReactionDelta: evt.ReactionDelta,
 		Timestamp:     time.Now().UTC().UnixMilli(),
 	}
-	data, marshalErr := json.Marshal(notif)
+	data, marshalErr := sonic.Marshal(notif)
 	if marshalErr != nil {
 		slog.ErrorContext(ctx, "marshal reaction author notification failed",
 			"error", marshalErr,
@@ -631,7 +633,7 @@ func (h *Handler) handleReacted(ctx context.Context, evt *model.MessageEvent) er
 // type: channel events go to the room stream, DM/botDM events fan out per
 // non-bot member. evt must marshal to the wire payload for roomEvtType.
 func (h *Handler) publishMutation(ctx context.Context, room *model.Room, roomEvtType model.RoomEventType, messageID string, evt any) error {
-	payload, err := json.Marshal(evt)
+	payload, err := sonic.Marshal(evt)
 	if err != nil {
 		return fmt.Errorf("marshal %s event: %w", roomEvtType, err)
 	}
@@ -710,7 +712,7 @@ func (h *Handler) encryptEditedContent(ctx context.Context, roomID string, edite
 	if err != nil {
 		return fmt.Errorf("encrypt edit content for room %s: %w", roomID, err)
 	}
-	encJSON, err := json.Marshal(encrypted)
+	encJSON, err := sonic.Marshal(encrypted)
 	if err != nil {
 		return fmt.Errorf("marshal encrypted edit content: %w", err)
 	}
@@ -738,7 +740,7 @@ func (h *Handler) encryptRoomEvent(ctx context.Context, roomID string, clientMsg
 	if !h.encrypt {
 		return nil
 	}
-	msgJSON, err := json.Marshal(clientMsg)
+	msgJSON, err := sonic.Marshal(clientMsg)
 	if err != nil {
 		return fmt.Errorf("marshal client message for room %s: %w", roomID, err)
 	}
@@ -750,7 +752,7 @@ func (h *Handler) encryptRoomEvent(ctx context.Context, roomID string, clientMsg
 	if err != nil {
 		return fmt.Errorf("encrypt message for room %s: %w", roomID, err)
 	}
-	encJSON, err := json.Marshal(encrypted)
+	encJSON, err := sonic.Marshal(encrypted)
 	if err != nil {
 		return fmt.Errorf("marshal encrypted message for room %s: %w", roomID, err)
 	}
@@ -768,7 +770,7 @@ func (h *Handler) publishChannelEvent(ctx context.Context, meta roommetacache.Me
 	if err := h.encryptRoomEvent(ctx, meta.ID, clientMsg, &evt); err != nil {
 		return fmt.Errorf("encrypt channel event for room %s: %w", meta.ID, err)
 	}
-	payload, err := json.Marshal(evt)
+	payload, err := sonic.Marshal(evt)
 	if err != nil {
 		return fmt.Errorf("marshal channel event: %w", err)
 	}
@@ -823,7 +825,7 @@ func (h *Handler) publishDMEvents(ctx context.Context, meta roommetacache.Meta, 
 		evt := buildRoomEvent(meta, clientMsg, timestamp)
 		evt.HasMention = hasMention
 
-		payload, err := json.Marshal(evt)
+		payload, err := sonic.Marshal(evt)
 		if err != nil {
 			return fmt.Errorf("marshal DM event for user %s: %w", account, err)
 		}

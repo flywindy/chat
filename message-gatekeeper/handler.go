@@ -2,13 +2,14 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/bytedance/sonic"
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
@@ -71,7 +72,7 @@ func (h *Handler) HandleJetStreamMsg(ctx context.Context, msg jetstream.Msg) {
 	// processMessage validation (was triple-decoded on the hot path).
 	rawData := msg.Data()
 	var req model.SendMessageRequest
-	parseErr := json.Unmarshal(rawData, &req)
+	parseErr := sonic.Unmarshal(rawData, &req)
 
 	// Enrich the logger before the subject parse so even the malformed-subject
 	// path carries request_id + a best-effort account. roomID is added later.
@@ -98,7 +99,7 @@ func (h *Handler) HandleJetStreamMsg(ctx context.Context, msg jetstream.Msg) {
 	ctx = errcode.WithLogValues(ctx, "room_id", roomID)
 
 	if parseErr != nil {
-		// Do not WithCause(parseErr) — json.SyntaxError strings embed the
+		// Do not WithCause(parseErr) — JSON parse error strings embed the
 		// offending substring from an unauthenticated entry-point (see doc.go).
 		bad := errcode.BadRequest("unmarshal send message request")
 		debugFlowRejected(ctx, req.RequestID, "unmarshal")
@@ -342,7 +343,7 @@ func (h *Handler) processMessage(ctx context.Context, account, roomID, siteID st
 
 	// Publish MessageEvent to MESSAGES_CANONICAL
 	evt := model.MessageEvent{Event: model.EventCreated, Message: msg, SiteID: siteID, Timestamp: now.UnixMilli()}
-	evtData, err := json.Marshal(evt)
+	evtData, err := sonic.Marshal(evt)
 	if err != nil {
 		return nil, fmt.Errorf("marshal message event: %w", err)
 	}
@@ -356,7 +357,7 @@ func (h *Handler) processMessage(ctx context.Context, account, roomID, siteID st
 	slog.Log(ctx, logctx.LevelFlow, "gatekeeper published to canonical",
 		"phase", "published", "request_id", req.RequestID, "subject", canonicalSubj, "bytes", len(evtData))
 
-	return json.Marshal(msg)
+	return sonic.Marshal(msg)
 }
 
 // resolveThreadParentCreatedAt resolves the thread parent's createdAt

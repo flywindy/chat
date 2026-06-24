@@ -56,6 +56,7 @@ type config struct {
 
 func main() {
 	logctx.SetupDefault(os.Stdout)
+	pretouchJSON()
 
 	cfg, err := env.ParseAs[config]()
 	if err != nil {

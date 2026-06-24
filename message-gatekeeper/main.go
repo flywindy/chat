@@ -57,6 +57,7 @@ func main() {
 	// flow/debug/trace edges even though the floor stays at INFO; RenderLevelNames
 	// prints the custom FLOW/TRACE levels by name.
 	logctx.SetupDefault(os.Stdout)
+	pretouchJSON()
 
 	cfg, err := env.ParseAs[config]()
 	if err != nil {

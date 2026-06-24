@@ -2,8 +2,9 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
+
+	"github.com/bytedance/sonic"
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
@@ -35,7 +36,7 @@ func newMobileEmitter(pub publisher, siteID string, maxPayloadBytes int) *mobile
 }
 
 func (e *mobileEmitter) Emit(ctx context.Context, evt model.PushNotificationEvent) error { //nolint:gocritic // hugeParam: spec requires value semantics for Emitter interface
-	data, err := json.Marshal(evt)
+	data, err := sonic.Marshal(evt)
 	if err != nil {
 		return fmt.Errorf("marshal push batch %s: %w", evt.ID, err)
 	}
