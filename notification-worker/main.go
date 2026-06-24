@@ -16,14 +16,12 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
-	"github.com/Marz32onE/instrumentation-go/otel-nats/oteljetstream"
-
 	"github.com/hmchangw/chat/pkg/health"
 	"github.com/hmchangw/chat/pkg/jobguard"
 	"github.com/hmchangw/chat/pkg/model"
 	"github.com/hmchangw/chat/pkg/mongoutil"
 	"github.com/hmchangw/chat/pkg/natsutil"
-	"github.com/hmchangw/chat/pkg/otelutil"
+	"github.com/hmchangw/chat/pkg/obs"
 	"github.com/hmchangw/chat/pkg/roommetacache"
 	"github.com/hmchangw/chat/pkg/roomsubcache"
 	"github.com/hmchangw/chat/pkg/shutdown"
@@ -129,13 +127,13 @@ func main() {
 
 	ctx := context.Background()
 
-	tracerShutdown, err := otelutil.InitTracer(ctx, "notification-worker")
+	sdk, obsShutdown, err := obs.Init(ctx)
 	if err != nil {
-		slog.Error("init tracer failed", "error", err)
+		slog.Error("init observability failed", "error", err)
 		os.Exit(1)
 	}
 
-	mongoClient, err := mongoutil.Connect(ctx, cfg.MongoURI, cfg.MongoUsername, cfg.MongoPassword)
+	mongoClient, err := mongoutil.Connect(ctx, cfg.MongoURI, cfg.MongoUsername, cfg.MongoPassword, mongoutil.WithObservability(sdk))
 	if err != nil {
 		slog.Error("mongo connect failed", "error", err)
 		os.Exit(1)
@@ -145,7 +143,7 @@ func main() {
 	threadRoomCol := db.Collection("thread_rooms")
 	roomsCol := db.Collection("rooms")
 
-	valkeyClient, err := valkeyutil.ConnectCluster(ctx, cfg.ValkeyAddrs, cfg.ValkeyPassword)
+	valkeyClient, err := valkeyutil.ConnectCluster(ctx, cfg.ValkeyAddrs, cfg.ValkeyPassword, valkeyutil.WithObservability(sdk))
 	if err != nil {
 		slog.Error("valkey connect failed", "error", err)
 		os.Exit(1)
@@ -164,13 +162,13 @@ func main() {
 	loader := &mongoMemberLoader{col: subCol}
 	memberLookup := newCachedMemberLookup(cache, loader.Load, cfg.RoomSubCacheTTL)
 
-	nc, err := natsutil.Connect(cfg.NatsURL, cfg.NatsCredsFile)
+	nc, err := natsutil.Connect(ctx, cfg.NatsURL, cfg.NatsCredsFile, sdk.TracerProvider(), sdk.Propagator)
 	if err != nil {
 		slog.Error("nats connect failed", "error", err)
 		os.Exit(1)
 	}
 
-	otelJS, err := oteljetstream.New(nc)
+	otelJS, err := nc.JetStream()
 	if err != nil {
 		slog.Error("jetstream init failed", "error", err)
 		os.Exit(1)
@@ -237,7 +235,7 @@ func main() {
 		slog.Error("create canonical member event consumer failed", "error", err)
 		os.Exit(1)
 	}
-	invalIter, err := invalCons.Messages(jetstream.PullMaxMessages(64))
+	invalIter, err := invalCons.Messages(ctx, jetstream.PullMaxMessages(64))
 	if err != nil {
 		slog.Error("canonical member event iterator failed", "error", err)
 		os.Exit(1)
@@ -265,7 +263,7 @@ func main() {
 		}
 	}()
 
-	iter, err := cons.Messages(jetstream.PullMaxMessages(2 * cfg.MaxWorkers))
+	iter, err := cons.Messages(ctx, jetstream.PullMaxMessages(2*cfg.MaxWorkers))
 	if err != nil {
 		slog.Error("messages failed", "error", err)
 		os.Exit(1)
@@ -364,11 +362,11 @@ func main() {
 			invalCancel() // always release the context (idempotent)
 			return nil
 		},
-		func(ctx context.Context) error { return tracerShutdown(ctx) },
 		func(_ context.Context) error { return nc.Drain() },
 		func(ctx context.Context) error { mongoutil.Disconnect(ctx, mongoClient); return nil },
 		func(_ context.Context) error { valkeyutil.Disconnect(valkeyClient); return nil },
 		func(ctx context.Context) error { return healthStop(ctx) },
+		func(ctx context.Context) error { return obsShutdown(ctx) },
 	)
 }
 

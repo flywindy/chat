@@ -10,12 +10,10 @@ import (
 	"github.com/caarlos0/env/v11"
 	"github.com/nats-io/nats.go/jetstream"
 
-	"github.com/Marz32onE/instrumentation-go/otel-nats/oteljetstream"
-
 	"github.com/hmchangw/chat/pkg/health"
 	"github.com/hmchangw/chat/pkg/jobguard"
 	"github.com/hmchangw/chat/pkg/natsutil"
-	"github.com/hmchangw/chat/pkg/otelutil"
+	"github.com/hmchangw/chat/pkg/obs"
 	"github.com/hmchangw/chat/pkg/searchengine"
 	"github.com/hmchangw/chat/pkg/searchindex"
 	"github.com/hmchangw/chat/pkg/shutdown"
@@ -146,9 +144,9 @@ func main() {
 
 	ctx := context.Background()
 
-	tracerShutdown, err := otelutil.InitTracer(ctx, "search-sync-worker")
+	sdk, obsShutdown, err := obs.Init(ctx)
 	if err != nil {
-		slog.Error("init tracer failed", "error", err)
+		slog.Error("init observability failed", "error", err)
 		os.Exit(1)
 	}
 
@@ -158,7 +156,7 @@ func main() {
 		Username:      cfg.SearchUsername,
 		Password:      cfg.SearchPassword,
 		TLSSkipVerify: cfg.SearchTLSSkipVerify,
-	})
+	}, searchengine.WithObservability(sdk))
 	if err != nil {
 		slog.Error("search engine connect failed", "error", err)
 		os.Exit(1)
@@ -196,12 +194,15 @@ func main() {
 		}
 	}
 
-	nc, err := natsutil.Connect(cfg.NatsURL, cfg.NatsCredsFile)
+	nc, err := natsutil.Connect(ctx, cfg.NatsURL, cfg.NatsCredsFile, sdk.TracerProvider(), sdk.Propagator)
 	if err != nil {
 		slog.Error("nats connect failed", "error", err)
 		os.Exit(1)
 	}
-	js, err := oteljetstream.New(nc)
+	// Native JetStream context: this worker's consume path uses Fetch (batch
+	// pull), which the o11y/nats facade does not yet wrap. The connection itself
+	// is the traced o11y/nats Conn; ES writes carry o11y spans via searchengine.
+	js, err := jetstream.New(nc.NatsConn())
 	if err != nil {
 		slog.Error("jetstream init failed", "error", err)
 		os.Exit(1)
@@ -295,7 +296,7 @@ func main() {
 			}
 			return nil
 		},
-		func(ctx context.Context) error { return tracerShutdown(ctx) },
+		func(ctx context.Context) error { return obsShutdown(ctx) },
 		func(ctx context.Context) error { return nc.Drain() },
 		func(ctx context.Context) error { return healthStop(ctx) },
 	)
@@ -331,7 +332,7 @@ func main() {
 // Bulk flush spans many client requests, so per-message X-Request-ID is intentionally NOT propagated; mint a per-flush bulkID if per-batch traceability becomes a need.
 func runConsumer(
 	ctx context.Context,
-	cons oteljetstream.Consumer,
+	cons jetstream.Consumer,
 	handler *Handler,
 	fetchBatchSize, bulkBatchSize int,
 	bulkFlushInterval time.Duration,
@@ -388,7 +389,7 @@ func runConsumer(
 		}
 
 		for msg := range batch.Messages() {
-			add(msg.Msg)
+			add(msg)
 			// Mid-batch flush: if a single fan-out message just pushed the
 			// buffer over the bulk cap, flush immediately instead of waiting
 			// for the outer loop — otherwise the next message's actions
