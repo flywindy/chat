@@ -43,6 +43,8 @@ services:
       vault-bootstrap:
         condition: service_completed_successfully
     environment:
+      - OTEL_SERVICE_NAME=room-worker
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318}
       - NATS_URL=nats://nats:4222
       - NATS_CREDS_FILE=/etc/nats/backend.creds
       - SITE_ID=site-local
