@@ -54,6 +54,9 @@ func (s *HistoryService) GetThreadMessages(c *natsrouter.Context, req models.Get
 	// response. This must run before both short-circuit returns below so no branch can
 	// return an unredacted parent. msg is subsequently stored in ParentMessage.
 	redactUnavailableQuote(msg, accessSince)
+	// Decode the parent's attachments here too — before the early returns below, so
+	// no-reply / tcount==0 threads still return a decoded ParentMessage.
+	decodeMessageAttachments(c, msg)
 
 	// Empty ThreadRoomID means no replies yet or a silently-failed stamp in message-worker.
 	if msg.ThreadRoomID == "" {
@@ -132,6 +135,7 @@ func (s *HistoryService) GetThreadMessages(c *natsrouter.Context, req models.Get
 	}
 
 	redactUnavailableQuotes(page.Data, accessSince)
+	setDecodedAttachments(c, page.Data)
 	return &models.GetThreadMessagesResponse{
 		Messages:          page.Data,
 		NextCursor:        page.NextCursor,
@@ -230,5 +234,6 @@ func (s *HistoryService) GetThreadParentMessages(c *natsrouter.Context, req mode
 	}
 
 	redactUnavailableQuotes(parentMessages, accessSince)
+	setDecodedAttachments(c, parentMessages)
 	return &models.GetThreadParentMessagesResponse{ParentMessages: parentMessages, Total: threadPage.Total}, nil
 }

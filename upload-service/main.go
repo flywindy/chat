@@ -33,6 +33,12 @@ type config struct {
 	// MaxImageSizeBytes is the per-image upload ceiling (default 25 MiB).
 	MaxImageSizeBytes int64 `env:"MAX_IMAGE_SIZE_BYTES" envDefault:"26214400"`
 
+	// FileUploadMaxFileSize is the single-file upload ceiling (default 100 MiB; -1 = unlimited).
+	FileUploadMaxFileSize int64 `env:"FILE_UPLOAD_MAX_FILE_SIZE" envDefault:"104857600"`
+	// FileUploadMediaTypeWhitelist/Blacklist gate the file endpoint's MIME types.
+	FileUploadMediaTypeWhitelist string `env:"FILE_UPLOAD_MEDIA_TYPE_WHITELIST" envDefault:""`
+	FileUploadMediaTypeBlacklist string `env:"FILE_UPLOAD_MEDIA_TYPE_BLACKLIST" envDefault:"image/svg+xml"`
+
 	OIDCIssuerURL string   `env:"OIDC_ISSUER_URL"`
 	OIDCAudiences []string `env:"OIDC_AUDIENCES" envSeparator:","`
 	TLSSkipVerify bool     `env:"TLS_SKIP_VERIFY" envDefault:"false"`
@@ -85,7 +91,9 @@ func run() error {
 		validator = v
 	}
 
-	handler := NewHandler(store, driveClient, cfg.MaxFiles, cfg.MaxImageSizeBytes)
+	mimeFilter := newMediaTypeFilter(cfg.FileUploadMediaTypeWhitelist, cfg.FileUploadMediaTypeBlacklist)
+	handler := NewHandler(store, driveClient, cfg.MaxFiles, cfg.MaxImageSizeBytes,
+		cfg.FileUploadMaxFileSize, mimeFilter, imagePreview)
 
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()

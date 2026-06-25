@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"go.uber.org/mock/gomock"
 
 	"github.com/hmchangw/chat/pkg/model"
+	"github.com/hmchangw/chat/pkg/model/cassandra"
 	"github.com/hmchangw/chat/pkg/roomcrypto"
 	"github.com/hmchangw/chat/pkg/roommetacache"
 	"github.com/hmchangw/chat/pkg/subject"
@@ -2449,6 +2451,31 @@ func TestPublishToThreadAccounts_Empty_NoOp(t *testing.T) {
 	h := NewHandler(store, us, pub, keyStore, false)
 	require.NoError(t, h.publishToThreadAccounts(context.Background(), nil, []byte(`{}`), "parent-1"))
 	assert.Empty(t, pub.records)
+}
+
+func TestBuildClientMessage_DecodesAttachments(t *testing.T) {
+	blob, err := json.Marshal(cassandra.Attachment{ID: "f1", Title: "a.png", Type: "file"})
+	require.NoError(t, err)
+	msg := model.Message{
+		ID: "m1", UserAccount: "alice", Attachments: [][]byte{blob},
+		QuotedParentMessage: &cassandra.QuotedParentMessage{Attachments: [][]byte{blob}},
+	}
+
+	cm := buildClientMessage(&msg, map[string]model.User{})
+
+	require.Len(t, cm.Attachments, 1)
+	assert.Equal(t, "f1", cm.Attachments[0].ID)
+	require.Len(t, cm.QuotedParentMessage.DecodedAttachments, 1)
+	assert.Equal(t, "f1", cm.QuotedParentMessage.DecodedAttachments[0].ID)
+
+	// Cloning the quoted parent must not mutate the caller's canonical message.
+	assert.Nil(t, msg.QuotedParentMessage.DecodedAttachments)
+
+	// The delivered JSON carries attachments as objects, not base64 strings.
+	out, err := json.Marshal(cm)
+	require.NoError(t, err)
+	assert.Contains(t, string(out), `"id":"f1"`)
+	assert.NotContains(t, string(out), base64.StdEncoding.EncodeToString(blob))
 }
 
 func TestHandleCreated_NonRename_NoRoomRenamedEvent(t *testing.T) {

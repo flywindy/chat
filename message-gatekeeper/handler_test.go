@@ -1654,3 +1654,62 @@ func TestHandler_processMessage_RequestTShowMapsToTShow(t *testing.T) {
 		assert.False(t, replyMsg.TShow)
 	})
 }
+
+func TestHandler_processMessage_CarriesAttachments(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	store := NewMockStore(ctrl)
+	store.EXPECT().GetSubscription(gomock.Any(), "alice", "room-1").
+		Return(&model.Subscription{User: model.SubscriptionUser{ID: "u1", Account: "alice"}, RoomID: "room-1", Roles: []model.Role{model.RoleMember}}, nil)
+	store.EXPECT().GetRoomMeta(gomock.Any(), "room-1").
+		Return(roommetacache.Meta{ID: "room-1", UserCount: 1}, nil)
+
+	var published []publishedMsg
+	pub := makePublishFunc(&published, nil)
+	reply := func(ctx context.Context, msg *nats.Msg) error { return nil }
+	h := NewHandler(store, nil, pub, reply, "site-a", nil, 500)
+
+	att := []byte(`{"id":"f1","title":"a.png","type":"file"}`)
+	req := model.SendMessageRequest{
+		ID: idgen.GenerateMessageID(), Content: "", RequestID: "01970a4f-8c2d-7c9a-abcd-e0123456789f",
+		Attachments: [][]byte{att},
+	}
+	out, err := h.processMessage(context.Background(), "alice", "room-1", "site-a", &req)
+	require.NoError(t, err)
+
+	require.Len(t, published, 1)
+	var evt model.MessageEvent
+	require.NoError(t, json.Unmarshal(published[0].data, &evt))
+	require.Len(t, evt.Message.Attachments, 1)
+	assert.JSONEq(t, string(att), string(evt.Message.Attachments[0]))
+
+	var replyMsg model.Message
+	require.NoError(t, json.Unmarshal(out, &replyMsg))
+	require.Len(t, replyMsg.Attachments, 1)
+}
+
+func TestHandler_processMessage_EmptyContentRejectedWithoutAttachments(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	store := NewMockStore(ctrl)
+	pub := makePublishFunc(nil, nil)
+	reply := func(ctx context.Context, msg *nats.Msg) error { return nil }
+	h := NewHandler(store, nil, pub, reply, "site-a", nil, 500)
+	req := model.SendMessageRequest{ID: idgen.GenerateMessageID(), Content: "", RequestID: "01970a4f-8c2d-7c9a-abcd-e0123456789f"}
+	_, err := h.processMessage(context.Background(), "alice", "room-1", "site-a", &req)
+	var ee *errcode.Error
+	require.ErrorAs(t, err, &ee)
+}
+
+func TestHandler_processMessage_RejectsTooManyAttachments(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	store := NewMockStore(ctrl)
+	pub := makePublishFunc(nil, nil)
+	reply := func(ctx context.Context, msg *nats.Msg) error { return nil }
+	h := NewHandler(store, nil, pub, reply, "site-a", nil, 500)
+	req := model.SendMessageRequest{
+		ID: idgen.GenerateMessageID(), Content: "hi", RequestID: "01970a4f-8c2d-7c9a-abcd-e0123456789f",
+		Attachments: [][]byte{[]byte("a"), []byte("b")},
+	}
+	_, err := h.processMessage(context.Background(), "alice", "room-1", "site-a", &req)
+	var ee *errcode.Error
+	require.ErrorAs(t, err, &ee)
+}

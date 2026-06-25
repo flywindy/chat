@@ -295,11 +295,11 @@ See [Error envelope](#6-error-envelope-reference). HTTP statuses:
 
 ---
 
-### 2.4 HTTP — Protected image upload/download
+### 2.4 HTTP — Protected file/image upload/download
 
-Two HTTP endpoints on `upload-service` for protected inline images, proxied
-to/from an internal Drive. Both require the `ssoToken` header (validated via
-OIDC) and that the caller is a member (has a subscription) of `:roomId`. Errors
+HTTP endpoints on `upload-service` for protected file uploads and downloads,
+proxied to/from an internal Drive. All require the `ssoToken` header (validated
+via OIDC) and that the caller is a member (has a subscription) of `:roomId`. Errors
 use the standard [§6](#6-error-envelope-reference) envelope `{ code, reason?, error }`.
 
 #### POST /api/v1/rooms/:roomId/upload/images
@@ -334,14 +334,14 @@ success/failure in a single `200` (partial success).
 | Field | Type | Notes |
 |---|---|---|
 | `name` | string | The file name. |
-| `status` | string | `Success` for an uploaded file, `failure` for a rejected one. |
+| `status` | string | `success` for an uploaded file, `failure` for a rejected one. |
 | `error` | string | Present on failure: `file size exceeds limit`, `file has an invalid file type`, or `failed to open file`. |
-| `relativePath` | string | Present on success: path to download the image via the GET endpoint below, including the `drive_host` query param. |
+| `relativePath` | string | Present on success: path to download the file via the GET endpoint below, including the `drive_host` query param. |
 
 ```json
 {
   "results": [
-    { "name": "pic1.png", "status": "Success", "relativePath": "api/v1/rooms/abc123/image/img-xyz?drive_host=https://drive.example.com" },
+    { "name": "pic1.png", "status": "success", "relativePath": "api/v1/rooms/abc123/file/img-xyz?drive_host=https://drive.example.com" },
     { "name": "big.exe", "status": "failure", "error": "file has an invalid file type" }
   ]
 }
@@ -370,14 +370,84 @@ A whole-request failure (not a per-file rejection) uses the
 
 ---
 
-#### GET /api/v1/rooms/:roomId/image/:fileId
+#### POST /api/v1/rooms/:roomId/upload
 
-**Endpoint:** `GET /api/v1/rooms/:roomId/image/:fileId`
-**Reply:** synchronous HTTP response (raw image bytes, not JSON)
+**Endpoint:** `POST /api/v1/rooms/:roomId/upload`
+**Reply:** synchronous HTTP response
 
-Downloads a protected image. The service proxies the bytes from Drive: it
-fetches a signed URL, streams the body, and pipes it straight back. Typically
-called with the `relativePath` returned by the upload endpoint.
+Uploads a single file (image/audio/video/document) for a room on behalf of the
+authenticated user and stores it in Drive. Returns a render-ready
+[Attachment](#attachment) the client uses to compose a `msg.send` (§4). This is a
+pure-HTTP endpoint — it does **not** publish a message.
+
+#### Request
+
+`Content-Type: multipart/form-data`
+
+| Field | Source | Type | Required | Notes |
+|---|---|---|---|---|
+| `ssoToken` | header | string | yes | OIDC-issued SSO token; identifies the uploader. |
+| `roomId` | path | string | yes | Target room ID; the caller must be a member. |
+| `file` | form file | file | yes | The single file, ≤ `FILE_UPLOAD_MAX_FILE_SIZE` (default 100 MiB). Its MIME type must pass the server's allow/deny lists (`FILE_UPLOAD_MEDIA_TYPE_WHITELIST`/`BLACKLIST`; `image/svg+xml` is blocked by default). |
+| `description` | form field | string | no | Optional attachment description. |
+
+#### Success response
+
+`HTTP 200`
+
+| Field | Type | Notes |
+|---|---|---|
+| `success` | boolean | Always `true` on a 200. |
+| `attachments` | [Attachment](#attachment)[] | One-element array describing the uploaded file. |
+
+```json
+{
+  "success": true,
+  "attachments": [
+    {
+      "id": "drive-file-1",
+      "title": "report.pdf",
+      "type": "file",
+      "description": "Q2 report",
+      "titleLink": "api/v1/rooms/abc123/file/drive-file-1?drive_host=https://drive.example.com",
+      "titleLinkDownload": true
+    }
+  ]
+}
+```
+
+#### Error response
+
+Uses the [§6](#6-error-envelope-reference) envelope. HTTP statuses:
+
+| Status | `code` | `reason` | Example body |
+|---|---|---|---|
+| 400 | `bad_request` | — | `{ "code": "bad_request", "error": "file type is not allowed" }` — also `roomId is required`, `file is required`, `file size exceeds limit`. |
+| 401 | `unauthenticated` | `invalid_sso_token` / `sso_token_expired` / `missing_fields` | `{ "code": "unauthenticated", "reason": "invalid_sso_token", "error": "invalid sso token" }` |
+| 403 | `forbidden` | `not_room_member` | `{ "code": "forbidden", "reason": "not_room_member", "error": "user alice is not in room abc123" }` |
+| 404 | `not_found` | — | `{ "code": "not_found", "error": "room not found" }` |
+| 500 | `internal` | — | `{ "code": "internal", "error": "internal error" }` — user missing in context, no email on the account, or a read fault; real cause logged server-side only. |
+| 503 | `unavailable` | — | `{ "code": "unavailable", "error": "drive upload failed" }` |
+
+#### Triggered events — success path
+
+`None — HTTP-only.`
+
+#### Triggered events — error path
+
+`None.`
+
+---
+
+#### GET /api/v1/rooms/:roomId/file/:fileId
+
+**Endpoint:** `GET /api/v1/rooms/:roomId/file/:fileId`
+**Reply:** synchronous HTTP response (raw file bytes, not JSON)
+
+Downloads a protected file (any type — image/audio/video/document). The service
+proxies the bytes from Drive: it fetches a signed URL, streams the body, and
+pipes it straight back. Typically called with the `relativePath` (image upload)
+or `titleLink` (file upload) returned by the upload endpoints.
 
 #### Request
 
@@ -403,7 +473,7 @@ See [Error envelope](#6-error-envelope-reference). HTTP statuses:
 | 401 | `unauthenticated` | `invalid_sso_token` / `sso_token_expired` / `missing_fields` | `{ "code": "unauthenticated", "reason": "invalid_sso_token", "error": "invalid sso token" }` |
 | 403 | `forbidden` | `not_room_member` | `{ "code": "forbidden", "reason": "not_room_member", "error": "user alice is not in room abc123" }` |
 | 500 | `internal` | — | `{ "code": "internal", "error": "internal error" }` — user missing in context. |
-| 503 | `unavailable` | — | `{ "code": "unavailable", "error": "failed to retrieve image" }` — Drive signer/download failure. |
+| 503 | `unavailable` | — | `{ "code": "unavailable", "error": "failed to retrieve file" }` — Drive signer/download failure. |
 
 #### Triggered events — success path
 
@@ -434,6 +504,36 @@ Actor / sender identity embedded in room and message events.
 | `chineseName` | string | Optional. Chinese display name — omitted when unset. |
 | `engName` | string | Optional. English display name — omitted when unset. |
 | `displayName` | string | Optional. Server-composed render-ready name. |
+
+#### Attachment
+
+Render-ready descriptor for an uploaded file. Returned by the upload endpoint
+([§2.3](#23-http--protected-image-uploaddownload)), carried (base64-encoded JSON)
+into `msg.send` (§4), and returned decoded as objects in message payloads. Media
+fields are present only for the matching MIME family.
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | string | Drive file ID. |
+| `title` | string | File name. |
+| `type` | string | Always `"file"`. |
+| `description` | string | Optional. |
+| `titleLink` | string | Relative download URL (the GET image endpoint). |
+| `titleLinkDownload` | boolean | Always `true`. |
+| `imageUrl` | string | Image only. Same as `titleLink`. |
+| `imageType` | string | Image only. MIME type. |
+| `imageSize` | number | Image only. Bytes. |
+| `imageDimensions` | [ImageDimensions](#imagedimensions) | Image only. Pixel size. |
+| `imagePreview` | string | Image only. Base64 32×32 blurred JPEG. |
+| `audioUrl` / `audioType` / `audioSize` | string / string / number | Audio only. |
+| `videoUrl` / `videoType` / `videoSize` | string / string / number | Video only. |
+
+#### ImageDimensions
+
+| Field | Type | Notes |
+|---|---|---|
+| `width` | number | Pixels. |
+| `height` | number | Pixels. |
 
 #### SubscriptionUser
 
@@ -2106,8 +2206,7 @@ Used by every history-service method that returns messages. Mirrors the Cassandr
 | `sender` | [MessageParticipant](#messageparticipant) | The message author. |
 | `msg` | string | The message body. |
 | `mentions` | [MessageParticipant](#messageparticipant)[] | Optional. |
-| `attachments` | string[] | Optional. Each entry is base64-encoded bytes. |
-| `file` | [MessageFile](#messagefile) | Optional. |
+| `attachments` | [Attachment](#attachment)[] | Optional. Decoded attachment objects (history-service decodes the stored blobs on read). |
 | `card` | [MessageCard](#messagecard) | Optional. |
 | `cardAction` | [MessageCardAction](#messagecardaction) | Optional. |
 | `tshow` | boolean | Optional. Whether a thread reply is also shown in the parent room. |
@@ -2144,14 +2243,6 @@ message projection, keyed by `id`.
 | `isBot` | boolean | Optional. |
 | `account` | string | Optional. |
 
-##### MessageFile
-
-| Field | Type | Notes |
-|---|---|---|
-| `id` | string | File ID. |
-| `name` | string | File name. |
-| `type` | string | MIME type. |
-
 ##### MessageCard
 
 | Field | Type | Notes |
@@ -2183,7 +2274,7 @@ Embedded snapshot of the quoted message at the time of quoting.
 | `createdAt` | string | RFC 3339. |
 | `msg` | string | Optional. Body snapshot. |
 | `mentions` | [MessageParticipant](#messageparticipant)[] | Optional. |
-| `attachments` | string[] | Optional. |
+| `attachments` | [Attachment](#attachment)[] | Optional. Decoded attachment objects. |
 | `messageLink` | string | Optional. |
 | `threadParentId` | string | Optional. Set if the quoted message itself is a thread reply. |
 | `threadParentCreatedAt` | string | Optional. RFC 3339. |
@@ -2916,7 +3007,7 @@ Returns pinned messages in a room, ordered most-recently-pinned first. Only subs
 
 The response is cursor-paginated (`cursor`/`limit` in the request, `nextCursor`/`hasNext` in the response). Because pins are capped at `MAX_PINNED_PER_ROOM` (default 10), most callers will see `hasNext=false` on the first page.
 
-**Access window — redacted stubs:** If the caller's subscription has a `historySharedSince` lower bound (partial history access), pins whose underlying message was created before that timestamp are returned as **redacted stubs**. The following fields are cleared: `msg` (replaced with `"This message is unavailable"`), `mentions`, `attachments`, `file`, `card`, `cardAction`, `quotedParentMessage`, `reactions`, `type`, `sysMsgData`. **All other Message fields remain populated** — identifiers, `sender`, `createdAt`, `pinnedAt`, `pinnedBy`, plus any thread/edit metadata — so the frontend can render a placeholder in place. **The row count is the same for every caller.** A quoted parent inside a still-visible pin is redacted by the same mechanism as elsewhere (see Load History).
+**Access window — redacted stubs:** If the caller's subscription has a `historySharedSince` lower bound (partial history access), pins whose underlying message was created before that timestamp are returned as **redacted stubs**. The following fields are cleared: `msg` (replaced with `"This message is unavailable"`), `mentions`, `attachments`, `card`, `cardAction`, `quotedParentMessage`, `reactions`, `type`, `sysMsgData`. **All other Message fields remain populated** — identifiers, `sender`, `createdAt`, `pinnedAt`, `pinnedBy`, plus any thread/edit metadata — so the frontend can render a placeholder in place. **The row count is the same for every caller.** A quoted parent inside a still-visible pin is redacted by the same mechanism as elsewhere (see Load History).
 
 **Timestamps:** Each returned message carries both `createdAt` (the underlying message's true creation time) and `pinnedAt` (when it was pinned). No second round-trip is needed to obtain the original creation timestamp.
 
@@ -4230,8 +4321,9 @@ The same subject and request body cover three send variants: plain message, thre
 | Field | Type | Required | Notes |
 |---|---|---|---|
 | `id` | string | yes | The message's ID. Must be 20-char base62. The client generates this and uses it for client-side optimistic rendering. |
-| `content` | string | yes | The message body. Must be non-empty and ≤ 20 KiB. |
+| `content` | string | yes* | The message body, ≤ 20 KiB. *Required unless `attachments` is present — a message with attachments may have empty `content`. |
 | `requestId` | string | yes | A 36-char hyphenated UUID (v4 or v7) the client generates. **Validated** — an empty or malformed `requestId` is rejected with no message published. The async reply is delivered to `chat.user.{account}.response.{requestId}`. |
+| `attachments` | string[] | no | Optional. Each entry is base64-encoded bytes — the JSON of one [Attachment](#attachment) from the upload endpoint ([§2.3](#23-http--protected-image-uploaddownload)). Max 1 entry, ≤ 8 KiB total. Stored opaquely and returned **decoded** (as `Attachment[]`) in message payloads. |
 | `threadParentMessageId` | string | no | Set when posting a thread reply. Must be a valid 20-char base62 message ID. |
 | `tshow` | boolean | no | The "Also send to channel" option. Only meaningful on a thread reply (`threadParentMessageId` set): the reply is persisted into the parent room's channel timeline as well as the thread (dual-write into `messages_by_room` in addition to `thread_messages_by_thread` + `messages_by_id`), and is surfaced with `tshow: true` on the persisted message. On a non-thread send the flag is **ignored and normalized to `false`** — the request is not rejected. |
 | `quotedParentMessageId` | string | no | Set when posting a quoted message. The gatekeeper fetches the parent and embeds a snapshot in the persisted message; the client does not send the snapshot itself. |
@@ -4374,8 +4466,7 @@ The canonical broadcast message (distinct from the history [Message schema](#mes
 | `userDisplayName` | string | Optional. Render-ready sender name. |
 | `content` | string | The message body. |
 | `sender` | [Participant](#participant) | Optional. Enriched sender identity. |
-| `attachments` | string[] | Optional. Each entry is base64-encoded bytes. |
-| `file` | [MessageFile](#messagefile) | Optional. |
+| `attachments` | [Attachment](#attachment)[] | Optional. Decoded attachment objects (same shape as history). |
 | `card` | [MessageCard](#messagecard) | Optional. |
 | `cardAction` | [MessageCardAction](#messagecardaction) | Optional. |
 | `mentions` | [Participant](#participant)[] | Optional. |

@@ -7,7 +7,6 @@ import (
 
 type Message = cassandra.Message
 type Participant = cassandra.Participant
-type File = cassandra.File
 type Card = cassandra.Card
 type CardAction = cassandra.CardAction
 type QuotedParentMessage = cassandra.QuotedParentMessage

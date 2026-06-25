@@ -103,6 +103,7 @@ func (s *HistoryService) LoadHistory(c *natsrouter.Context, req models.LoadHisto
 	}
 
 	redactUnavailableQuotes(page.Data, accessSince)
+	setDecodedAttachments(c, page.Data)
 	return &models.LoadHistoryResponse{
 		Messages:          page.Data,
 		MinUserLastSeenAt: minMs,
@@ -149,6 +150,7 @@ func (s *HistoryService) LoadNextMessages(c *natsrouter.Context, req models.Load
 	}
 
 	redactUnavailableQuotes(page.Data, accessSince)
+	setDecodedAttachments(c, page.Data)
 	return &models.LoadNextMessagesResponse{
 		Messages:   page.Data,
 		NextCursor: page.NextCursor,
@@ -193,6 +195,7 @@ func (s *HistoryService) LoadSurroundingMessages(c *natsrouter.Context, req mode
 	if remaining <= 0 {
 		only := *centralMsg
 		redactUnavailableQuote(&only, accessSince)
+		decodeMessageAttachments(c, &only)
 		return &models.LoadSurroundingMessagesResponse{
 			Messages: []models.Message{only},
 		}, nil
@@ -248,6 +251,7 @@ func (s *HistoryService) LoadSurroundingMessages(c *natsrouter.Context, req mode
 	messages = append(messages, afterPage.Data...)
 
 	redactUnavailableQuotes(messages, accessSince)
+	setDecodedAttachments(c, messages)
 	return &models.LoadSurroundingMessagesResponse{
 		Messages:   messages,
 		MoreBefore: beforePage.HasNext,

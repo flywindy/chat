@@ -8,7 +8,6 @@ CREATE TABLE IF NOT EXISTS chat.messages_by_room (
   msg                      TEXT,
   mentions                 SET<FROZEN<"Participant">>,
   attachments              LIST<BLOB>,
-  file                     FROZEN<"File">,
   card                     FROZEN<"Card">,
   card_action              FROZEN<"CardAction">,
   tshow                    BOOLEAN, // means from thread [also sent to channel]

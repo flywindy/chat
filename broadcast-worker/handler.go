@@ -18,6 +18,7 @@ import (
 	"github.com/hmchangw/chat/pkg/logctx"
 	"github.com/hmchangw/chat/pkg/mention"
 	"github.com/hmchangw/chat/pkg/model"
+	"github.com/hmchangw/chat/pkg/model/cassandra"
 	"github.com/hmchangw/chat/pkg/natsutil"
 	"github.com/hmchangw/chat/pkg/roomcrypto"
 	"github.com/hmchangw/chat/pkg/roomkeystore"
@@ -878,10 +879,20 @@ func buildClientMessage(msg *model.Message, userMap map[string]model.User) *mode
 		sender.ChineseName = msg.UserAccount
 		sender.EngName = msg.UserAccount
 	}
-	return &model.ClientMessage{
-		Message: *msg,
-		Sender:  &sender,
+	decoded, _ := cassandra.DecodeAttachments(msg.Attachments)
+	cm := &model.ClientMessage{
+		Message:     *msg,
+		Sender:      &sender,
+		Attachments: decoded,
 	}
+	// Clone the quoted parent before filling its decoded attachments so the
+	// caller's canonical *msg (a shared pointer) is not mutated.
+	if msg.QuotedParentMessage != nil {
+		qp := *msg.QuotedParentMessage
+		qp.DecodedAttachments, _ = cassandra.DecodeAttachments(qp.Attachments)
+		cm.QuotedParentMessage = &qp
+	}
+	return cm
 }
 
 // publishToThreadAccounts publishes payload concurrently to every account in

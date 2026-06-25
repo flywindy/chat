@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"mime/multipart"
 	"net/http"
 	"path/filepath"
@@ -13,16 +15,21 @@ import (
 	"github.com/hmchangw/chat/pkg/drive"
 	"github.com/hmchangw/chat/pkg/errcode"
 	"github.com/hmchangw/chat/pkg/errcode/errhttp"
+	"github.com/hmchangw/chat/pkg/model"
 )
 
 // Per-file result status values for the upload response.
 const (
 	statusFailure      = "failure" // pre-check rejection
-	driveStatusSuccess = "Success" // Drive's success marker
+	driveStatusSuccess = "success" // Drive's success marker
 )
 
 // imageFormField is the multipart form field carrying the uploaded images.
 const imageFormField = "images"
+
+// defaultUploadContentType is the fallback MIME for the single-file endpoint when
+// the multipart part carries no Content-Type.
+const defaultUploadContentType = "application/octet-stream"
 
 // driveClient is the subset of the Drive client the handlers use.
 type driveClient interface {
@@ -31,18 +38,29 @@ type driveClient interface {
 	GetBaseURLFromRoomOrigin(origin string) string
 }
 
+// previewFunc decodes an image once, returning a base64 preview and the source
+// dimensions; injected for testability.
+type previewFunc func(data []byte, mime string) (string, *model.ImageDimensions, error)
+
 // Handler holds the upload-service dependencies.
 type Handler struct {
 	store        Store
 	drive        driveClient
 	maxFiles     int
 	maxImageSize int64
+	maxFileSize  int64
+	mimeFilter   *mediaTypeFilter
+	preview      previewFunc
 }
 
-// NewHandler wires the handler dependencies. maxFiles caps the number of images
-// per request; maxImageSize is the per-image upload ceiling in bytes.
-func NewHandler(store Store, dc driveClient, maxFiles int, maxImageSize int64) *Handler {
-	return &Handler{store: store, drive: dc, maxFiles: maxFiles, maxImageSize: maxImageSize}
+// NewHandler wires the handler dependencies. maxFiles/maxImageSize gate the image
+// endpoint; maxFileSize/mimeFilter/preview gate the file endpoint.
+func NewHandler(store Store, dc driveClient, maxFiles int, maxImageSize, maxFileSize int64,
+	mimeFilter *mediaTypeFilter, preview previewFunc) *Handler {
+	return &Handler{
+		store: store, drive: dc, maxFiles: maxFiles, maxImageSize: maxImageSize,
+		maxFileSize: maxFileSize, mimeFilter: mimeFilter, preview: preview,
+	}
 }
 
 // uploadResultItem is one per-file entry in the partial-success upload response.
@@ -132,8 +150,7 @@ func (h *Handler) HandleUploadImages(c *gin.Context) {
 	for _, resp := range responses {
 		item := uploadResultItem{Name: resp.File.Filename, Status: resp.Status, Error: resp.Error}
 		if resp.Status == driveStatusSuccess {
-			item.RelativePath = fmt.Sprintf("api/v1/rooms/%s/image/%s?drive_host=%s",
-				resp.File.GroupID, resp.File.FileID, driveHost)
+			item.RelativePath = fileURL(resp.File.GroupID, resp.File.FileID, driveHost)
 		}
 		results = append(results, item)
 	}
@@ -141,9 +158,112 @@ func (h *Handler) HandleUploadImages(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"results": results})
 }
 
-// HandleDownloadImage proxies a protected image: it resolves a signed URL from
+// HandleUploadFile uploads one file for a room on behalf of the authenticated
+// user and returns a render-ready attachment. It does not publish a message.
+func (h *Handler) HandleUploadFile(c *gin.Context) {
+	ctx := logCtx(c)
+
+	roomID := c.Param("roomId")
+	if roomID == "" {
+		errhttp.Write(ctx, c, errcode.BadRequest("roomId is required"))
+		return
+	}
+	user, ok := userFromContext(c)
+	if !ok {
+		errhttp.Write(ctx, c, errcode.Internal("user not authenticated"))
+		return
+	}
+	if user.Email == "" {
+		errhttp.Write(ctx, c, errcode.Internal("the user has no email provided"))
+		return
+	}
+
+	if !h.requireMembership(ctx, c, roomID, user.Account) {
+		return
+	}
+
+	siteID, err := h.store.GetRoomSiteID(ctx, roomID)
+	if err != nil {
+		if errIsRoomNotFound(err) {
+			errhttp.Write(ctx, c, errcode.NotFound("room not found"))
+			return
+		}
+		errhttp.Write(ctx, c, fmt.Errorf("get room: %w", err))
+		return
+	}
+
+	fh, err := c.FormFile("file")
+	if err != nil {
+		errhttp.Write(ctx, c, errcode.BadRequest("file is required"))
+		return
+	}
+	if h.maxFileSize >= 0 && fh.Size > h.maxFileSize {
+		errhttp.Write(ctx, c, errcode.BadRequest("file size exceeds limit"))
+		return
+	}
+
+	// Normalize the (client-controlled) declared type: lowercase + strip params so
+	// the filter and the image branch see a clean value.
+	mime := normalizeMediaType(fh.Header.Get("Content-Type"))
+	if mime == "" {
+		mime = defaultUploadContentType
+	}
+	if !h.mimeFilter.allowed(mime) {
+		errhttp.Write(ctx, c, errcode.BadRequest("file type is not allowed"))
+		return
+	}
+
+	// Images are buffered once (for preview + dimensions) and the same bytes are
+	// reused for the Drive upload, so the file is read exactly once. Non-image
+	// types are streamed straight to Drive without buffering (a large video must
+	// not be held in memory).
+	var data []byte
+	var driveFile multipart.File
+	if strings.HasPrefix(mime, "image/") {
+		if data, err = readMultipartFile(fh); err != nil {
+			errhttp.Write(ctx, c, fmt.Errorf("read uploaded file: %w", err))
+			return
+		}
+		driveFile = bytesFile{bytes.NewReader(data)}
+	} else if driveFile, err = fh.Open(); err != nil {
+		errhttp.Write(ctx, c, fmt.Errorf("open uploaded file: %w", err))
+		return
+	}
+	defer driveFile.Close()
+
+	// Build the preview + dimensions BEFORE the Drive upload so a preview failure
+	// can't leave an orphaned Drive file. data is non-nil only for images.
+	var preview string
+	var dims *model.ImageDimensions
+	if data != nil {
+		if preview, dims, err = h.preview(data, mime); err != nil {
+			errhttp.Write(ctx, c, fmt.Errorf("build image preview: %w", err))
+			return
+		}
+	}
+
+	responses, err := h.drive.UploadGroupImages(user.Account, user.DisplayName(), user.Email, roomID, siteID,
+		[]drive.MultipartFile{{File: driveFile, Filename: fh.Filename}})
+	if err != nil {
+		errhttp.Write(ctx, c, fmt.Errorf("upload file to drive: %w", err))
+		return
+	}
+	if len(responses) == 0 || responses[0].Status != driveStatusSuccess {
+		errhttp.Write(ctx, c, errcode.Unavailable("drive upload failed"))
+		return
+	}
+	obj := responses[0].File
+
+	meta := fileMeta{id: obj.FileID, name: fh.Filename, mime: mime, size: obj.FileSize}
+	url := fileURL(roomID, obj.FileID, h.drive.GetBaseURLFromRoomOrigin(siteID))
+
+	att := buildAttachment(meta, c.PostForm("description"), url, preview, dims)
+	c.JSON(http.StatusOK, gin.H{"success": true, "attachments": []model.Attachment{att}})
+}
+
+// HandleDownloadFile proxies a protected file: it resolves a signed URL from
 // Drive, fetches the bytes, and streams them straight to the client.
-func (h *Handler) HandleDownloadImage(c *gin.Context) {
+func (h *Handler) HandleDownloadFile(c *gin.Context) {
 	ctx := logCtx(c)
 
 	roomID := c.Param("roomId")
@@ -174,7 +294,7 @@ func (h *Handler) HandleDownloadImage(c *gin.Context) {
 
 	img, err := h.drive.GetGroupImage(driveHost, roomID, fileID)
 	if err != nil {
-		errhttp.Write(ctx, c, errcode.Unavailable("failed to retrieve image", errcode.WithCause(err)))
+		errhttp.Write(ctx, c, errcode.Unavailable("failed to retrieve file", errcode.WithCause(err)))
 		return
 	}
 	defer img.Reader.Close()
@@ -224,3 +344,20 @@ func preprocessFiles(files []*multipart.FileHeader, maxSize int64) (results []up
 	}
 	return results, fileHeaders
 }
+
+// readMultipartFile opens, reads, and closes a multipart file header's content.
+func readMultipartFile(fh *multipart.FileHeader) ([]byte, error) {
+	f, err := fh.Open()
+	if err != nil {
+		return nil, fmt.Errorf("open: %w", err)
+	}
+	defer f.Close()
+	return io.ReadAll(f)
+}
+
+// bytesFile adapts a *bytes.Reader (Read/ReadAt/Seek) to multipart.File by adding
+// a no-op Close, so already-buffered image bytes can be handed to Drive without
+// re-reading the upload.
+type bytesFile struct{ *bytes.Reader }
+
+func (bytesFile) Close() error { return nil }

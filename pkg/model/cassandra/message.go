@@ -18,13 +18,6 @@ type Participant struct {
 	Account     string `json:"account,omitempty"     cql:"account"`
 }
 
-// File maps to the Cassandra "File" UDT.
-type File struct {
-	ID   string `json:"id"   cql:"id"`
-	Name string `json:"name" cql:"name"`
-	Type string `json:"type" cql:"type"`
-}
-
 // Card maps to the Cassandra "Card" UDT.
 type Card struct {
 	Template string `json:"template"       cql:"template"`
@@ -50,14 +43,15 @@ type EncMeta struct {
 
 // QuotedParentMessage maps to the Cassandra "QuotedParentMessage" UDT.
 type QuotedParentMessage struct {
-	MessageID   string        `json:"messageId"             cql:"message_id"`
-	RoomID      string        `json:"roomId"                cql:"room_id"`
-	Sender      Participant   `json:"sender"                cql:"sender"`
-	CreatedAt   time.Time     `json:"createdAt"             cql:"created_at"`
-	Msg         string        `json:"msg,omitempty"         cql:"msg"`
-	Mentions    []Participant `json:"mentions,omitempty"    cql:"mentions"`
-	Attachments [][]byte      `json:"attachments,omitempty" cql:"attachments"`
-	MessageLink string        `json:"messageLink,omitempty" cql:"message_link"`
+	MessageID          string        `json:"messageId"             cql:"message_id"`
+	RoomID             string        `json:"roomId"                cql:"room_id"`
+	Sender             Participant   `json:"sender"                cql:"sender"`
+	CreatedAt          time.Time     `json:"createdAt"             cql:"created_at"`
+	Msg                string        `json:"msg,omitempty"         cql:"msg"`
+	Mentions           []Participant `json:"mentions,omitempty"    cql:"mentions"`
+	Attachments        [][]byte      `json:"-" cql:"attachments"`
+	DecodedAttachments []Attachment  `json:"attachments,omitempty" cql:"-"`
+	MessageLink        string        `json:"messageLink,omitempty" cql:"message_link"`
 	// ThreadParentID and ThreadParentCreatedAt are set by message-worker when the quoted message is a TShow reply,
 	// embedding the parent's identity so history-service can enforce access-window checks without an extra read.
 	ThreadParentID        string     `json:"threadParentId,omitempty"        cql:"thread_parent_id"`
@@ -78,8 +72,8 @@ type Message struct {
 	Sender                Participant          `json:"sender"                          cql:"sender"`
 	Msg                   string               `json:"msg"                             cql:"msg"`
 	Mentions              []Participant        `json:"mentions,omitempty"              cql:"mentions"`
-	Attachments           [][]byte             `json:"attachments,omitempty"           cql:"attachments"`
-	File                  *File                `json:"file,omitempty"                  cql:"file"`
+	Attachments           [][]byte             `json:"-"                               cql:"attachments"`
+	DecodedAttachments    []Attachment         `json:"attachments,omitempty"           cql:"-"`
 	Card                  *Card                `json:"card,omitempty"                  cql:"card"`
 	CardAction            *CardAction          `json:"cardAction,omitempty"            cql:"card_action"`
 	TShow                 bool                 `json:"tshow,omitempty"                 cql:"tshow"`

@@ -18,6 +18,8 @@ services:
       - MONGO_DB=chat
       - MAX_FILES=10
       - MAX_IMAGE_SIZE_BYTES=26214400
+      - FILE_UPLOAD_MAX_FILE_SIZE=104857600
+      - FILE_UPLOAD_MEDIA_TYPE_BLACKLIST=image/svg+xml
       - OIDC_ISSUER_URL=http://keycloak:8080/realms/chatapp
       - OIDC_AUDIENCES=nats-chat
       - TLS_SKIP_VERIFY=false

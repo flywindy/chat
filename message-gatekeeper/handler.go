@@ -27,6 +27,11 @@ import (
 
 const maxContentBytes = 20 * 1024 // 20 KB
 
+const (
+	maxAttachments     = 1
+	maxAttachmentBytes = 8 * 1024 // 8 KiB total; blobs are small JSON Attachment metadata
+)
+
 // replyFunc is the function signature for publishing a reply to a NATS subject.
 type replyFunc func(ctx context.Context, msg *nats.Msg) error
 
@@ -226,8 +231,8 @@ func (h *Handler) processMessage(ctx context.Context, account, roomID, siteID st
 		return nil, errcode.BadRequest(fmt.Sprintf("invalid thread parent message ID %q: must be a 20-char base62 string", req.ThreadParentMessageID))
 	}
 
-	// Validate content is non-empty
-	if req.Content == "" {
+	// A message with attachments may carry empty content.
+	if req.Content == "" && len(req.Attachments) == 0 {
 		return nil, errcode.BadRequest("content must not be empty")
 	}
 
@@ -237,6 +242,23 @@ func (h *Handler) processMessage(ctx context.Context, account, roomID, siteID st
 			fmt.Sprintf("content exceeds maximum size of %d bytes", maxContentBytes),
 			errcode.WithMetadata("maxContentBytes", strconv.Itoa(maxContentBytes), "attempted", strconv.Itoa(len(req.Content))),
 		)
+	}
+
+	// Validate attachments: count + total byte caps. Blobs are otherwise opaque
+	// here (decoded leniently on the read path) — but an empty blob is rejected
+	// since it carries no attachment and would yield a contentless message.
+	if len(req.Attachments) > maxAttachments {
+		return nil, errcode.BadRequest(fmt.Sprintf("too many attachments: max %d", maxAttachments))
+	}
+	var attachmentBytes int
+	for i, a := range req.Attachments {
+		if len(a) == 0 {
+			return nil, errcode.BadRequest(fmt.Sprintf("attachment[%d] must not be empty", i))
+		}
+		attachmentBytes += len(a)
+	}
+	if attachmentBytes > maxAttachmentBytes {
+		return nil, errcode.BadRequest(fmt.Sprintf("attachments exceed maximum size of %d bytes", maxAttachmentBytes))
 	}
 
 	// #322: the gatekeeper resolves the parent's createdAt server-side
@@ -339,6 +361,7 @@ func (h *Handler) processMessage(ctx context.Context, account, roomID, siteID st
 		ThreadParentMessageCreatedAt: threadParentCreatedAt,
 		TShow:                        tshow,
 		QuotedParentMessage:          quotedSnapshot,
+		Attachments:                  req.Attachments,
 	}
 
 	// Publish MessageEvent to MESSAGES_CANONICAL

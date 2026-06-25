@@ -161,7 +161,6 @@ func TestRepository_GetThreadMessages_ColumnScan(t *testing.T) {
 
 	sender := models.Participant{ID: "u1", EngName: "Alice", CompanyName: "Acme", AppID: "app1", AppName: "MyApp", IsBot: false, Account: "alice"}
 	mentionUser := models.Participant{ID: "u3", Account: "charlie"}
-	file := models.File{ID: "f1", Name: "doc.pdf", Type: "application/pdf"}
 	card := models.Card{Template: "approval", Data: []byte("card-data")}
 	cardAction := models.CardAction{Verb: "approve", Text: "Approve", CardID: "c1", DisplayText: "Click", HideExecLog: true, CardTmID: "tm1", Data: []byte("action-data")}
 	quotedSender := models.Participant{ID: "u5", Account: "eve"}
@@ -177,16 +176,16 @@ func TestRepository_GetThreadMessages_ColumnScan(t *testing.T) {
 
 	insertCQL := `INSERT INTO thread_messages_by_thread (
         thread_room_id, created_at, message_id, room_id, thread_parent_id,
-        sender, msg, mentions, attachments, file, card, card_action,
+        sender, msg, mentions, attachments, card, card_action,
         quoted_parent_message, visible_to, reactions, deleted,
         type, sys_msg_data, site_id, edited_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	insertArgs := []any{
 		"tr-full", ts, "m-reply-full", "r-thread-full", "m-thread-parent",
 		sender, "thread reply body",
 		[]models.Participant{mentionUser},
 		[][]byte{[]byte("attach1"), []byte("attach2")},
-		file, card, cardAction,
+		card, cardAction,
 		quotedMsg, "u1",
 		reactions,
 		true, "user_joined", []byte("sys-data"),
@@ -225,11 +224,6 @@ func TestRepository_GetThreadMessages_ColumnScan(t *testing.T) {
 	require.Len(t, msg.Attachments, 2)
 	assert.Equal(t, []byte("attach1"), msg.Attachments[0])
 	assert.Equal(t, []byte("attach2"), msg.Attachments[1])
-
-	require.NotNil(t, msg.File)
-	assert.Equal(t, "f1", msg.File.ID)
-	assert.Equal(t, "doc.pdf", msg.File.Name)
-	assert.Equal(t, "application/pdf", msg.File.Type)
 
 	require.NotNil(t, msg.Card)
 	assert.Equal(t, "approval", msg.Card.Template)

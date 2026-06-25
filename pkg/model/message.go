@@ -23,7 +23,6 @@ type Message struct {
 	Attachments                  [][]byte                       `json:"attachments,omitempty"                  bson:"attachments,omitempty"`
 	Card                         *cassandra.Card                `json:"card,omitempty"                         bson:"card,omitempty"`
 	CardAction                   *cassandra.CardAction          `json:"cardAction,omitempty"                   bson:"cardAction,omitempty"`
-	File                         *cassandra.File                `json:"file,omitempty"                         bson:"file,omitempty"`
 	Mentions                     []Participant                  `json:"mentions,omitempty"                     bson:"mentions,omitempty"`
 	CreatedAt                    time.Time                      `json:"createdAt"                              bson:"createdAt"`
 	EditedAt                     *time.Time                     `json:"editedAt,omitempty"                     bson:"editedAt,omitempty"`
@@ -76,6 +75,10 @@ type SendMessageRequest struct {
 	// false on non-thread sends. Maps onto Message.TShow; same wire name as
 	// the persisted message field the reply echoes back.
 	TShow bool `json:"tshow,omitempty"`
+	// Attachments carries render-ready attachment blobs produced by upload-service
+	// (one JSON object per element). message-gatekeeper validates and copies them
+	// onto the canonical Message.
+	Attachments [][]byte `json:"attachments,omitempty"`
 }
 
 // SenderDisplayName returns the canonical render-ready name for the message's

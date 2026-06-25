@@ -213,8 +213,9 @@ type Participant struct {
 
 // ClientMessage wraps Message with enriched sender info for client consumption.
 type ClientMessage struct {
-	Message `json:",inline" bson:",inline"`
-	Sender  *Participant `json:"sender,omitempty"`
+	Message     `json:",inline" bson:",inline"`
+	Sender      *Participant `json:"sender,omitempty"`
+	Attachments []Attachment `json:"attachments,omitempty"`
 }
 
 type RoomEventType string

@@ -26,14 +26,14 @@ const (
 	editPinnedMsg = `UPDATE pinned_messages_by_room SET msg = ?, enc_payload = null, enc_meta = null, edited_at = ?, updated_at = ? WHERE room_id = ? AND pinned_at = ? AND message_id = ?`
 
 	// Encrypted-path edits null the encrypted legacy body columns (msg,
-	// attachments, card, card_action, file, quoted_parent_message).
+	// attachments, card, card_action, quoted_parent_message).
 	// buildEditPayload has already promoted those into the new bundle; leaving
 	// any plaintext column behind would defeat the rollout's at-rest goal on
 	// edited legacy rows. sys_msg_data is NOT encrypted, so it is preserved.
-	editMsgByIDEncrypted   = `UPDATE messages_by_id SET enc_payload = ?, enc_meta = ?, msg = null, attachments = null, card = null, card_action = null, file = null, quoted_parent_message = null, edited_at = ?, updated_at = ? WHERE message_id = ?`
-	editMsgByRoomEncrypted = `UPDATE messages_by_room SET enc_payload = ?, enc_meta = ?, msg = null, attachments = null, card = null, card_action = null, file = null, quoted_parent_message = null, edited_at = ?, updated_at = ? WHERE room_id = ? AND bucket = ? AND created_at = ? AND message_id = ?`
-	editThreadMsgEncrypted = `UPDATE thread_messages_by_thread SET enc_payload = ?, enc_meta = ?, msg = null, attachments = null, card = null, card_action = null, file = null, quoted_parent_message = null, edited_at = ?, updated_at = ? WHERE thread_room_id = ? AND created_at = ? AND message_id = ?`
-	editPinnedMsgEncrypted = `UPDATE pinned_messages_by_room SET enc_payload = ?, enc_meta = ?, msg = null, attachments = null, card = null, card_action = null, file = null, quoted_parent_message = null, edited_at = ?, updated_at = ? WHERE room_id = ? AND pinned_at = ? AND message_id = ?`
+	editMsgByIDEncrypted   = `UPDATE messages_by_id SET enc_payload = ?, enc_meta = ?, msg = null, attachments = null, card = null, card_action = null, quoted_parent_message = null, edited_at = ?, updated_at = ? WHERE message_id = ?`
+	editMsgByRoomEncrypted = `UPDATE messages_by_room SET enc_payload = ?, enc_meta = ?, msg = null, attachments = null, card = null, card_action = null, quoted_parent_message = null, edited_at = ?, updated_at = ? WHERE room_id = ? AND bucket = ? AND created_at = ? AND message_id = ?`
+	editThreadMsgEncrypted = `UPDATE thread_messages_by_thread SET enc_payload = ?, enc_meta = ?, msg = null, attachments = null, card = null, card_action = null, quoted_parent_message = null, edited_at = ?, updated_at = ? WHERE thread_room_id = ? AND created_at = ? AND message_id = ?`
+	editPinnedMsgEncrypted = `UPDATE pinned_messages_by_room SET enc_payload = ?, enc_meta = ?, msg = null, attachments = null, card = null, card_action = null, quoted_parent_message = null, edited_at = ?, updated_at = ? WHERE room_id = ? AND pinned_at = ? AND message_id = ?`
 
 	deleteMsgByIDCAS = `UPDATE messages_by_id SET deleted = true, enc_payload = null, enc_meta = null, updated_at = ? WHERE message_id = ? IF deleted != true`
 	deleteMsgByRoom  = `UPDATE messages_by_room SET deleted = true, enc_payload = null, enc_meta = null, updated_at = ? WHERE room_id = ? AND bucket = ? AND created_at = ? AND message_id = ?`
@@ -118,14 +118,13 @@ func (r *Repository) readEncryptedFields(ctx context.Context, msg *models.Messag
 		attachments [][]byte
 		card        *cassmodel.Card
 		cardAction  *cassmodel.CardAction
-		file        *cassmodel.File
 		quoted      *cassmodel.QuotedParentMessage
 	)
 	err := r.session.Query(
-		`SELECT enc_payload, enc_meta, msg, attachments, card, card_action, file, quoted_parent_message
+		`SELECT enc_payload, enc_meta, msg, attachments, card, card_action, quoted_parent_message
 		 FROM messages_by_id WHERE message_id = ?`,
 		msg.MessageID,
-	).WithContext(ctx).Scan(&encPayload, &encMeta, &msgText, &attachments, &card, &cardAction, &file, &quoted)
+	).WithContext(ctx).Scan(&encPayload, &encMeta, &msgText, &attachments, &card, &cardAction, &quoted)
 	if err != nil {
 		if errors.Is(err, gocql.ErrNotFound) {
 			return atrest.EncryptedFields{}, ErrMessageNotFound
@@ -153,7 +152,6 @@ func (r *Repository) readEncryptedFields(ctx context.Context, msg *models.Messag
 		Attachments: attachments,
 		Card:        card,
 		CardAction:  cardAction,
-		File:        file,
 	}
 	if quoted != nil && (quoted.Msg != "" || len(quoted.Attachments) > 0) {
 		fields.QuotedParentContent = &atrest.QuotedParentEncrypted{
