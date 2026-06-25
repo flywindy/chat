@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"github.com/hmchangw/chat/pkg/model"
 	"github.com/hmchangw/chat/pkg/stream"
@@ -1008,6 +1009,90 @@ func TestIntegration_HandleRoomVisibilityChanged(t *testing.T) {
 	assert.Equal(t, []model.Role{model.RoleOwner}, rolesByAccount["bob"], "bob should be owner")
 	assert.Equal(t, []model.Role{model.RoleMember}, rolesByAccount["alice"], "alice should be member")
 	assert.Equal(t, []model.Role{model.RoleMember}, rolesByAccount["carol"], "carol should be member")
+}
+
+// ensureIndexes must standardize on (threadRoomId, userAccount) — the same
+// natural key room-service, message-worker, and history-service create — and
+// drop the legacy (threadRoomId, userId) index that message-worker explicitly
+// removes. Otherwise the two services thrash the index across restarts and the
+// collection ends up with two conflicting unique constraints.
+func TestInboxStore_EnsureIndexes_DropsLegacyAndCreatesUserAccount_Integration(t *testing.T) {
+	db := setupMongo(t)
+	ctx := context.Background()
+	threadSubs := db.Collection("thread_subscriptions")
+	store := &mongoInboxStore{threadSubCol: threadSubs}
+
+	// Simulate a DB where the legacy index already exists (older inbox-worker).
+	_, err := threadSubs.Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys:    bson.D{{Key: "threadRoomId", Value: 1}, {Key: "userId", Value: 1}},
+		Options: options.Index().SetUnique(true),
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, store.ensureIndexes(ctx))
+
+	cur, err := threadSubs.Indexes().List(ctx)
+	require.NoError(t, err)
+	var idxs []bson.M
+	require.NoError(t, cur.All(ctx, &idxs))
+
+	names := make(map[string]bool, len(idxs))
+	for _, ix := range idxs {
+		if n, ok := ix["name"].(string); ok {
+			names[n] = true
+		}
+	}
+	assert.True(t, names["threadRoomId_1_userAccount_1"],
+		"ensureIndexes must create the canonical (threadRoomId, userAccount) unique index")
+	assert.False(t, names["threadRoomId_1_userId_1"],
+		"ensureIndexes must drop the legacy (threadRoomId, userId) index")
+}
+
+// Regression: a federated upsert for an existing (threadRoomId, userAccount)
+// whose userId differs from the local document must MERGE onto that document,
+// not insert a second one. userId is a site-local identity; only userAccount is
+// stable across federation. Keying the upsert on userId lets the filter miss the
+// existing doc and either create a silent duplicate or — once the canonical
+// (threadRoomId, userAccount) unique index is present — fail with E11000 and
+// poison the federation lane.
+func TestInboxStore_UpsertThreadSubscription_DedupesByUserAccount_Integration(t *testing.T) {
+	db := setupMongo(t)
+	ctx := context.Background()
+	threadSubs := db.Collection("thread_subscriptions")
+	store := &mongoInboxStore{threadSubCol: threadSubs}
+	require.NoError(t, store.ensureIndexes(ctx))
+
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	// Existing local document for (tr-1, "bob") with the local userId.
+	first := &model.ThreadSubscription{
+		ID: "ts-local", ParentMessageID: "pm-1", RoomID: "r1", ThreadRoomID: "tr-1",
+		UserID: "u-bob-local", UserAccount: "bob", SiteID: "site-a",
+		CreatedAt: now, UpdatedAt: now,
+	}
+	require.NoError(t, store.UpsertThreadSubscription(ctx, first))
+
+	// Federated event for the SAME (threadRoomId, userAccount) but a different
+	// userId. Must merge (monotonic mention), not collide.
+	later := now.Add(time.Minute)
+	second := &model.ThreadSubscription{
+		ID: "ts-remote", ParentMessageID: "pm-1", RoomID: "r1", ThreadRoomID: "tr-1",
+		UserID: "u-bob-remote", UserAccount: "bob", SiteID: "site-a",
+		HasMention: true, CreatedAt: later, UpdatedAt: later,
+	}
+	require.NoError(t, store.UpsertThreadSubscription(ctx, second),
+		"upsert keyed on userId would insert a duplicate and hit the (threadRoomId,userAccount) unique index")
+
+	count, err := threadSubs.CountDocuments(ctx, bson.M{"threadRoomId": "tr-1", "userAccount": "bob"})
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, count, "must dedupe on (threadRoomId, userAccount), not create a second document")
+
+	var got model.ThreadSubscription
+	require.NoError(t, threadSubs.
+		FindOne(ctx, bson.M{"threadRoomId": "tr-1", "userAccount": "bob"}).Decode(&got))
+	assert.Equal(t, "ts-local", got.ID, "first insert's _id is preserved via $setOnInsert")
+	assert.True(t, got.HasMention, "monotonic mention merged from the federated event")
+	assert.True(t, got.UpdatedAt.Equal(later), "updatedAt advances to the later event")
 }
 
 // Missing thread-sub: gate doesn't match, Subscription is skipped too.

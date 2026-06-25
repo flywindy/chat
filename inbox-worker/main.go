@@ -254,25 +254,39 @@ func (s *mongoInboxStore) UpdateSubscriptionRead(ctx context.Context, roomID, ac
 	return nil
 }
 
-// ensureIndexes creates the unique index on (threadRoomId, userId) used by
-// UpsertThreadSubscription. The index name and shape match what message-worker
-// creates in its own threadStoreMongo so both services agree on the natural
-// key for thread subscriptions.
+// ensureIndexes creates the unique index on (threadRoomId, userAccount) used by
+// UpsertThreadSubscription. The shape matches what room-service, message-worker,
+// and history-service create so every service that touches thread_subscriptions
+// agrees on the natural key. userAccount is the stable cross-site identity;
+// userId is site-local, so keying on it would let federated upserts miss
+// existing documents and collide on this unique index.
 func (s *mongoInboxStore) ensureIndexes(ctx context.Context) error {
+	// Best-effort: drop the legacy (threadRoomId, userId) unique index so the
+	// (threadRoomId, userAccount) index can be created without a key conflict.
+	// Mirrors message-worker's threadStoreMongo.EnsureIndexes; the index may not
+	// exist (fresh deploy / test container), so ignore all errors.
+	_ = s.threadSubCol.Indexes().DropOne(ctx, "threadRoomId_1_userId_1") //nolint:errcheck
+
 	if _, err := s.threadSubCol.Indexes().CreateOne(ctx, mongo.IndexModel{
-		Keys:    bson.D{{Key: "threadRoomId", Value: 1}, {Key: "userId", Value: 1}},
+		Keys:    bson.D{{Key: "threadRoomId", Value: 1}, {Key: "userAccount", Value: 1}},
 		Options: options.Index().SetUnique(true),
 	}); err != nil {
-		return fmt.Errorf("ensure thread_subscriptions (threadRoomId,userId) index: %w", err)
+		return fmt.Errorf("ensure thread_subscriptions (threadRoomId,userAccount) index: %w", err)
 	}
 	return nil
 }
 
 // UpsertThreadSubscription inserts the subscription on first event for a
-// (threadRoomId, userId) pair, and on subsequent events updates only
+// (threadRoomId, userAccount) pair, and on subsequent events updates only
 // updatedAt and (monotonically) hasMention. $setOnInsert pins the immutable
 // fields on insert; $set always refreshes updatedAt; $max on hasMention
 // guarantees a non-mention event never clears a prior mention=true.
+//
+// The dedupe key is userAccount (not userId) so it matches the unique index and
+// the key used by message-worker / room-service / history-service. userId is a
+// site-local identity that can differ between the local document and a federated
+// event for the same account; keying on it would insert a duplicate that then
+// collides with the (threadRoomId, userAccount) unique index.
 //
 // $max on a bool works because BSON encodes false (0x00) < true (0x01), so
 // $max(existing, incoming) for a bool is equivalent to a monotonic OR.
@@ -281,7 +295,7 @@ func (s *mongoInboxStore) ensureIndexes(ctx context.Context) error {
 // only — never by $setOnInsert) so MongoDB doesn't reject the update with a
 // "conflicting update operators" error.
 func (s *mongoInboxStore) UpsertThreadSubscription(ctx context.Context, sub *model.ThreadSubscription) error {
-	filter := bson.M{"threadRoomId": sub.ThreadRoomID, "userId": sub.UserID}
+	filter := bson.M{"threadRoomId": sub.ThreadRoomID, "userAccount": sub.UserAccount}
 	update := bson.M{
 		"$setOnInsert": bson.M{
 			"_id":             sub.ID,
