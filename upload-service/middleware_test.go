@@ -97,12 +97,11 @@ func TestRequestIDMiddleware_MintsAndEchoes(t *testing.T) {
 	assert.NotEmpty(t, w.Header().Get("X-Request-ID"))
 }
 
-func TestAccessLogAndOtelMiddleware_PassThrough(t *testing.T) {
+func TestAccessLogMiddleware_PassThrough(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	r.Use(requestIDMiddleware())
 	r.Use(accessLogMiddleware())
-	r.Use(otelMiddleware())
 	called := false
 	r.GET("/x", func(c *gin.Context) {
 		called = true

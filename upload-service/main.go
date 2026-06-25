@@ -11,7 +11,10 @@ import (
 	"github.com/caarlos0/env/v11"
 	"github.com/gin-gonic/gin"
 
+	o11ygin "github.com/flywindy/o11y/gin"
+
 	"github.com/hmchangw/chat/pkg/drive"
+	"github.com/hmchangw/chat/pkg/ginutil"
 	"github.com/hmchangw/chat/pkg/mongoutil"
 	"github.com/hmchangw/chat/pkg/obs"
 	pkgoidc "github.com/hmchangw/chat/pkg/oidc"
@@ -89,6 +92,11 @@ func run() error {
 
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
+	// CORS handles preflight before tracing so OPTIONS noise does not pollute Tempo.
+	r.Use(ginutil.CORS())
+	// o11y server-span middleware wraps real requests so downstream slog/handlers
+	// are trace-correlated.
+	r.Use(o11ygin.Middleware("upload-service", sdk.TracerProvider(), sdk.MeterProvider(), sdk.Propagator)...)
 	r.Use(gin.Recovery())
 	r.Use(requestIDMiddleware())
 	r.Use(accessLogMiddleware())
