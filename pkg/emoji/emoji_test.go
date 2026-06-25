@@ -147,6 +147,40 @@ func TestValidator_Validate_NFC_ASCIIStable(t *testing.T) {
 	}
 }
 
+type lookupFunc func(ctx context.Context, siteID, shortcode string) (bool, error)
+
+func (f lookupFunc) CustomEmojiExists(ctx context.Context, siteID, shortcode string) (bool, error) {
+	return f(ctx, siteID, shortcode)
+}
+
+func TestValidate_StandardShortcode_PassesWithoutCustomLookup(t *testing.T) {
+	// Lookup that fails the test if it is ever called for a standard shortcode.
+	v := emoji.NewValidator(lookupFunc(func(ctx context.Context, siteID, sc string) (bool, error) {
+		t.Fatalf("custom lookup must not run for standard shortcode %q", sc)
+		return false, nil
+	}))
+	got, err := v.Validate(context.Background(), "site-local", "thumbsup")
+	if err != nil || got != "thumbsup" {
+		t.Fatalf("standard shortcode rejected: got=%q err=%v", got, err)
+	}
+}
+
+func TestValidate_UnknownNonStandard_ReturnsUnknown(t *testing.T) {
+	v := emoji.NewValidator(lookupFunc(func(ctx context.Context, siteID, sc string) (bool, error) { return false, nil }))
+	_, err := v.Validate(context.Background(), "site-local", "zzznotreal")
+	if !errors.Is(err, emoji.ErrUnknownShortcode) {
+		t.Fatalf("want ErrUnknownShortcode, got %v", err)
+	}
+}
+
+func TestValidate_Malformed_ReturnsInvalid(t *testing.T) {
+	v := emoji.NewValidator(lookupFunc(func(ctx context.Context, siteID, sc string) (bool, error) { return false, nil }))
+	_, err := v.Validate(context.Background(), "site-local", ":thumbsup:")
+	if !errors.Is(err, emoji.ErrInvalidShortcode) {
+		t.Fatalf("want ErrInvalidShortcode, got %v", err)
+	}
+}
+
 // TestValidator_Validate_NFC_CollapsesEquivalentForms documents that the NFC
 // step is wired. Both forms fail today (regex is ASCII); when the regex
 // broadens, both must yield byte-identical canonical strings.

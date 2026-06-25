@@ -3089,7 +3089,7 @@ Toggles a reaction on a message. Any subscribed room member may react — the se
 | Field | Type | Required | Notes |
 |---|---|---|---|
 | `messageId` | string | yes | The message to react to. |
-| `shortcode` | string | yes | The bare reaction shortcode without surrounding colons (e.g. `acme_party`). Must match `^[a-z0-9_+-]{1,32}$` after NFC normalisation. The server resolves the shortcode against the `custom_emojis` collection for the site; an unregistered shortcode returns `"invalid reaction shortcode"`. |
+| `shortcode` | string | yes | The bare reaction shortcode without surrounding colons (e.g. `thumbsup`, `acme_party`). Must match `^[a-z0-9_+-]{1,32}$` after NFC normalisation. The server accepts a built-in set of standard emoji (gemoji/GitHub-style shortcodes — `thumbsup`, `+1`, `heart`, etc.) without any per-site setup, then falls back to the per-site `custom_emojis` collection for additional shortcodes. |
 
 ```json
 {
@@ -3118,7 +3118,7 @@ Toggles a reaction on a message. Any subscribed room member may react — the se
 
 ##### Error response
 
-See [Error envelope](#6-error-envelope-reference). Common errors: `"messageId is required"`, `"shortcode is required"`, `"invalid reaction shortcode"` (format or unknown custom emoji), `"message not found"` (also returned when attempting to _add_ a reaction to a soft-deleted message), `"not subscribed to room"`, `"failed to add reaction"`, `"failed to remove reaction"`.
+See [Error envelope](#6-error-envelope-reference). Common errors: `"messageId is required"`, `"shortcode is required"`, `"invalid reaction shortcode"` (malformed: fails `^[a-z0-9_+-]{1,32}$` after NFC), `"unknown reaction shortcode"` (well-formed but neither a built-in standard emoji nor a registered custom emoji for this site), `"message not found"` (also returned when attempting to _add_ a reaction to a soft-deleted message), `"not subscribed to room"`, `"failed to add reaction"`, `"failed to remove reaction"`.
 
 ##### Triggered events — success path
 

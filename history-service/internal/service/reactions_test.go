@@ -101,17 +101,19 @@ func TestHistoryService_ReactMessage_ValidationErrors(t *testing.T) {
 			wantMsg:      "invalid reaction shortcode",
 		},
 		{
+			// well-formed, not in standard set, not registered → "unknown reaction shortcode"
 			name:      "unknown custom shortcode",
 			shortcode: "no_such_emoji", messageID: "m1",
 			stubLookup: func(f reactFixture, sc string) {
 				f.customEmojis.EXPECT().CustomEmojiExists(gomock.Any(), "site-test", sc).Return(false, nil)
 			},
 			wantCategory: errcode.CodeBadRequest,
-			wantMsg:      "invalid reaction shortcode",
+			wantMsg:      "unknown reaction shortcode",
 		},
 		{
+			// thumbsup is now a standard emoji; use a custom shortcode to exercise the lookup error path
 			name:      "validator internal error (lookup down)",
-			shortcode: "thumbsup", messageID: "m1",
+			shortcode: "acme_test", messageID: "m1",
 			stubLookup: func(f reactFixture, sc string) {
 				f.customEmojis.EXPECT().CustomEmojiExists(gomock.Any(), "site-test", sc).Return(false, errors.New("mongo down"))
 			},
