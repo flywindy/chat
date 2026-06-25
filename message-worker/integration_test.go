@@ -20,6 +20,7 @@ import (
 	"github.com/hmchangw/chat/pkg/model/cassandra"
 	"github.com/hmchangw/chat/pkg/msgbucket"
 	"github.com/hmchangw/chat/pkg/testutil"
+	"github.com/hmchangw/chat/pkg/threadcount"
 	"github.com/hmchangw/chat/pkg/userstore"
 )
 
@@ -1789,4 +1790,22 @@ func TestCassandraStore_SaveThreadMessage_TShowPersistedInThread(t *testing.T) {
 		// explicit false (not null) — assert that, so a missing-write regression fails.
 		assert.False(t, gotTShow, "tshow=false must be persisted as false in thread_messages_by_thread")
 	})
+}
+
+func TestCassandraStore_countThreadReplies_CapsAtThreadcountCap(t *testing.T) {
+	ctx := context.Background()
+	cassSession := setupCassandra(t)
+
+	base := time.Now().UTC()
+	for i := 0; i < threadcount.Cap+10; i++ {
+		require.NoError(t, cassSession.Query(
+			`INSERT INTO thread_messages_by_thread (thread_room_id, created_at, message_id) VALUES (?, ?, ?)`,
+			"thread-1", base.Add(time.Duration(i)*time.Millisecond), fmt.Sprintf("reply-%d", i),
+		).WithContext(ctx).Exec())
+	}
+
+	store := NewCassandraStore(cassSession, msgbucket.New(24*time.Hour), nil)
+	n, err := store.countThreadReplies(ctx, "thread-1")
+	require.NoError(t, err)
+	assert.Equal(t, threadcount.Cap, n)
 }

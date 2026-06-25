@@ -14,6 +14,7 @@ import (
 	"github.com/hmchangw/chat/pkg/model/cassandra"
 	"github.com/hmchangw/chat/pkg/msgbucket"
 	"github.com/hmchangw/chat/pkg/natsutil"
+	"github.com/hmchangw/chat/pkg/threadcount"
 )
 
 // errMessageNotFound is returned by GetMessageSender when the message row is
@@ -323,26 +324,12 @@ func buildCassandraMessage(msg *model.Message) cassandra.Message {
 	return cm
 }
 
-// countThreadReplies counts non-deleted rows in the thread_messages_by_thread
-// partition for threadRoomID. message-worker does not write the deleted column
-// on INSERT (it remains NULL), so the Go-side filter treats NULL the same as
-// false — only rows where deleted is explicitly true are excluded.
+// countThreadReplies returns the bounded, soft-delete-aware reply count for the
+// thread. It delegates to pkg/threadcount so this add-path writer and the
+// history-service delete-path writer compute an identical, identically-capped
+// value (see pkg/threadcount.Cap).
 func (s *CassandraStore) countThreadReplies(ctx context.Context, threadRoomID string) (int, error) {
-	iter := s.cassSession.Query(
-		`SELECT deleted FROM thread_messages_by_thread WHERE thread_room_id = ?`,
-		threadRoomID,
-	).WithContext(ctx).Iter()
-	var deleted *bool
-	n := 0
-	for iter.Scan(&deleted) {
-		if deleted == nil || !*deleted {
-			n++
-		}
-	}
-	if err := iter.Close(); err != nil {
-		return 0, fmt.Errorf("count thread replies for thread %s: %w", threadRoomID, err)
-	}
-	return n, nil
+	return threadcount.Count(ctx, s.cassSession, threadRoomID)
 }
 
 // setParentTcountAndTlm co-SETs tcount and tlm on the parent row in both tables

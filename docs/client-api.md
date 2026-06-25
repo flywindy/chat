@@ -2239,7 +2239,7 @@ Used by every history-service method that returns messages. Mirrors the Cassandr
 | `card` | [MessageCard](#messagecard) | Optional. |
 | `cardAction` | [MessageCardAction](#messagecardaction) | Optional. |
 | `tshow` | boolean | Optional. Whether a thread reply is also shown in the parent room. |
-| `tcount` | number | Optional. Number of replies on a thread parent. |
+| `tcount` | number | Optional. Number of non-deleted replies on a thread parent, capped at 99; a value of 99 means "99 or more". |
 | `threadLastMsgAt` | string (ISO 8601) | Optional. Timestamp of the most recent reply in the thread. Absent if no replies or not a thread parent. |
 | `threadParentId` | string | Optional. Set when this message is a thread reply. |
 | `threadParentCreatedAt` | string | Optional. RFC 3339. |
@@ -4619,7 +4619,7 @@ Pushed by `broadcast-worker` whenever a thread reply is **created** (`action: "r
 | `roomId` | string | The room the thread lives in. |
 | `siteId` | string | |
 | `parentMessageId` | string | The thread parent message's ID. Clients use this to locate the message in their cache and update its badge. |
-| `newTcount` | number | Authoritative reply count for the parent message. Replaces any locally-computed count — do not delta. |
+| `newTcount` | number | Authoritative reply count for the parent message, capped at 99 (99 means "99 or more"). Replaces any locally-computed count — do not delta. |
 | `newThreadLastMsgAt` | string (ISO 8601) | Optional. Timestamp of the most recent surviving thread reply. Absent when `newTcount` is 0 (all replies deleted). |
 | `action` | string | `"reply_added"` or `"reply_deleted"`. |
 | `replyMessageId` | string | The reply that was added or deleted. |

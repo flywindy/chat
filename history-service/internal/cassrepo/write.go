@@ -11,6 +11,7 @@ import (
 	"github.com/hmchangw/chat/history-service/internal/models"
 	"github.com/hmchangw/chat/pkg/atrest"
 	cassmodel "github.com/hmchangw/chat/pkg/model/cassandra"
+	"github.com/hmchangw/chat/pkg/threadcount"
 )
 
 const (
@@ -343,30 +344,14 @@ func (r *Repository) SoftDeleteMessage(ctx context.Context, msg *models.Message,
 	return deletedAt, true, newTcount, nil
 }
 
-// countThreadReplies returns the surviving-row count and the MAX created_at among
-// them (nil when none survive) — one scan feeds both tcount and tlm on delete.
+// countThreadReplies returns the bounded, soft-delete-aware reply count and the
+// latest surviving reply's created_at (tlm; nil when none survive) for the
+// thread. It delegates to pkg/threadcount so this delete-path writer and the
+// message-worker add-path writer compute an identical, identically-capped count
+// (see pkg/threadcount.Cap). tlm is the newest survivor — the partition's DESC
+// clustering order surfaces it within the bounded scan.
 func (r *Repository) countThreadReplies(ctx context.Context, threadRoomID string) (int, *time.Time, error) {
-	iter := r.session.Query(
-		`SELECT deleted, created_at FROM thread_messages_by_thread WHERE thread_room_id = ?`,
-		threadRoomID,
-	).WithContext(ctx).Iter()
-	var deleted *bool
-	var createdAt time.Time
-	n := 0
-	var maxCreatedAt *time.Time
-	for iter.Scan(&deleted, &createdAt) {
-		if deleted == nil || !*deleted {
-			n++
-			if maxCreatedAt == nil || createdAt.After(*maxCreatedAt) {
-				t := createdAt
-				maxCreatedAt = &t
-			}
-		}
-	}
-	if err := iter.Close(); err != nil {
-		return 0, nil, fmt.Errorf("count thread replies for thread %s: %w", threadRoomID, err)
-	}
-	return n, maxCreatedAt, nil
+	return threadcount.CountAndLatest(ctx, r.session, threadRoomID)
 }
 
 // setParentTcountAndTlm co-SETs tcount and tlm on the parent row in both tables
