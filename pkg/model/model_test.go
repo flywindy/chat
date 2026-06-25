@@ -3807,6 +3807,60 @@ func TestRoomEventMessageReadValue(t *testing.T) {
 	}
 }
 
+func TestThreadMessageReadEventJSON(t *testing.T) {
+	floor := time.Date(2026, 6, 9, 10, 30, 0, 0, time.UTC)
+
+	t.Run("floor present round-trips", func(t *testing.T) {
+		src := model.ThreadMessageReadEvent{
+			Type:              model.RoomEventThreadMessageRead,
+			RoomID:            "room-1",
+			ThreadRoomID:      "tr-1",
+			MinUserLastSeenAt: &floor,
+			Timestamp:         floor.UnixMilli(),
+		}
+		data, err := json.Marshal(src)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		var dst model.ThreadMessageReadEvent
+		if err := json.Unmarshal(data, &dst); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if !reflect.DeepEqual(src, dst) {
+			t.Errorf("round-trip mismatch:\n  got  %+v\n  want %+v", dst, src)
+		}
+	})
+
+	t.Run("nil floor omitted from wire", func(t *testing.T) {
+		src := model.ThreadMessageReadEvent{
+			Type:         model.RoomEventThreadMessageRead,
+			RoomID:       "room-2",
+			ThreadRoomID: "tr-2",
+			Timestamp:    floor.UnixMilli(),
+		}
+		data, err := json.Marshal(src)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		if strings.Contains(string(data), "minUserLastSeenAt") {
+			t.Errorf("nil floor must be omitted, got %s", data)
+		}
+		var dst model.ThreadMessageReadEvent
+		if err := json.Unmarshal(data, &dst); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if dst.MinUserLastSeenAt != nil {
+			t.Errorf("expected nil floor, got %v", dst.MinUserLastSeenAt)
+		}
+	})
+}
+
+func TestRoomEventThreadMessageReadValue(t *testing.T) {
+	if model.RoomEventThreadMessageRead != "thread_message_read" {
+		t.Errorf("RoomEventThreadMessageRead = %q, want %q", model.RoomEventThreadMessageRead, "thread_message_read")
+	}
+}
+
 func TestOplogEventJSON_Insert(t *testing.T) {
 	src := model.OplogEvent{
 		EventID:      "8265A1B2",

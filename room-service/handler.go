@@ -1590,8 +1590,8 @@ func (h *Handler) messageThreadRead(c *natsrouter.Context, req model.MessageThre
 // recomputeThreadFloor fetches the thread room document, applies the
 // skip-guard (if the thread room has no messages yet, skip), computes
 // MIN(lastSeenAt) across all thread_subscriptions, and writes the result
-// to thread_rooms.minUserLastSeenAt when the floor changes.
-// Live fan-out event deferred to a follow-up; stored floor only for now.
+// to thread_rooms.minUserLastSeenAt when the floor changes, then fans out a
+// best-effort thread_message_read event.
 func (h *Handler) recomputeThreadFloor(ctx context.Context, threadRoomID string) error {
 	tr, err := h.store.GetThreadRoomByID(ctx, threadRoomID)
 	if err != nil {
@@ -1617,7 +1617,79 @@ func (h *Handler) recomputeThreadFloor(ctx context.Context, threadRoomID string)
 	if err := h.store.UpdateThreadRoomMinUserLastSeenAt(ctx, threadRoomID, minTime); err != nil {
 		return fmt.Errorf("update thread room minUserLastSeenAt: %w", err)
 	}
+	// Best-effort: the floor write above is the source of truth; a fan-out
+	// failure must not fail the RPC.
+	h.publishThreadMessageReadEvent(ctx, tr, minTime)
 	return nil
+}
+
+// publishThreadMessageReadEvent fans a thread read-floor advance out to the
+// parent room's audience, routed by the parent room's type. Best-effort: every
+// get/list/marshal/publish failure is logged, never returned.
+func (h *Handler) publishThreadMessageReadEvent(ctx context.Context, tr *model.ThreadRoom, floor *time.Time) {
+	room, err := h.store.GetRoom(ctx, tr.RoomID)
+	if err != nil {
+		slog.Error("get parent room for thread_message_read fan-out failed", "error", err, "roomId", tr.RoomID, "threadRoomId", tr.ID)
+		return
+	}
+	if room == nil {
+		// Best-effort no-op on a missing parent room — never panic the RPC (GetThreadRoomByID can return (nil,nil)).
+		return
+	}
+	switch room.Type {
+	case model.RoomTypeChannel:
+		h.publishThreadChannelEvent(ctx, tr, floor)
+	case model.RoomTypeDM:
+		h.publishThreadDMEvents(ctx, tr, floor)
+	default:
+		// botDM and other types get no read-floor fan-out, matching messageRead.
+	}
+}
+
+// buildThreadMessageReadEvent constructs the wire payload announcing that a
+// thread's read floor advanced to floor (nil when no floor can be established).
+func (h *Handler) buildThreadMessageReadEvent(tr *model.ThreadRoom, floor *time.Time) model.ThreadMessageReadEvent {
+	return model.ThreadMessageReadEvent{
+		Type:              model.RoomEventThreadMessageRead,
+		RoomID:            tr.RoomID,
+		ThreadRoomID:      tr.ID,
+		MinUserLastSeenAt: floor,
+		Timestamp:         time.Now().UTC().UnixMilli(),
+	}
+}
+
+// publishThreadChannelEvent fans the advance out once to the parent channel's
+// room event subject. Used for a RoomTypeChannel parent.
+func (h *Handler) publishThreadChannelEvent(ctx context.Context, tr *model.ThreadRoom, floor *time.Time) {
+	payload, err := json.Marshal(h.buildThreadMessageReadEvent(tr, floor))
+	if err != nil {
+		slog.Error("marshal thread_message_read channel event failed", "error", err, "roomId", tr.RoomID, "threadRoomId", tr.ID)
+		return
+	}
+	if err := h.publishCore(ctx, subject.RoomEvent(tr.RoomID), payload); err != nil {
+		slog.Error("publish thread_message_read channel event failed", "error", err, "roomId", tr.RoomID, "threadRoomId", tr.ID)
+	}
+}
+
+// publishThreadDMEvents fans the advance out to each DM member on their per-user
+// event subject. Used for a RoomTypeDM parent.
+func (h *Handler) publishThreadDMEvents(ctx context.Context, tr *model.ThreadRoom, floor *time.Time) {
+	subs, err := h.store.ListSubscriptionsByRoom(ctx, tr.RoomID)
+	if err != nil {
+		slog.Error("list subscriptions for thread_message_read DM fan-out failed", "error", err, "roomId", tr.RoomID, "threadRoomId", tr.ID)
+		return
+	}
+	payload, err := json.Marshal(h.buildThreadMessageReadEvent(tr, floor))
+	if err != nil {
+		slog.Error("marshal thread_message_read DM event failed", "error", err, "roomId", tr.RoomID, "threadRoomId", tr.ID)
+		return
+	}
+	for i := range subs {
+		account := subs[i].User.Account
+		if err := h.publishCore(ctx, subject.UserRoomEvent(account), payload); err != nil {
+			slog.Error("publish thread_message_read DM event failed", "error", err, "roomId", tr.RoomID, "threadRoomId", tr.ID, "account", account)
+		}
+	}
 }
 
 // ensureRoomKey handles server-to-server requests to ensure a room

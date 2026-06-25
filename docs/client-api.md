@@ -1595,12 +1595,37 @@ See [Error envelope](#6-error-envelope-reference). Common errors:
 - **Concurrent local writes:** the room-`Subscription` update and the `ThreadSubscription` update run in parallel inside an `errgroup`. Both must succeed before the handler proceeds.
 - **Cross-site federation:** if the user's home site differs from the handler's site, a `thread_read` event is published directly to `chat.inbox.{userSite}.external.thread_read` with payload `{account, roomId, threadRoomId, parentMessageId, newThreadUnread, alert, lastSeenAt, timestamp}` (timestamps as `int64` UnixMilli). The destination `inbox-worker` applies the supplied `newThreadUnread`+`alert` to the local Subscription cache and applies `lastSeenAt`+`updatedAt`+`hasMention=false` to the local ThreadSubscription with an `$lt` order-safety guard so out-of-order delivery cannot regress the thread's read position.
 - **Defensive `roomId` filter:** the thread-subscription lookup additionally enforces that the supplied `threadId` belongs to the room named in the subject. Mismatches return `thread subscription not found` (rather than silently clearing an unrelated thread).
-- **Thread-room read-floor recompute:** after both writes succeed, `room-service` recomputes `thread_rooms.minUserLastSeenAt` = `MIN(lastSeenAt)` across all `thread_subscriptions` for the thread room. The floor is set only when every subscriber has a usable `lastSeenAt`; otherwise it is cleared. The recompute is best-effort — a failure is logged but does not fail the RPC. Live fan-out of the floor advance to clients is deferred to a follow-up; the stored value is available immediately via [Get Thread Messages](#get-thread-messages).
+- **Thread-room read-floor recompute:** after both writes succeed, `room-service` recomputes `thread_rooms.minUserLastSeenAt` = `MIN(lastSeenAt)` across all `thread_subscriptions` for the thread room. The floor is set only when every subscriber has a usable `lastSeenAt`; otherwise it is cleared. The recompute is best-effort — a failure is logged but does not fail the RPC. The stored value is also available via [Get Thread Messages](#get-thread-messages).
+- **Read-floor fan-out:** when (and only when) the recompute above changes `thread_rooms.minUserLastSeenAt`, the server publishes a `thread_message_read` event (routed by the **parent** room's type) carrying the new floor, so peers can advance thread read-receipt UI live. Best-effort (a publish failure does not fail the RPC); never fires when the floor is unchanged or the thread room is missing.
 - **No system message:** thread reads are silent; only the requester receives the `accepted` reply.
 
 ##### Triggered events — success path
 
-`None — reply only.` (Cross-site users may observe a delayed cache update on their home site via the cross-site inbox flow above; this is treated as cache convergence rather than a client-visible event for this RPC.)
+**Floor advance events** — emitted **only when the thread read floor (`thread_rooms.minUserLastSeenAt`) changes** (best-effort, core NATS, routed by the **parent** room's type):
+
+- **Channel parent — `chat.room.{roomID}.event`** — a single `thread_message_read` event to every client subscribed to the parent room.
+- **DM parent — `chat.user.{account}.event.room`** — one `thread_message_read` event per subscriber.
+- **botDM / other parent types** — no fan-out (the floor is always null).
+
+| Field | Type | Notes |
+|---|---|---|
+| `type` | string | Always `"thread_message_read"`. |
+| `roomId` | string | The **parent** room (for client routing/scoping). |
+| `threadRoomId` | string | The thread room whose floor advanced. |
+| `minUserLastSeenAt` | string | Optional. RFC3339 UTC timestamp of the new read floor. **Omitted** when the floor is null (a member is still fully unread). |
+| `timestamp` | number | Event publish time, UTC milliseconds since Unix epoch. |
+
+```json
+{
+  "type": "thread_message_read",
+  "roomId": "Rb3kQ2",
+  "threadRoomId": "Tx9aLm",
+  "minUserLastSeenAt": "2026-06-09T10:30:00Z",
+  "timestamp": 1749465000123
+}
+```
+
+(Cross-site users may additionally observe a delayed cache update on their home site via the cross-site inbox flow above; this is treated as cache convergence rather than a client-visible event for this RPC.)
 
 ##### Triggered events — error path
 

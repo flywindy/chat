@@ -232,6 +232,7 @@ const (
 	RoomEventMessageReacted        RoomEventType = "message_reacted"
 	RoomEventThreadMetadataUpdated RoomEventType = "thread_metadata_updated"
 	RoomEventMessageRead           RoomEventType = "message_read"
+	RoomEventThreadMessageRead     RoomEventType = "thread_message_read"
 )
 
 // ThreadAction identifies what operation triggered a ThreadMetadataUpdatedEvent.
@@ -279,6 +280,19 @@ type RoomEvent struct {
 type MessageReadEvent struct {
 	Type              RoomEventType `json:"type" bson:"type"`
 	RoomID            string        `json:"roomId" bson:"roomId"`
+	MinUserLastSeenAt *time.Time    `json:"minUserLastSeenAt,omitempty" bson:"minUserLastSeenAt,omitempty"`
+	Timestamp         int64         `json:"timestamp" bson:"timestamp"`
+}
+
+// ThreadMessageReadEvent is the thread equivalent of MessageReadEvent: published
+// when a thread's read floor advances. It is routed by the parent room's type
+// (channel → room subject, dm → per-member user subject) and carries both the
+// parent RoomID (for client scoping) and the ThreadRoomID that advanced.
+// MinUserLastSeenAt is omitted when a member is still fully unread.
+type ThreadMessageReadEvent struct {
+	Type              RoomEventType `json:"type" bson:"type"`
+	RoomID            string        `json:"roomId" bson:"roomId"`
+	ThreadRoomID      string        `json:"threadRoomId" bson:"threadRoomId"`
 	MinUserLastSeenAt *time.Time    `json:"minUserLastSeenAt,omitempty" bson:"minUserLastSeenAt,omitempty"`
 	Timestamp         int64         `json:"timestamp" bson:"timestamp"`
 }
