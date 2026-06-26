@@ -2,8 +2,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/http"
 	"os"
 	"sync"
 	"time"
@@ -18,6 +21,7 @@ import (
 
 	"github.com/Marz32onE/instrumentation-go/otel-nats/oteljetstream"
 
+	"github.com/hmchangw/chat/pkg/cachemetrics"
 	"github.com/hmchangw/chat/pkg/health"
 	"github.com/hmchangw/chat/pkg/jobguard"
 	"github.com/hmchangw/chat/pkg/model"
@@ -57,6 +61,7 @@ type config struct {
 	Bootstrap              bootstrapConfig         `envPrefix:"BOOTSTRAP_"`
 	HealthAddr             string                  `env:"HEALTH_ADDR" envDefault:":8081"`
 	PProfEnabled           bool                    `env:"PPROF_ENABLED" envDefault:"false"`
+	MetricsAddr            string                  `env:"METRICS_ADDR" envDefault:":9090"`
 }
 
 type mongoMemberLoader struct {
@@ -134,6 +139,11 @@ func main() {
 		slog.Error("init tracer failed", "error", err)
 		os.Exit(1)
 	}
+	meterShutdown, err := otelutil.InitMeter("notification-worker")
+	if err != nil {
+		slog.Error("init meter failed", "error", err)
+		os.Exit(1)
+	}
 
 	mongoClient, err := mongoutil.Connect(ctx, cfg.MongoURI, cfg.MongoUsername, cfg.MongoPassword)
 	if err != nil {
@@ -151,9 +161,10 @@ func main() {
 		os.Exit(1)
 	}
 
+	metaRec := cachemetrics.For("roommeta", "l2")
 	roomMetaCache, err := roommetacache.New(cfg.RoomMetaCacheSize, cfg.RoomMetaCacheTTL,
 		func(ctx context.Context, roomID string) (roommetacache.Meta, error) {
-			return roommetacache.ReadThrough(ctx, valkeyClient, roomsCol, roomID, cfg.RoomMetaL2TTL)
+			return roommetacache.ReadThrough(ctx, valkeyClient, roomsCol, roomID, cfg.RoomMetaL2TTL, metaRec)
 		})
 	if err != nil {
 		slog.Error("init room-meta cache failed", "error", err)
@@ -324,6 +335,21 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Bind synchronously so a port conflict fails startup loudly rather than
+	// running blind — /metrics exposes the cache hit-rate counters Prometheus scrapes.
+	metricsServer := otelutil.MetricsServer()
+	metricsLn, err := net.Listen("tcp", cfg.MetricsAddr)
+	if err != nil {
+		slog.Error("metrics listen failed", "addr", cfg.MetricsAddr, "error", err)
+		os.Exit(1)
+	}
+	go func() {
+		slog.Info("metrics server listening", "addr", cfg.MetricsAddr)
+		if err := metricsServer.Serve(metricsLn); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("metrics server failed", "error", err)
+		}
+	}()
+
 	slog.Info("notification-worker started",
 		"site", cfg.SiteID,
 		"large_room_threshold", cfg.LargeRoomThreshold,
@@ -364,7 +390,11 @@ func main() {
 			invalCancel() // always release the context (idempotent)
 			return nil
 		},
+		// Stop /metrics late so Prometheus can scrape the final drain-window counts,
+		// then flush the meter provider before NATS/Mongo close.
+		func(ctx context.Context) error { return metricsServer.Shutdown(ctx) },
 		func(ctx context.Context) error { return tracerShutdown(ctx) },
+		func(ctx context.Context) error { return meterShutdown(ctx) },
 		func(_ context.Context) error { return nc.Drain() },
 		func(ctx context.Context) error { mongoutil.Disconnect(ctx, mongoClient); return nil },
 		func(_ context.Context) error { valkeyutil.Disconnect(valkeyClient); return nil },

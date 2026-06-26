@@ -2,8 +2,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/http"
 	"os"
 	"sync"
 	"time"
@@ -49,13 +52,13 @@ type config struct {
 	RoomKeyGracePeriod   time.Duration           `env:"ROOM_KEY_GRACE_PERIOD"     envDefault:"24h"`
 	RoomKeyCacheTTL      time.Duration           `env:"ROOM_KEY_CACHE_TTL"        envDefault:"10m"`
 	RoomKeyCacheSize     int                     `env:"ROOM_KEY_CACHE_SIZE"       envDefault:"50000"`
-	RoomKeyCacheStats    time.Duration           `env:"ROOM_KEY_CACHE_STATS_INTERVAL" envDefault:"0"`
 	RoomMetaL2TTL        time.Duration           `env:"ROOM_META_L2_TTL"          envDefault:"15m"`
 	ValkeyAddrs          []string                `env:"VALKEY_ADDRS"              envSeparator:","`
 	ValkeyPassword       string                  `env:"VALKEY_PASSWORD"           envDefault:""`
 	ValkeyKeyGracePeriod time.Duration           `env:"VALKEY_KEY_GRACE_PERIOD" envDefault:"24h"`
 	HealthAddr           string                  `env:"HEALTH_ADDR"              envDefault:":8081"`
 	PProfEnabled         bool                    `env:"PPROF_ENABLED" envDefault:"false"`
+	MetricsAddr          string                  `env:"METRICS_ADDR"             envDefault:":9090"`
 	Consumer             stream.ConsumerSettings `envPrefix:"CONSUMER_"`
 	Bootstrap            bootstrapConfig         `envPrefix:"BOOTSTRAP_"`
 	Encryption           encryptionConfig        `envPrefix:"ENCRYPTION_"`
@@ -78,6 +81,11 @@ func main() {
 	tracerShutdown, err := otelutil.InitTracer(ctx, "broadcast-worker")
 	if err != nil {
 		slog.Error("init tracer failed", "error", err)
+		os.Exit(1)
+	}
+	meterShutdown, err := otelutil.InitMeter("broadcast-worker")
+	if err != nil {
+		slog.Error("init meter failed", "error", err)
 		os.Exit(1)
 	}
 
@@ -177,12 +185,6 @@ func main() {
 		slog.Info("room-key cache enabled", "size", cfg.RoomKeyCacheSize, "ttl", cfg.RoomKeyCacheTTL)
 	}
 
-	statsCtx, stopStats := context.WithCancel(ctx)
-	if keyCache != nil && cfg.RoomKeyCacheStats > 0 {
-		go keyCache.RunStatsLogger(statsCtx, cfg.RoomKeyCacheStats)
-		slog.Info("room-key cache stats logger started", "interval", cfg.RoomKeyCacheStats)
-	}
-
 	handler := NewHandler(coalescer, us, publisher, keyProvider, cfg.Encryption.Enabled)
 
 	// Core-NATS queue subscriber for server-broadcast events (e.g. thread tcount badge).
@@ -216,6 +218,21 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Bind synchronously so a port conflict fails startup loudly rather than
+	// running blind — /metrics exposes the cache hit-rate counters Prometheus scrapes.
+	metricsServer := otelutil.MetricsServer()
+	metricsLn, err := net.Listen("tcp", cfg.MetricsAddr)
+	if err != nil {
+		slog.Error("metrics listen failed", "addr", cfg.MetricsAddr, "error", err)
+		os.Exit(1)
+	}
+	go func() {
+		slog.Info("metrics server listening", "addr", cfg.MetricsAddr)
+		if err := metricsServer.Serve(metricsLn); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("metrics server failed", "error", err)
+		}
+	}()
+
 	slog.Info("broadcast-worker started", "site", cfg.SiteID, "encryption", cfg.Encryption.Enabled)
 
 	hooks := []func(context.Context) error{
@@ -242,8 +259,11 @@ func main() {
 			flushCancel()
 			return nil
 		},
-		func(_ context.Context) error { stopStats(); return nil },
+		// Stop /metrics late so Prometheus can scrape the final drain-window counts,
+		// then flush the meter provider before NATS/Mongo close.
+		func(ctx context.Context) error { return metricsServer.Shutdown(ctx) },
 		func(ctx context.Context) error { return tracerShutdown(ctx) },
+		func(ctx context.Context) error { return meterShutdown(ctx) },
 		func(ctx context.Context) error { return nc.Drain() },
 	}
 	if keyStore != nil {

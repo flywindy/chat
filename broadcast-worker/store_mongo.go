@@ -10,6 +10,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
+	"github.com/hmchangw/chat/pkg/cachemetrics"
 	"github.com/hmchangw/chat/pkg/model"
 	"github.com/hmchangw/chat/pkg/roommetacache"
 	"github.com/hmchangw/chat/pkg/valkeyutil"
@@ -33,10 +34,18 @@ type mongoStore struct {
 	threadRoomCol *mongo.Collection
 	valkey        valkeyutil.Client // nil disables the L2 tier (pure Mongo)
 	metaTTL       time.Duration
+	metaRec       roommetacache.Recorder
 }
 
 func NewMongoStore(roomCol, subCol, threadRoomCol *mongo.Collection, valkey valkeyutil.Client, metaTTL time.Duration) *mongoStore {
-	return &mongoStore{roomCol: roomCol, subCol: subCol, threadRoomCol: threadRoomCol, valkey: valkey, metaTTL: metaTTL}
+	return &mongoStore{
+		roomCol:       roomCol,
+		subCol:        subCol,
+		threadRoomCol: threadRoomCol,
+		valkey:        valkey,
+		metaTTL:       metaTTL,
+		metaRec:       cachemetrics.For("roommeta", "l2"),
+	}
 }
 
 func (m *mongoStore) GetRoom(ctx context.Context, roomID string) (*model.Room, error) {
@@ -63,7 +72,7 @@ func (m *mongoStore) ListSubscriptions(ctx context.Context, roomID string) ([]mo
 }
 
 func (m *mongoStore) GetRoomMeta(ctx context.Context, roomID string) (roommetacache.Meta, error) {
-	return roommetacache.ReadThrough(ctx, m.valkey, m.roomCol, roomID, m.metaTTL)
+	return roommetacache.ReadThrough(ctx, m.valkey, m.roomCol, roomID, m.metaTTL, m.metaRec)
 }
 
 func (m *mongoStore) UpdateRoomLastMessage(ctx context.Context, roomID, msgID string, msgAt time.Time, mentionAll bool) error {

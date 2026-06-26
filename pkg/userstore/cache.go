@@ -10,8 +10,17 @@ import (
 	lru "github.com/hashicorp/golang-lru/v2/expirable"
 	"golang.org/x/sync/singleflight"
 
+	"github.com/hmchangw/chat/pkg/cachemetrics"
 	"github.com/hmchangw/chat/pkg/model"
 )
+
+// Recorder records the outcome of a cache lookup. cachemetrics.Recorder
+// satisfies it; tests substitute a spy.
+type Recorder interface {
+	Hit(ctx context.Context)
+	Miss(ctx context.Context)
+	Error(ctx context.Context)
+}
 
 // Cache fronts a UserStore with two LRU+TTL stores (byID, byAccount) sharing
 // value pointers; populate writes to both so a hit on either satisfies the
@@ -26,6 +35,8 @@ type Cache struct {
 	hits     atomic.Uint64
 	misses   atomic.Uint64
 	loadErrs atomic.Uint64
+
+	metrics Recorder
 }
 
 // Stats is a snapshot of the cache's counters.
@@ -34,8 +45,17 @@ type Stats struct {
 	SizeByID, SizeByAccount  int
 }
 
+// Option configures a Cache at construction.
+type Option func(*Cache)
+
+// WithMetrics overrides the hit/miss/error recorder. Defaults to the
+// package-default cachemetrics recorder tagged cache="user",tier="l1".
+func WithMetrics(r Recorder) Option {
+	return func(c *Cache) { c.metrics = r }
+}
+
 // NewCache returns a Cache. size applies to each LRU independently; ttl applies to both.
-func NewCache(store UserStore, size int, ttl time.Duration) (*Cache, error) {
+func NewCache(store UserStore, size int, ttl time.Duration, opts ...Option) (*Cache, error) {
 	if store == nil {
 		return nil, fmt.Errorf("userstore: store must not be nil")
 	}
@@ -45,17 +65,23 @@ func NewCache(store UserStore, size int, ttl time.Duration) (*Cache, error) {
 	if ttl <= 0 {
 		return nil, fmt.Errorf("userstore: cache ttl must be positive, got %v", ttl)
 	}
-	return &Cache{
+	c := &Cache{
 		byID:      lru.NewLRU[string, *model.User](size, nil, ttl),
 		byAccount: lru.NewLRU[string, *model.User](size, nil, ttl),
 		store:     store,
-	}, nil
+		metrics:   cachemetrics.For("user", "l1"),
+	}
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c, nil
 }
 
 // FindUserByID serves from byID; misses fall through. ErrUserNotFound is not negatively cached.
 func (c *Cache) FindUserByID(ctx context.Context, id string) (*model.User, error) {
 	if v, ok := c.byID.Get(id); ok {
 		c.hits.Add(1)
+		c.metrics.Hit(ctx)
 		return v, nil
 	}
 	c.misses.Add(1)
@@ -72,11 +98,13 @@ func (c *Cache) FindUserByID(ctx context.Context, id string) (*model.User, error
 	})
 	if err != nil {
 		c.loadErrs.Add(1)
+		c.metrics.Error(ctx)
 		if errors.Is(err, ErrUserNotFound) {
 			return nil, err
 		}
 		return nil, fmt.Errorf("find cached user %q: %w", id, err)
 	}
+	c.metrics.Miss(ctx)
 	return v.(*model.User), nil
 }
 
@@ -84,6 +112,7 @@ func (c *Cache) FindUserByID(ctx context.Context, id string) (*model.User, error
 func (c *Cache) FindUserByAccount(ctx context.Context, account string) (*model.User, error) {
 	if v, ok := c.byAccount.Get(account); ok {
 		c.hits.Add(1)
+		c.metrics.Hit(ctx)
 		return v, nil
 	}
 	c.misses.Add(1)
@@ -100,11 +129,13 @@ func (c *Cache) FindUserByAccount(ctx context.Context, account string) (*model.U
 	})
 	if err != nil {
 		c.loadErrs.Add(1)
+		c.metrics.Error(ctx)
 		if errors.Is(err, ErrUserNotFound) {
 			return nil, err
 		}
 		return nil, fmt.Errorf("find cached user by account %q: %w", account, err)
 	}
+	c.metrics.Miss(ctx)
 	return v.(*model.User), nil
 }
 
@@ -123,6 +154,7 @@ func (c *Cache) FindUsersByAccounts(ctx context.Context, accounts []string) ([]m
 		seen[a] = struct{}{}
 		if u, ok := c.byAccount.Get(a); ok {
 			c.hits.Add(1)
+			c.metrics.Hit(ctx)
 			hits = append(hits, *u)
 			continue
 		}
@@ -134,7 +166,14 @@ func (c *Cache) FindUsersByAccounts(ctx context.Context, accounts []string) ([]m
 	}
 	fresh, err := c.store.FindUsersByAccounts(ctx, missing)
 	if err != nil {
+		c.loadErrs.Add(uint64(len(missing)))
+		for range missing {
+			c.metrics.Error(ctx)
+		}
 		return hits, fmt.Errorf("cached find users by accounts: %w", err)
+	}
+	for range missing {
+		c.metrics.Miss(ctx)
 	}
 	for i := range fresh {
 		c.populate(&fresh[i])

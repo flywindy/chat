@@ -18,8 +18,17 @@ import (
 	lru "github.com/hashicorp/golang-lru/v2/expirable"
 	"golang.org/x/sync/singleflight"
 
+	"github.com/hmchangw/chat/pkg/cachemetrics"
 	pkgmodel "github.com/hmchangw/chat/pkg/model"
 )
+
+// Recorder records the outcome of a cache lookup. cachemetrics.Recorder
+// satisfies it; tests substitute a spy.
+type Recorder interface {
+	Hit(ctx context.Context)
+	Miss(ctx context.Context)
+	Error(ctx context.Context)
+}
 
 // Stats is a snapshot of a cache's counters.
 type Stats struct {
@@ -29,20 +38,23 @@ type Stats struct {
 
 // ttlCache is an LRU+TTL cache whose misses are deduped via singleflight.
 type ttlCache[V any] struct {
-	lru    *lru.LRU[string, V]
-	sf     singleflight.Group
-	hits   atomic.Uint64
-	misses atomic.Uint64
+	lru     *lru.LRU[string, V]
+	sf      singleflight.Group
+	hits    atomic.Uint64
+	misses  atomic.Uint64
+	metrics Recorder
 }
 
-func newTTLCache[V any](size int, ttl time.Duration) (*ttlCache[V], error) {
+// newTTLCache builds an LRU+TTL cache. rec records hit/miss/error outcomes;
+// pass a cachemetrics.For(name, "l1") so each cache reports its own series.
+func newTTLCache[V any](size int, ttl time.Duration, rec Recorder) (*ttlCache[V], error) {
 	if size <= 0 {
 		return nil, fmt.Errorf("readcache: size must be positive, got %d", size)
 	}
 	if ttl <= 0 {
 		return nil, fmt.Errorf("readcache: ttl must be positive, got %v", ttl)
 	}
-	return &ttlCache[V]{lru: lru.NewLRU[string, V](size, nil, ttl)}, nil
+	return &ttlCache[V]{lru: lru.NewLRU[string, V](size, nil, ttl), metrics: rec}, nil
 }
 
 // getOrLoad returns the cached value for key, or invokes load on miss. load
@@ -52,6 +64,7 @@ func newTTLCache[V any](size int, ttl time.Duration) (*ttlCache[V], error) {
 func (c *ttlCache[V]) getOrLoad(ctx context.Context, key string, load func(context.Context) (V, bool, error)) (V, error) {
 	if v, ok := c.lru.Get(key); ok {
 		c.hits.Add(1)
+		c.metrics.Hit(ctx)
 		return v, nil
 	}
 	c.misses.Add(1)
@@ -71,9 +84,11 @@ func (c *ttlCache[V]) getOrLoad(ctx context.Context, key string, load func(conte
 		return val, nil
 	})
 	if err != nil {
+		c.metrics.Error(ctx)
 		var zero V
 		return zero, err
 	}
+	c.metrics.Miss(ctx)
 	return v.(V), nil
 }
 
@@ -101,7 +116,7 @@ type SubscriptionCache struct {
 // NewSubscriptionCache wraps inner with an LRU+TTL cache of size entries and
 // the given TTL. size and ttl must be positive.
 func NewSubscriptionCache(inner SubscriptionSource, size int, ttl time.Duration) (*SubscriptionCache, error) {
-	cache, err := newTTLCache[subEntry](size, ttl)
+	cache, err := newTTLCache[subEntry](size, ttl, cachemetrics.For("history_sub", "l1"))
 	if err != nil {
 		return nil, err
 	}
@@ -159,11 +174,11 @@ type RoomCache struct {
 // NewRoomCache wraps inner with LRU+TTL caches for room times and
 // minUserLastSeenAt. size and ttl must be positive.
 func NewRoomCache(inner RoomSource, size int, ttl time.Duration) (*RoomCache, error) {
-	times, err := newTTLCache[roomTimes](size, ttl)
+	times, err := newTTLCache[roomTimes](size, ttl, cachemetrics.For("history_room_times", "l1"))
 	if err != nil {
 		return nil, err
 	}
-	minSeen, err := newTTLCache[*time.Time](size, ttl)
+	minSeen, err := newTTLCache[*time.Time](size, ttl, cachemetrics.For("history_room_min_seen", "l1"))
 	if err != nil {
 		return nil, err
 	}

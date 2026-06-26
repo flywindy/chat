@@ -39,6 +39,7 @@ type Config struct {
 	SiteID                  string          `env:"SITE_ID"                    envDefault:"site-local"`
 	HealthAddr              string          `env:"HEALTH_ADDR"                envDefault:":8081"`
 	PProfEnabled            bool            `env:"PPROF_ENABLED" envDefault:"false"`
+	MetricsAddr             string          `env:"METRICS_ADDR"               envDefault:":9090"`
 	Cassandra               CassandraConfig `envPrefix:"CASSANDRA_"`
 	Mongo                   MongoConfig     `envPrefix:"MONGO_"`
 	NATS                    NATSConfig      `envPrefix:"NATS_"`

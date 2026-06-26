@@ -8,7 +8,17 @@ import (
 
 	lru "github.com/hashicorp/golang-lru/v2/expirable"
 	"golang.org/x/sync/singleflight"
+
+	"github.com/hmchangw/chat/pkg/cachemetrics"
 )
+
+// Recorder records the outcome of a cache lookup. cachemetrics.Recorder
+// satisfies it; tests substitute a spy.
+type Recorder interface {
+	Hit(ctx context.Context)
+	Miss(ctx context.Context)
+	Error(ctx context.Context)
+}
 
 // CachedLookup wraps a CustomEmojiLookup with a process-local LRU+TTL cache
 // keyed by (siteID, shortcode). Negative results are cached too. Admin
@@ -22,11 +32,22 @@ type CachedLookup struct {
 	hits     atomic.Uint64
 	misses   atomic.Uint64
 	loadErrs atomic.Uint64
+
+	metrics Recorder
 }
 
 type cacheKey struct {
 	siteID    string
 	shortcode string
+}
+
+// Option configures a CachedLookup at construction.
+type Option func(*CachedLookup)
+
+// WithMetrics overrides the hit/miss/error recorder. Defaults to the
+// package-default cachemetrics recorder tagged cache="emoji",tier="l1".
+func WithMetrics(r Recorder) Option {
+	return func(c *CachedLookup) { c.metrics = r }
 }
 
 // String returns the canonical flat form for the singleflight dedup key;
@@ -42,7 +63,7 @@ type CacheStats struct {
 }
 
 // NewCachedLookup wraps inner with an LRU+TTL cache; size, ttl, inner all required.
-func NewCachedLookup(inner CustomEmojiLookup, size int, ttl time.Duration) (*CachedLookup, error) {
+func NewCachedLookup(inner CustomEmojiLookup, size int, ttl time.Duration, opts ...Option) (*CachedLookup, error) {
 	if inner == nil {
 		return nil, fmt.Errorf("emoji cached lookup: inner must not be nil")
 	}
@@ -52,10 +73,15 @@ func NewCachedLookup(inner CustomEmojiLookup, size int, ttl time.Duration) (*Cac
 	if ttl <= 0 {
 		return nil, fmt.Errorf("emoji cached lookup: ttl must be positive, got %v", ttl)
 	}
-	return &CachedLookup{
-		inner: inner,
-		lru:   lru.NewLRU[cacheKey, bool](size, nil, ttl),
-	}, nil
+	c := &CachedLookup{
+		inner:   inner,
+		lru:     lru.NewLRU[cacheKey, bool](size, nil, ttl),
+		metrics: cachemetrics.For("emoji", "l1"),
+	}
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c, nil
 }
 
 // CustomEmojiExists serves from cache; inner errors are not cached.
@@ -63,6 +89,7 @@ func (c *CachedLookup) CustomEmojiExists(ctx context.Context, siteID, shortcode 
 	k := cacheKey{siteID: siteID, shortcode: shortcode}
 	if v, ok := c.lru.Get(k); ok {
 		c.hits.Add(1)
+		c.metrics.Hit(ctx)
 		return v, nil
 	}
 	c.misses.Add(1)
@@ -80,8 +107,10 @@ func (c *CachedLookup) CustomEmojiExists(ctx context.Context, siteID, shortcode 
 	})
 	if err != nil {
 		c.loadErrs.Add(1)
+		c.metrics.Error(ctx)
 		return false, fmt.Errorf("custom emoji lookup %q for site %q: %w", shortcode, siteID, err)
 	}
+	c.metrics.Miss(ctx)
 	return v.(bool), nil
 }
 

@@ -2,8 +2,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/http"
 	"os"
 	"sync"
 	"time"
@@ -47,6 +50,7 @@ type config struct {
 	UserCacheTTL       time.Duration           `env:"USER_CACHE_TTL"             envDefault:"5m"`
 	HealthAddr         string                  `env:"HEALTH_ADDR"                envDefault:":8081"`
 	PProfEnabled       bool                    `env:"PPROF_ENABLED" envDefault:"false"`
+	MetricsAddr        string                  `env:"METRICS_ADDR"               envDefault:":9090"`
 	Consumer           stream.ConsumerSettings `envPrefix:"CONSUMER_"`
 	Bootstrap          bootstrapConfig         `envPrefix:"BOOTSTRAP_"`
 	DebugLog           logctx.Config           `envPrefix:"DEBUG_LOG_"`
@@ -71,6 +75,11 @@ func main() {
 	tracerShutdown, err := otelutil.InitTracer(ctx, "message-gatekeeper")
 	if err != nil {
 		slog.Error("init tracer failed", "error", err)
+		os.Exit(1)
+	}
+	meterShutdown, err := otelutil.InitMeter("message-gatekeeper")
+	if err != nil {
+		slog.Error("init meter failed", "error", err)
 		os.Exit(1)
 	}
 
@@ -190,6 +199,21 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Bind synchronously so a port conflict fails startup loudly rather than
+	// running blind — /metrics exposes the cache hit-rate counters Prometheus scrapes.
+	metricsServer := otelutil.MetricsServer()
+	metricsLn, err := net.Listen("tcp", cfg.MetricsAddr)
+	if err != nil {
+		slog.Error("metrics listen failed", "addr", cfg.MetricsAddr, "error", err)
+		os.Exit(1)
+	}
+	go func() {
+		slog.Info("metrics server listening", "addr", cfg.MetricsAddr)
+		if err := metricsServer.Serve(metricsLn); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("metrics server failed", "error", err)
+		}
+	}()
+
 	slog.Info("message-gatekeeper running", "site", cfg.SiteID)
 
 	shutdown.Wait(ctx, 25*time.Second,
@@ -207,7 +231,11 @@ func main() {
 				return fmt.Errorf("worker drain timed out: %w", ctx.Err())
 			}
 		},
+		// Stop /metrics late so Prometheus can scrape the final drain-window counts,
+		// then flush the meter provider before NATS/Mongo close.
+		func(ctx context.Context) error { return metricsServer.Shutdown(ctx) },
 		func(ctx context.Context) error { return tracerShutdown(ctx) },
+		func(ctx context.Context) error { return meterShutdown(ctx) },
 		func(ctx context.Context) error { return nc.Drain() },
 		func(ctx context.Context) error { mongoutil.Disconnect(ctx, mongoClient); return nil },
 		func(ctx context.Context) error { return healthStop(ctx) },

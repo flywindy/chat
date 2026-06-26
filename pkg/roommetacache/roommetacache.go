@@ -26,6 +26,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 	"golang.org/x/sync/singleflight"
 
+	"github.com/hmchangw/chat/pkg/cachemetrics"
 	"github.com/hmchangw/chat/pkg/model"
 )
 
@@ -55,6 +56,8 @@ type Cache struct {
 	hits     atomic.Uint64
 	misses   atomic.Uint64
 	loadErrs atomic.Uint64
+
+	metrics Recorder
 }
 
 // Stats is a snapshot of the cache's hit/miss counters.
@@ -63,9 +66,19 @@ type Stats struct {
 	Size                     int
 }
 
+// Option configures a Cache at construction.
+type Option func(*Cache)
+
+// WithMetrics overrides the L1 hit/miss/error recorder. Defaults to the
+// package-default cachemetrics recorder tagged cache="roommeta",tier="l1"
+// (distinct from the tier="l2" series ReadThrough records).
+func WithMetrics(r Recorder) Option {
+	return func(c *Cache) { c.metrics = r }
+}
+
 // New constructs a Cache with the given capacity, TTL, and loader.
 // size and ttl must both be positive; loader must be non-nil.
-func New(size int, ttl time.Duration, loader Loader) (*Cache, error) {
+func New(size int, ttl time.Duration, loader Loader, opts ...Option) (*Cache, error) {
 	if size <= 0 {
 		return nil, fmt.Errorf("roommetacache: size must be positive, got %d", size)
 	}
@@ -75,10 +88,15 @@ func New(size int, ttl time.Duration, loader Loader) (*Cache, error) {
 	if loader == nil {
 		return nil, fmt.Errorf("roommetacache: loader must not be nil")
 	}
-	return &Cache{
-		lru:    lru.NewLRU[string, Meta](size, nil, ttl),
-		loader: loader,
-	}, nil
+	c := &Cache{
+		lru:     lru.NewLRU[string, Meta](size, nil, ttl),
+		loader:  loader,
+		metrics: cachemetrics.For("roommeta", "l1"),
+	}
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c, nil
 }
 
 // Get returns the cached Meta for roomID. On miss it calls the configured
@@ -87,6 +105,7 @@ func New(size int, ttl time.Duration, loader Loader) (*Cache, error) {
 func (c *Cache) Get(ctx context.Context, roomID string) (Meta, error) {
 	if v, ok := c.lru.Get(roomID); ok {
 		c.hits.Add(1)
+		c.metrics.Hit(ctx)
 		return v, nil
 	}
 	c.misses.Add(1)
@@ -106,8 +125,10 @@ func (c *Cache) Get(ctx context.Context, roomID string) (Meta, error) {
 	})
 	if err != nil {
 		c.loadErrs.Add(1)
+		c.metrics.Error(ctx)
 		return Meta{}, fmt.Errorf("get room meta for %q: %w", roomID, err)
 	}
+	c.metrics.Miss(ctx)
 	return v.(Meta), nil
 }
 

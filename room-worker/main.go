@@ -2,8 +2,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/http"
 	"os"
 	"sync"
 	"time"
@@ -43,6 +46,7 @@ type config struct {
 	Bootstrap        bootstrapConfig         `envPrefix:"BOOTSTRAP_"`
 	HealthAddr       string                  `env:"HEALTH_ADDR" envDefault:":8081"`
 	PProfEnabled     bool                    `env:"PPROF_ENABLED" envDefault:"false"`
+	MetricsAddr      string                  `env:"METRICS_ADDR" envDefault:":9090"`
 	DebugLog         logctx.Config           `envPrefix:"DEBUG_LOG_"`
 
 	// Grace window during which a rotated-out previous key remains valid for decrypt.
@@ -212,6 +216,21 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Bind synchronously so a port conflict fails startup loudly rather than
+	// running blind — /metrics exposes the atrest DEK and cache hit-rate counters.
+	metricsServer := otelutil.MetricsServer()
+	metricsLn, err := net.Listen("tcp", cfg.MetricsAddr)
+	if err != nil {
+		slog.Error("metrics listen failed", "addr", cfg.MetricsAddr, "error", err)
+		os.Exit(1)
+	}
+	go func() {
+		slog.Info("metrics server listening", "addr", cfg.MetricsAddr)
+		if err := metricsServer.Serve(metricsLn); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("metrics server failed", "error", err)
+		}
+	}()
+
 	slog.Info("room-worker running", "site", cfg.SiteID)
 
 	// Shutdown ordering: drain inbound work first, then close client connections,
@@ -243,6 +262,9 @@ func main() {
 			}
 			return nil
 		},
+		// Stop /metrics late so Prometheus can scrape the final drain-window counts,
+		// then flush the meter provider.
+		func(ctx context.Context) error { return metricsServer.Shutdown(ctx) },
 		func(ctx context.Context) error { return tracerShutdown(ctx) },
 		func(ctx context.Context) error { return meterShutdown(ctx) },
 	}

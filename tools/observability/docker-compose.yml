@@ -58,6 +58,11 @@ services:
   prometheus:
     image: prom/prometheus:v2.55.1
     container_name: chat-local-prometheus
+    # Run as root so the bind-mounted prometheus.yml is readable regardless of
+    # the host's umask. The image's default user (nobody, uid 65534) can't read
+    # config files created under a tight umask, forcing a chmod on every edit.
+    # Local-dev only — this stack already runs privileged (cAdvisor).
+    user: "0:0"
     depends_on:
       cadvisor:
         condition: service_healthy
@@ -80,6 +85,11 @@ services:
   grafana:
     image: grafana/grafana:11.3.0
     container_name: chat-local-grafana
+    # Run as root so the bind-mounted provisioning/ and dashboards/ are readable
+    # regardless of the host's umask. The image's default user (uid 472) can't
+    # read files created under a tight umask, forcing a chmod on every edit.
+    # Local-dev only — this stack already runs privileged (cAdvisor).
+    user: "0:0"
     depends_on:
       prometheus:
         condition: service_healthy

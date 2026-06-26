@@ -2,7 +2,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log/slog"
+	"net"
+	"net/http"
 	"os"
 	"time"
 
@@ -77,6 +80,11 @@ func main() {
 	tracerShutdown, err := otelutil.InitTracer(ctx, "history-service")
 	if err != nil {
 		slog.Error("init tracer failed", "error", err)
+		os.Exit(1)
+	}
+	meterShutdown, err := otelutil.InitMeter("history-service")
+	if err != nil {
+		slog.Error("init meter failed", "error", err)
 		os.Exit(1)
 	}
 
@@ -199,12 +207,31 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Bind synchronously so a port conflict fails startup loudly rather than
+	// running blind — /metrics exposes the cache hit-rate and atrest DEK counters.
+	metricsServer := otelutil.MetricsServer()
+	metricsLn, err := net.Listen("tcp", cfg.MetricsAddr)
+	if err != nil {
+		slog.Error("metrics listen failed", "addr", cfg.MetricsAddr, "error", err)
+		os.Exit(1)
+	}
+	go func() {
+		slog.Info("metrics server listening", "addr", cfg.MetricsAddr)
+		if err := metricsServer.Serve(metricsLn); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("metrics server failed", "error", err)
+		}
+	}()
+
 	slog.Info("history-service running", "site", cfg.SiteID)
 
 	shutdown.Wait(ctx, 25*time.Second,
 		func(ctx context.Context) error { return router.Shutdown(ctx) },
+		// Stop /metrics late so Prometheus can scrape the final drain-window counts,
+		// then flush the meter provider.
+		func(ctx context.Context) error { return metricsServer.Shutdown(ctx) },
 		func(ctx context.Context) error { return nc.Drain() },
 		func(ctx context.Context) error { return tracerShutdown(ctx) },
+		func(ctx context.Context) error { return meterShutdown(ctx) },
 		func(ctx context.Context) error { mongoutil.Disconnect(ctx, mongoClient); return nil },
 		func(ctx context.Context) error { cassutil.Close(cassSession); return nil },
 		func(ctx context.Context) error {

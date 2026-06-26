@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync/atomic"
 	"time"
@@ -9,8 +10,17 @@ import (
 	lru "github.com/hashicorp/golang-lru/v2/expirable"
 	"golang.org/x/sync/singleflight"
 
+	"github.com/hmchangw/chat/pkg/cachemetrics"
 	"github.com/hmchangw/chat/pkg/model"
 )
+
+// cacheRecorder records the outcome of a cache lookup. cachemetrics.Recorder
+// satisfies it; tests substitute a spy.
+type cacheRecorder interface {
+	Hit(ctx context.Context)
+	Miss(ctx context.Context)
+	Error(ctx context.Context)
+}
 
 // cachedSubscription is the projection of model.Subscription that
 // gatekeeper actually reads on the hot path. Caching only these fields
@@ -39,6 +49,8 @@ type cachedSubStore struct {
 
 	hits   atomic.Uint64
 	misses atomic.Uint64
+
+	metrics cacheRecorder
 }
 
 func newCachedSubStore(inner Store, size int, ttl time.Duration) (*cachedSubStore, error) {
@@ -49,8 +61,9 @@ func newCachedSubStore(inner Store, size int, ttl time.Duration) (*cachedSubStor
 		return nil, fmt.Errorf("subcache: ttl must be positive, got %v", ttl)
 	}
 	return &cachedSubStore{
-		Store: inner,
-		lru:   lru.NewLRU[subKey, cachedSubscription](size, nil, ttl),
+		Store:   inner,
+		lru:     lru.NewLRU[subKey, cachedSubscription](size, nil, ttl),
+		metrics: cachemetrics.For("gatekeeper_sub", "l1"),
 	}, nil
 }
 
@@ -58,6 +71,7 @@ func (c *cachedSubStore) GetSubscription(ctx context.Context, account, roomID st
 	key := subKey{roomID: roomID, account: account}
 	if v, ok := c.lru.Get(key); ok {
 		c.hits.Add(1)
+		c.metrics.Hit(ctx)
 		return fromCached(v), nil
 	}
 	c.misses.Add(1)
@@ -84,8 +98,17 @@ func (c *cachedSubStore) GetSubscription(ctx context.Context, account, roomID st
 		return projected, nil
 	})
 	if err != nil {
-		return nil, err
+		// errNotSubscribed is a clean negative result (sender simply isn't a
+		// member), not a cache-layer failure — count it as a miss so it
+		// doesn't inflate the error rate. Real store failures are errors.
+		if errors.Is(err, errNotSubscribed) {
+			c.metrics.Miss(ctx)
+		} else {
+			c.metrics.Error(ctx)
+		}
+		return nil, fmt.Errorf("get cached subscription: %w", err)
 	}
+	c.metrics.Miss(ctx)
 	return fromCached(v.(cachedSubscription)), nil
 }
 
