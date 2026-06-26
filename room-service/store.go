@@ -242,10 +242,12 @@ type DEKProvisioner interface {
 	EnsureDEK(ctx context.Context, roomID string) error
 }
 
-// MessageReader looks up a message by ID. found=false with err=nil means no row matched.
+// MessageReader looks up a message within a room. found=false with err=nil means
+// no message matched the (account, roomID, messageID) tuple. The lookup is scoped
+// to roomID so a wrong-room message resolves as not-found.
 type MessageReader interface {
-	GetMessageRoomAndCreatedAt(ctx context.Context, messageID string) (
-		roomID string, createdAt time.Time, senderAccount string, found bool, err error,
+	GetMessageRoomAndCreatedAt(ctx context.Context, account, roomID, messageID string) (
+		msgRoomID string, createdAt time.Time, senderAccount string, found bool, err error,
 	)
 }
 

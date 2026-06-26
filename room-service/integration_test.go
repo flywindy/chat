@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/Marz32onE/instrumentation-go/otel-nats/otelnats"
-	"github.com/gocql/gocql"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/assert"
@@ -41,55 +40,6 @@ func setupMongo(t *testing.T) *mongo.Database {
 func setupKeyStore(t *testing.T, db *mongo.Database) roomkeystore.RoomKeyStore {
 	t.Helper()
 	return roomkeystore.NewMongoStore(db.Collection("rooms"), time.Hour)
-}
-
-func setupCassandra(t *testing.T) *gocql.Session {
-	t.Helper()
-	keyspace, adminSession, host := testutil.CassandraKeyspace(t, "room_service_test")
-	cql := func(format string) string { return fmt.Sprintf(format, keyspace) }
-
-	require.NoError(t, adminSession.Query(cql(`CREATE TYPE IF NOT EXISTS %s."Participant" (id TEXT, eng_name TEXT, company_name TEXT, app_id TEXT, app_name TEXT, is_bot BOOLEAN, account TEXT)`)).Exec())
-	require.NoError(t, adminSession.Query(cql(`CREATE TABLE IF NOT EXISTS %s.messages_by_id (
-		message_id TEXT,
-		room_id TEXT,
-		sender FROZEN<"Participant">,
-		created_at TIMESTAMP,
-		PRIMARY KEY (message_id, created_at)
-	) WITH CLUSTERING ORDER BY (created_at DESC)`)).Exec())
-
-	cluster := gocql.NewCluster(host)
-	cluster.Consistency = gocql.One
-	cluster.DisableInitialHostLookup = true
-	cluster.Keyspace = keyspace
-	ksSession, err := cluster.CreateSession()
-	require.NoError(t, err)
-	t.Cleanup(func() { ksSession.Close() })
-	return ksSession
-}
-
-func TestCassMessageReader_GetMessageRoomAndCreatedAt_Integration(t *testing.T) {
-	ctx := context.Background()
-	session := setupCassandra(t)
-
-	createdAt := time.Date(2026, 5, 8, 12, 0, 0, 0, time.UTC)
-	require.NoError(t, session.Query(
-		`INSERT INTO messages_by_id (message_id, room_id, created_at, sender) VALUES (?, ?, ?, ?)`,
-		"m1", "r1", createdAt,
-		map[string]interface{}{"account": "alice", "id": "uA", "eng_name": "Alice"},
-	).WithContext(ctx).Exec())
-
-	reader := NewCassMessageReader(session)
-
-	roomID, ts, sender, found, err := reader.GetMessageRoomAndCreatedAt(ctx, "m1")
-	require.NoError(t, err)
-	require.True(t, found)
-	require.Equal(t, "r1", roomID)
-	require.True(t, ts.Equal(createdAt), "createdAt mismatch: got %v, want %v", ts, createdAt)
-	require.Equal(t, "alice", sender)
-
-	_, _, _, found, err = reader.GetMessageRoomAndCreatedAt(ctx, "missing")
-	require.NoError(t, err)
-	require.False(t, found)
 }
 
 func setupNATS(t *testing.T) string {

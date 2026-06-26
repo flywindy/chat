@@ -21,8 +21,6 @@ services:
       # Room keys live in the MongoDB rooms collection; this grace window keeps a
       # rotated-out previous key valid for decrypt.
       - ROOM_KEY_GRACE_PERIOD=24h
-      - CASSANDRA_HOSTS=cassandra
-      - CASSANDRA_KEYSPACE=chat
       # Microsoft Teams integration. The deep-link RPCs (calls/room, calls/user)
       # only need TEAMS_EMAIL_DOMAIN; the meetings RPC needs the Azure app creds
       # below and reports not-configured until they are set (live test only).

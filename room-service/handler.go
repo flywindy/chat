@@ -1420,32 +1420,40 @@ func (h *Handler) messageReadReceipt(c *natsrouter.Context, req model.ReadReceip
 		msgSender    string
 		msgFound     bool
 		subErr       error
+		msgErr       error
 	)
-	g, gctx := errgroup.WithContext(ctx)
+	// Plain errgroup (no WithContext): both tasks always return nil and capture
+	// their errors above, so we can enforce error precedence ourselves —
+	// membership before the message lookup. The message is resolved via
+	// history-service, so a history-service outage surfaces as msgErr
+	// (errcode.Unavailable); checking subErr first means a non-member still gets
+	// not_room_member rather than the unavailable error.
+	var g errgroup.Group
 	g.Go(func() error {
-		subErr = h.store.CheckMembership(gctx, requesterAccount, roomID)
+		subErr = h.store.CheckMembership(ctx, requesterAccount, roomID)
 		return nil
 	})
 	g.Go(func() error {
-		var err error
-		msgRoomID, msgCreatedAt, msgSender, msgFound, err = h.msgReader.GetMessageRoomAndCreatedAt(gctx, req.MessageID)
-		if err != nil {
-			return fmt.Errorf("get message: %w", err)
-		}
+		msgRoomID, msgCreatedAt, msgSender, msgFound, msgErr = h.msgReader.GetMessageRoomAndCreatedAt(ctx, requesterAccount, roomID, req.MessageID)
 		return nil
 	})
-	if err := g.Wait(); err != nil {
-		return nil, err
-	}
+	_ = g.Wait()
+
 	if subErr != nil {
 		if errors.Is(subErr, model.ErrSubscriptionNotFound) {
 			return nil, errNotRoomMember
 		}
 		return nil, fmt.Errorf("get subscription: %w", subErr)
 	}
+	if msgErr != nil {
+		return nil, fmt.Errorf("get message: %w", msgErr)
+	}
 	if !msgFound {
 		return nil, errMessageNotFound
 	}
+	// Belt-and-suspenders: history-service already scopes the lookup to roomID
+	// (a wrong-room message comes back as not-found), so this guards only against
+	// a future reader that does not pre-filter by room.
 	if msgRoomID != roomID {
 		return nil, errMessageRoomMismatch
 	}

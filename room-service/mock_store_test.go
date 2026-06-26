@@ -769,9 +769,9 @@ func (m *MockMessageReader) EXPECT() *MockMessageReaderMockRecorder {
 }
 
 // GetMessageRoomAndCreatedAt mocks base method.
-func (m *MockMessageReader) GetMessageRoomAndCreatedAt(ctx context.Context, messageID string) (string, time.Time, string, bool, error) {
+func (m *MockMessageReader) GetMessageRoomAndCreatedAt(ctx context.Context, account, roomID, messageID string) (string, time.Time, string, bool, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetMessageRoomAndCreatedAt", ctx, messageID)
+	ret := m.ctrl.Call(m, "GetMessageRoomAndCreatedAt", ctx, account, roomID, messageID)
 	ret0, _ := ret[0].(string)
 	ret1, _ := ret[1].(time.Time)
 	ret2, _ := ret[2].(string)
@@ -781,9 +781,9 @@ func (m *MockMessageReader) GetMessageRoomAndCreatedAt(ctx context.Context, mess
 }
 
 // GetMessageRoomAndCreatedAt indicates an expected call of GetMessageRoomAndCreatedAt.
-func (mr *MockMessageReaderMockRecorder) GetMessageRoomAndCreatedAt(ctx, messageID any) *gomock.Call {
+func (mr *MockMessageReaderMockRecorder) GetMessageRoomAndCreatedAt(ctx, account, roomID, messageID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetMessageRoomAndCreatedAt", reflect.TypeOf((*MockMessageReader)(nil).GetMessageRoomAndCreatedAt), ctx, messageID)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetMessageRoomAndCreatedAt", reflect.TypeOf((*MockMessageReader)(nil).GetMessageRoomAndCreatedAt), ctx, account, roomID, messageID)
 }
 
 // MockTeamsMeetingStore is a mock of TeamsMeetingStore interface.

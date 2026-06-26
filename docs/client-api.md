@@ -1790,6 +1790,8 @@ See [Error envelope](#6-error-envelope-reference). Common errors:
 - `"only the message sender can view read receipts"` — requester is not the author of `messageId`.
 - A malformed subject surfaces as a generic `"internal error"` (the specific reason is sanitized away). Not normally reachable — the wildcard subscription guarantees a well-formed subject.
 - `"invalid request: messageId is required"` — empty `messageId`.
+- `"read receipts are temporarily unavailable"` (`code: "unavailable"`, `reason: "read_receipts_unavailable"`) — the message-history service used to resolve the target message is unreachable. This affects only read receipts; other room operations are unaffected. Clients should show a transient message and allow a retry.
+- `"message is outside access window"` (`code: "forbidden"`, `reason: "outside_access_window"`) — the message predates the requester's history-shared-since for the room (e.g. they left and rejoined). Read receipts are resolved via the history service, which enforces the same access window as message reads, so a sender cannot view receipts for a message they can no longer access.
 
 ```json
 { "code": "forbidden", "error": "only the message sender can view read receipts" }

@@ -3240,7 +3240,7 @@ func TestHandler_handleMessageReadReceipt(t *testing.T) {
 			prep: func(s setup) {
 				s.store.EXPECT().CheckMembership(gomock.Any(), account, roomID).
 					Return(nil)
-				s.reader.EXPECT().GetMessageRoomAndCreatedAt(gomock.Any(), messageID).
+				s.reader.EXPECT().GetMessageRoomAndCreatedAt(gomock.Any(), account, roomID, messageID).
 					Return(roomID, createdAt, account, true, nil)
 				s.store.EXPECT().ListReadReceipts(gomock.Any(), roomID, createdAt, account, gomock.Any()).
 					Return([]ReadReceiptRow{
@@ -3259,7 +3259,7 @@ func TestHandler_handleMessageReadReceipt(t *testing.T) {
 			prep: func(s setup) {
 				s.store.EXPECT().CheckMembership(gomock.Any(), account, roomID).
 					Return(nil)
-				s.reader.EXPECT().GetMessageRoomAndCreatedAt(gomock.Any(), messageID).
+				s.reader.EXPECT().GetMessageRoomAndCreatedAt(gomock.Any(), account, roomID, messageID).
 					Return(roomID, createdAt, account, true, nil)
 				s.store.EXPECT().ListReadReceipts(gomock.Any(), roomID, createdAt, account, gomock.Any()).
 					Return([]ReadReceiptRow{}, nil)
@@ -3277,7 +3277,7 @@ func TestHandler_handleMessageReadReceipt(t *testing.T) {
 			prep: func(s setup) {
 				s.store.EXPECT().CheckMembership(gomock.Any(), account, roomID).
 					Return(model.ErrSubscriptionNotFound)
-				s.reader.EXPECT().GetMessageRoomAndCreatedAt(gomock.Any(), messageID).
+				s.reader.EXPECT().GetMessageRoomAndCreatedAt(gomock.Any(), account, roomID, messageID).
 					Return(roomID, createdAt, account, true, nil).AnyTimes()
 			},
 			wantErr: errNotRoomMember,
@@ -3288,7 +3288,7 @@ func TestHandler_handleMessageReadReceipt(t *testing.T) {
 			prep: func(s setup) {
 				s.store.EXPECT().CheckMembership(gomock.Any(), account, roomID).
 					Return(nil)
-				s.reader.EXPECT().GetMessageRoomAndCreatedAt(gomock.Any(), messageID).
+				s.reader.EXPECT().GetMessageRoomAndCreatedAt(gomock.Any(), account, roomID, messageID).
 					Return("", time.Time{}, "", false, nil)
 			},
 			wantErr: errMessageNotFound,
@@ -3299,7 +3299,7 @@ func TestHandler_handleMessageReadReceipt(t *testing.T) {
 			prep: func(s setup) {
 				s.store.EXPECT().CheckMembership(gomock.Any(), account, roomID).
 					Return(nil)
-				s.reader.EXPECT().GetMessageRoomAndCreatedAt(gomock.Any(), messageID).
+				s.reader.EXPECT().GetMessageRoomAndCreatedAt(gomock.Any(), account, roomID, messageID).
 					Return("other-room", createdAt, account, true, nil)
 			},
 			wantErr: errMessageRoomMismatch,
@@ -3310,7 +3310,7 @@ func TestHandler_handleMessageReadReceipt(t *testing.T) {
 			prep: func(s setup) {
 				s.store.EXPECT().CheckMembership(gomock.Any(), account, roomID).
 					Return(nil)
-				s.reader.EXPECT().GetMessageRoomAndCreatedAt(gomock.Any(), messageID).
+				s.reader.EXPECT().GetMessageRoomAndCreatedAt(gomock.Any(), account, roomID, messageID).
 					Return(roomID, createdAt, "bob", true, nil)
 			},
 			wantErr: errNotMessageSender,
@@ -3321,7 +3321,7 @@ func TestHandler_handleMessageReadReceipt(t *testing.T) {
 			prep: func(s setup) {
 				s.store.EXPECT().CheckMembership(gomock.Any(), account, roomID).
 					Return(fmt.Errorf("db down"))
-				s.reader.EXPECT().GetMessageRoomAndCreatedAt(gomock.Any(), messageID).
+				s.reader.EXPECT().GetMessageRoomAndCreatedAt(gomock.Any(), account, roomID, messageID).
 					Return(roomID, createdAt, account, true, nil).AnyTimes()
 			},
 			wantSubst: "db down",
@@ -3332,7 +3332,7 @@ func TestHandler_handleMessageReadReceipt(t *testing.T) {
 			prep: func(s setup) {
 				s.store.EXPECT().CheckMembership(gomock.Any(), account, roomID).
 					Return(nil)
-				s.reader.EXPECT().GetMessageRoomAndCreatedAt(gomock.Any(), messageID).
+				s.reader.EXPECT().GetMessageRoomAndCreatedAt(gomock.Any(), account, roomID, messageID).
 					Return("", time.Time{}, "", false, fmt.Errorf("cass down"))
 			},
 			wantSubst: "cass down",
@@ -3343,7 +3343,7 @@ func TestHandler_handleMessageReadReceipt(t *testing.T) {
 			prep: func(s setup) {
 				s.store.EXPECT().CheckMembership(gomock.Any(), account, roomID).
 					Return(nil)
-				s.reader.EXPECT().GetMessageRoomAndCreatedAt(gomock.Any(), messageID).
+				s.reader.EXPECT().GetMessageRoomAndCreatedAt(gomock.Any(), account, roomID, messageID).
 					Return(roomID, createdAt, account, true, nil)
 				s.store.EXPECT().ListReadReceipts(gomock.Any(), roomID, createdAt, account, gomock.Any()).
 					Return(nil, fmt.Errorf("agg failed"))
@@ -3379,6 +3379,34 @@ func TestHandler_handleMessageReadReceipt(t *testing.T) {
 			require.Equal(t, tt.wantReply, got)
 		})
 	}
+}
+
+// The reader may return an errcode.Unavailable (e.g. history-service down). The
+// handler wraps it with fmt.Errorf("get message: %w", ...); this verifies the
+// reason still survives to the boundary so the client gets read_receipts_unavailable.
+func TestHandler_MessageReadReceipt_UnavailablePreservesReason(t *testing.T) {
+	const (
+		account   = "alice"
+		roomID    = "r1"
+		siteID    = "site-a"
+		messageID = "m1"
+	)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	store := NewMockRoomStore(ctrl)
+	reader := NewMockMessageReader(ctrl)
+
+	store.EXPECT().CheckMembership(gomock.Any(), account, roomID).Return(nil)
+	reader.EXPECT().GetMessageRoomAndCreatedAt(gomock.Any(), account, roomID, messageID).
+		Return("", time.Time{}, "", false, errcode.Unavailable("read receipts are temporarily unavailable",
+			errcode.WithReason(errcode.RoomReadReceiptsUnavailable)))
+
+	h := NewHandler(store, nil, nil, reader, siteID, 1000, 1000, time.Second, 5, nil, nil, nil, 0)
+	_, err := h.messageReadReceipt(ctxParams(map[string]string{"account": account, "roomID": roomID}),
+		model.ReadReceiptRequest{MessageID: messageID})
+
+	require.Error(t, err)
+	assert.True(t, errcode.HasReason(err, errcode.RoomReadReceiptsUnavailable))
 }
 
 func TestHandler_EnsureRoomKey_KeyExists(t *testing.T) {

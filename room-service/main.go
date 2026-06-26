@@ -14,7 +14,6 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/hmchangw/chat/pkg/atrest"
-	"github.com/hmchangw/chat/pkg/cassutil"
 	"github.com/hmchangw/chat/pkg/health"
 	"github.com/hmchangw/chat/pkg/logctx"
 	"github.com/hmchangw/chat/pkg/mongoutil"
@@ -39,11 +38,6 @@ type config struct {
 	MaxBatchSize             int             `env:"MAX_BATCH_SIZE"            envDefault:"1000"`
 	MemberListTimeout        time.Duration   `env:"MEMBER_LIST_TIMEOUT"       envDefault:"5s"`
 	RoomKeyGracePeriod       time.Duration   `env:"ROOM_KEY_GRACE_PERIOD"     envDefault:"24h"`
-	CassandraHosts           string          `env:"CASSANDRA_HOSTS,required"`
-	CassandraKeyspace        string          `env:"CASSANDRA_KEYSPACE"        envDefault:"chat"`
-	CassandraUsername        string          `env:"CASSANDRA_USERNAME"        envDefault:""`
-	CassandraPassword        string          `env:"CASSANDRA_PASSWORD"        envDefault:""`
-	CassandraNumConns        int             `env:"CASSANDRA_NUM_CONNS"       envDefault:"8"`
 	HealthAddr               string          `env:"HEALTH_ADDR" envDefault:":8081"`
 	PProfEnabled             bool            `env:"PPROF_ENABLED" envDefault:"false"`
 	Bootstrap                bootstrapConfig `envPrefix:"BOOTSTRAP_"`
@@ -141,18 +135,12 @@ func main() {
 	}
 	ensureCancel()
 
-	cassSession, err := cassutil.Connect(cassutil.Config{
-		Hosts:    cfg.CassandraHosts,
-		Keyspace: cfg.CassandraKeyspace,
-		Username: cfg.CassandraUsername,
-		Password: cfg.CassandraPassword,
-		NumConns: cfg.CassandraNumConns,
-	})
-	if err != nil {
-		slog.Error("cassandra connect failed", "error", err)
-		os.Exit(1)
-	}
-	cassReader := NewCassMessageReader(cassSession)
+	// Read receipts resolve the target message through history-service (which
+	// owns message history) over NATS, so room-service has no direct Cassandra
+	// dependency. A history-service outage degrades only read receipts
+	// (errcode.Unavailable); core room/membership/subscription operations are
+	// all MongoDB-backed and unaffected.
+	msgReader := newHistoryMessageReader(nc, cfg.SiteID)
 
 	// Graph client backs the meetings RPC. Constructed only when the Azure app
 	// credentials are present; otherwise the meetings RPC reports not-configured
@@ -188,7 +176,7 @@ func main() {
 	}
 
 	memberListClient := NewNATSMemberListClient(nc.NatsConn(), cfg.MemberListTimeout)
-	handler := NewHandler(store, keyStore, memberListClient, cassReader, cfg.SiteID, cfg.MaxRoomSize, cfg.MaxBatchSize, cfg.MemberListTimeout, cfg.RestrictedRoomMinMembers,
+	handler := NewHandler(store, keyStore, memberListClient, msgReader, cfg.SiteID, cfg.MaxRoomSize, cfg.MaxBatchSize, cfg.MemberListTimeout, cfg.RestrictedRoomMinMembers,
 		func(ctx context.Context, subj string, data []byte, msgID string) error {
 			msg := natsutil.NewMsg(ctx, subj, data)
 			var opts []jetstream.PublishOpt
@@ -241,7 +229,6 @@ func main() {
 			return nil
 		},
 		func(ctx context.Context) error { mongoutil.Disconnect(ctx, mongoClient); return nil },
-		func(ctx context.Context) error { cassutil.Close(cassSession); return nil },
 		func(context.Context) error {
 			if vaultWrapper != nil {
 				return vaultWrapper.Close()
