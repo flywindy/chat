@@ -33,4 +33,8 @@ type ThreadStore interface {
 	// Used by paths that don't already update lastMsg (first-reply parent author,
 	// mention-only subscribers) so the field mirrors thread_subscriptions membership.
 	AddReplyAccounts(ctx context.Context, threadRoomID string, accounts []string) error
+	// AdvanceThreadSubscriptionLastSeen advances the replier's own lastSeenAt: replying
+	// implies they've seen up to their own reply, keeping the thread read-floor
+	// (minUserLastSeenAt) from counting the replier against it (#396).
+	AdvanceThreadSubscriptionLastSeen(ctx context.Context, threadRoomID, account string, at time.Time) error
 }

@@ -117,6 +117,14 @@ func (h *Handler) processMessage(ctx context.Context, data []byte, isMigration b
 		if err != nil {
 			return fmt.Errorf("handle thread room and subscriptions: %w", err)
 		}
+		// Replying implies the replier read up to their own reply: advance their thread
+		// lastSeenAt so the read-floor doesn't count them (#396). Best-effort. Runs on
+		// migration too ($max only moves forward → lands on the replier's last reply).
+		if err := h.threadStore.AdvanceThreadSubscriptionLastSeen(ctx, threadRoomID, evt.Message.UserAccount, evt.Message.CreatedAt); err != nil {
+			slog.WarnContext(ctx, "advance replier thread lastSeenAt failed",
+				"error", err, "thread_room_id", threadRoomID, "account", evt.Message.UserAccount,
+				"request_id", natsutil.RequestIDFromContext(ctx))
+		}
 		if err := h.markThreadMentions(ctx, &evt.Message, threadRoomID, evt.SiteID, isMigration); err != nil {
 			return fmt.Errorf("mark thread mentions: %w", err)
 		}

@@ -489,3 +489,33 @@ func TestBroadcastWorker_EnsureIndexes_Integration(t *testing.T) {
 	}
 	assert.True(t, found, "compound index on (parentMessageId, siteId) must exist")
 }
+
+func TestAdvanceSubscriptionLastSeen_OnlyAdvances(t *testing.T) {
+	db := setupMongo(t)
+	ctx := context.Background()
+	store := NewMongoStore(db.Collection("rooms"), db.Collection("subscriptions"), db.Collection("thread_rooms"), nil, 0)
+
+	t1 := time.Date(2026, 6, 17, 12, 0, 0, 0, time.UTC)
+	_, err := db.Collection("subscriptions").InsertOne(ctx, model.Subscription{
+		ID: "s-adv", User: model.SubscriptionUser{ID: "u1", Account: "alice"}, RoomID: "r-adv", LastSeenAt: &t1,
+	})
+	require.NoError(t, err)
+
+	read := func() time.Time {
+		var sub model.Subscription
+		require.NoError(t, db.Collection("subscriptions").FindOne(ctx, bson.M{"_id": "s-adv"}).Decode(&sub))
+		require.NotNil(t, sub.LastSeenAt)
+		return sub.LastSeenAt.UTC()
+	}
+
+	t2 := t1.Add(time.Minute)
+	require.NoError(t, store.AdvanceSubscriptionLastSeen(ctx, "r-adv", "alice", t2))
+	assert.WithinDuration(t, t2, read(), time.Millisecond, "newer time advances")
+
+	t0 := t1.Add(-time.Minute)
+	require.NoError(t, store.AdvanceSubscriptionLastSeen(ctx, "r-adv", "alice", t0))
+	assert.WithinDuration(t, t2, read(), time.Millisecond, "$max never regresses")
+
+	// Missing subscription is a best-effort no-op.
+	require.NoError(t, store.AdvanceSubscriptionLastSeen(ctx, "no-room", "nobody", t2))
+}

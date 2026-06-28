@@ -138,6 +138,19 @@ func (m *mongoStore) SetSubscriptionMentions(ctx context.Context, roomID string,
 	return nil
 }
 
+// AdvanceSubscriptionLastSeen advances the sender's lastSeenAt via $max so it
+// never regresses a sender who already read later. A missing subscription is a
+// best-effort no-op (MatchedCount unchecked).
+func (m *mongoStore) AdvanceSubscriptionLastSeen(ctx context.Context, roomID, account string, at time.Time) error {
+	if _, err := m.subCol.UpdateOne(ctx,
+		bson.M{"roomId": roomID, "u.account": account},
+		bson.M{"$max": bson.M{"lastSeenAt": at}},
+	); err != nil {
+		return fmt.Errorf("advance lastSeenAt for %q in room %q: %w", account, roomID, err)
+	}
+	return nil
+}
+
 func (m *mongoStore) GetThreadFollowers(ctx context.Context, parentMessageID string) (map[string]struct{}, error) {
 	var doc struct {
 		ReplyAccounts []string `bson:"replyAccounts"`

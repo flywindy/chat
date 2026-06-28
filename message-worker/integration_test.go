@@ -1809,3 +1809,35 @@ func TestCassandraStore_countThreadReplies_CapsAtThreadcountCap(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, threadcount.Cap, n)
 }
+
+func TestAdvanceThreadSubscriptionLastSeen_OnlyAdvances(t *testing.T) {
+	ctx := context.Background()
+	db := setupMongo(t)
+	store := newThreadStoreMongo(db)
+	require.NoError(t, store.EnsureIndexes(ctx))
+
+	t1 := time.Now().UTC().Truncate(time.Millisecond)
+	require.NoError(t, store.InsertThreadSubscription(ctx, &model.ThreadSubscription{
+		ID: "ts-adv", ParentMessageID: "msg-p", RoomID: "r-adv", ThreadRoomID: "tr-adv",
+		UserID: "u-adv", UserAccount: "alice", SiteID: "site-a", LastSeenAt: &t1, CreatedAt: t1, UpdatedAt: t1,
+	}))
+
+	read := func() time.Time {
+		var sub model.ThreadSubscription
+		require.NoError(t, db.Collection("thread_subscriptions").
+			FindOne(ctx, bson.M{"threadRoomId": "tr-adv", "userAccount": "alice"}).Decode(&sub))
+		require.NotNil(t, sub.LastSeenAt)
+		return sub.LastSeenAt.UTC()
+	}
+
+	t2 := t1.Add(time.Minute)
+	require.NoError(t, store.AdvanceThreadSubscriptionLastSeen(ctx, "tr-adv", "alice", t2))
+	assert.WithinDuration(t, t2, read(), time.Millisecond, "newer time advances")
+
+	t0 := t1.Add(-time.Minute)
+	require.NoError(t, store.AdvanceThreadSubscriptionLastSeen(ctx, "tr-adv", "alice", t0))
+	assert.WithinDuration(t, t2, read(), time.Millisecond, "$max never regresses")
+
+	// Missing subscription is a best-effort no-op.
+	require.NoError(t, store.AdvanceThreadSubscriptionLastSeen(ctx, "no-room", "nobody", t2))
+}

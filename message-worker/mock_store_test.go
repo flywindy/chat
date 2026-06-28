@@ -138,6 +138,20 @@ func (mr *MockThreadStoreMockRecorder) AddReplyAccounts(ctx, threadRoomID, accou
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AddReplyAccounts", reflect.TypeOf((*MockThreadStore)(nil).AddReplyAccounts), ctx, threadRoomID, accounts)
 }
 
+// AdvanceThreadSubscriptionLastSeen mocks base method.
+func (m *MockThreadStore) AdvanceThreadSubscriptionLastSeen(ctx context.Context, threadRoomID, account string, at time.Time) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "AdvanceThreadSubscriptionLastSeen", ctx, threadRoomID, account, at)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// AdvanceThreadSubscriptionLastSeen indicates an expected call of AdvanceThreadSubscriptionLastSeen.
+func (mr *MockThreadStoreMockRecorder) AdvanceThreadSubscriptionLastSeen(ctx, threadRoomID, account, at any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AdvanceThreadSubscriptionLastSeen", reflect.TypeOf((*MockThreadStore)(nil).AdvanceThreadSubscriptionLastSeen), ctx, threadRoomID, account, at)
+}
+
 // CreateThreadRoom mocks base method.
 func (m *MockThreadStore) CreateThreadRoom(ctx context.Context, room *model.ThreadRoom) error {
 	m.ctrl.T.Helper()

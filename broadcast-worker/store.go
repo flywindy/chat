@@ -20,4 +20,8 @@ type Store interface {
 	GetThreadFollowers(ctx context.Context, parentMessageID string) (map[string]struct{}, error)
 	UpdateRoomLastMessage(ctx context.Context, roomID, msgID string, msgAt time.Time, mentionAll bool) error
 	SetSubscriptionMentions(ctx context.Context, roomID string, accounts []string) error
+	// AdvanceSubscriptionLastSeen advances the sender's own lastSeenAt: sending
+	// implies they've seen up to their own message, keeping the room read-floor
+	// from counting the sender against it (#396).
+	AdvanceSubscriptionLastSeen(ctx context.Context, roomID, account string, at time.Time) error
 }

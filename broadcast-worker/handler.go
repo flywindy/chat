@@ -152,6 +152,14 @@ func (h *Handler) handleCreated(ctx context.Context, evt *model.MessageEvent) er
 	if err := h.store.UpdateRoomLastMessage(ctx, msg.RoomID, msg.ID, msg.CreatedAt, resolved.MentionAll); err != nil {
 		return fmt.Errorf("update room last message %s: %w", msg.RoomID, err)
 	}
+	// Sending implies the sender has read up to their own message: advance the
+	// sender's lastSeenAt so the room read-floor (minUserLastSeenAt) doesn't count
+	// the sender against their own message (#396). Best-effort.
+	if err := h.store.AdvanceSubscriptionLastSeen(ctx, msg.RoomID, msg.UserAccount, msg.CreatedAt); err != nil {
+		slog.WarnContext(ctx, "advance sender lastSeenAt failed",
+			"error", err, "room_id", msg.RoomID, "account", msg.UserAccount,
+			"request_id", natsutil.RequestIDFromContext(ctx))
+	}
 	meta, err := h.store.GetRoomMeta(ctx, msg.RoomID)
 	if err != nil {
 		return fmt.Errorf("get room meta %s: %w", msg.RoomID, err)

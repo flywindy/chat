@@ -43,6 +43,20 @@ func (m *MockStore) EXPECT() *MockStoreMockRecorder {
 	return m.recorder
 }
 
+// AdvanceSubscriptionLastSeen mocks base method.
+func (m *MockStore) AdvanceSubscriptionLastSeen(ctx context.Context, roomID, account string, at time.Time) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "AdvanceSubscriptionLastSeen", ctx, roomID, account, at)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// AdvanceSubscriptionLastSeen indicates an expected call of AdvanceSubscriptionLastSeen.
+func (mr *MockStoreMockRecorder) AdvanceSubscriptionLastSeen(ctx, roomID, account, at any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AdvanceSubscriptionLastSeen", reflect.TypeOf((*MockStore)(nil).AdvanceSubscriptionLastSeen), ctx, roomID, account, at)
+}
+
 // GetRoom mocks base method.
 func (m *MockStore) GetRoom(ctx context.Context, roomID string) (*model.Room, error) {
 	m.ctrl.T.Helper()

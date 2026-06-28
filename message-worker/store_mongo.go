@@ -146,6 +146,18 @@ func (s *threadStoreMongo) UpdateThreadRoomLastMessage(ctx context.Context, thre
 	return nil
 }
 
+// AdvanceThreadSubscriptionLastSeen advances the replier's lastSeenAt via $max so it
+// never regresses a replier who already read later; missing sub is a best-effort no-op.
+func (s *threadStoreMongo) AdvanceThreadSubscriptionLastSeen(ctx context.Context, threadRoomID, account string, at time.Time) error {
+	if _, err := s.threadSubscriptions.UpdateOne(ctx,
+		bson.M{"threadRoomId": threadRoomID, "userAccount": account},
+		bson.M{"$max": bson.M{"lastSeenAt": at}},
+	); err != nil {
+		return fmt.Errorf("advance thread lastSeenAt for %q in thread room %q: %w", account, threadRoomID, err)
+	}
+	return nil
+}
+
 func (s *threadStoreMongo) AddReplyAccounts(ctx context.Context, threadRoomID string, accounts []string) error {
 	if len(accounts) == 0 {
 		return nil
