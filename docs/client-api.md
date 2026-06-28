@@ -2360,7 +2360,7 @@ Live reaction events (`MessageReactedPayload`) carry a single-actor delta (`{sho
 | Field | Type | Notes |
 |---|---|---|
 | `messages` | array<Message> | Most-recent first. See [Message schema](#message-schema). |
-| `minUserLastSeenAt` | number | Optional. UTC milliseconds since Unix epoch. The room's **strict read floor** — `MIN(lastSeenAt)` across all subscribers, present **only when every member has read** the room. Absent (null) when any member has not read yet (so botDM rooms, where the bot never reads, never set it), when the most recent read is already past `room.lastMsgAt` (recompute is skipped), or when the value cannot be retrieved (best-effort; messages still load). See the Message Read RPC for how this floor is recomputed. |
+| `minUserLastSeenAt` | number | Optional. UTC milliseconds since Unix epoch. The room's **strict read floor** — `MIN(lastSeenAt)` across all subscribers, present **only when every member has read** the room. Omitted (the key is absent, never `null`) when any member has not read yet (so botDM rooms, where the bot never reads, never set it), when the most recent read is already past `room.lastMsgAt` (recompute is skipped), or when the value cannot be retrieved (best-effort; messages still load). See the Message Read RPC for how this floor is recomputed. |
 
 ```json
 {
@@ -2431,6 +2431,7 @@ Fetches messages newer than a cursor — the forward-pagination counterpart to L
 | `messages` | array<Message> | Oldest-first within the page. See [Message schema](#message-schema). |
 | `nextCursor` | string | Optional. Opaque cursor to pass to the next call. Empty when `hasNext=false`. |
 | `hasNext` | boolean | `true` if more messages exist beyond this page. |
+| `minUserLastSeenAt` | number | Optional. UTC milliseconds since Unix epoch. The room's **strict read floor** — `MIN(lastSeenAt)` across all subscribers, present **only when every member has read** the room. Omitted (the key is absent, never `null`) when any member has not read yet (so botDM rooms, where the bot never reads, never set it), when the most recent read is already past `room.lastMsgAt` (recompute is skipped), or when the value cannot be retrieved (best-effort; messages still load). See the Message Read RPC for how this floor is recomputed. |
 
 ```json
 {
@@ -2444,7 +2445,8 @@ Fetches messages newer than a cursor — the forward-pagination counterpart to L
     }
   ],
   "nextCursor": "eyJ0cyI6MTc0NjUxODQwMDAwMH0=",
-  "hasNext": true
+  "hasNext": true,
+  "minUserLastSeenAt": 1746518100000
 }
 ```
 
@@ -2492,6 +2494,7 @@ Fetches messages around a target message — useful for "jump to this message" n
 | `messages` | array<Message> | Window of messages centered on `messageId`, oldest-first. See [Message schema](#message-schema). |
 | `moreBefore` | boolean | `true` if more messages exist before the window. |
 | `moreAfter` | boolean | `true` if more messages exist after the window. |
+| `minUserLastSeenAt` | number | Optional. UTC milliseconds since Unix epoch. The room's **strict read floor** — `MIN(lastSeenAt)` across all subscribers, present **only when every member has read** the room. Omitted (the key is absent, never `null`) when any member has not read yet (so botDM rooms, where the bot never reads, never set it), when the most recent read is already past `room.lastMsgAt` (recompute is skipped), or when the value cannot be retrieved (best-effort; messages still load). See the Message Read RPC for how this floor is recomputed. |
 
 ```json
 {
@@ -2505,7 +2508,8 @@ Fetches messages around a target message — useful for "jump to this message" n
     }
   ],
   "moreBefore": true,
-  "moreAfter": false
+  "moreAfter": false,
+  "minUserLastSeenAt": 1746518100000
 }
 ```
 

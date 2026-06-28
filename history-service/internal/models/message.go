@@ -40,9 +40,10 @@ type LoadNextMessagesRequest struct {
 }
 
 type LoadNextMessagesResponse struct {
-	Messages   []Message `json:"messages"`
-	NextCursor string    `json:"nextCursor,omitempty"`
-	HasNext    bool      `json:"hasNext"`
+	Messages          []Message `json:"messages"`
+	NextCursor        string    `json:"nextCursor,omitempty"`
+	HasNext           bool      `json:"hasNext"`
+	MinUserLastSeenAt *int64    `json:"minUserLastSeenAt,omitempty"` // UTC millis
 }
 
 type LoadSurroundingMessagesRequest struct {
@@ -52,9 +53,10 @@ type LoadSurroundingMessagesRequest struct {
 }
 
 type LoadSurroundingMessagesResponse struct {
-	Messages   []Message `json:"messages"`
-	MoreBefore bool      `json:"moreBefore"`
-	MoreAfter  bool      `json:"moreAfter"`
+	Messages          []Message `json:"messages"`
+	MoreBefore        bool      `json:"moreBefore"`
+	MoreAfter         bool      `json:"moreAfter"`
+	MinUserLastSeenAt *int64    `json:"minUserLastSeenAt,omitempty"` // UTC millis
 }
 
 type GetMessageByIDRequest struct {
