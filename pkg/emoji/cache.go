@@ -3,7 +3,6 @@ package emoji
 import (
 	"context"
 	"fmt"
-	"sync/atomic"
 	"time"
 
 	lru "github.com/hashicorp/golang-lru/v2/expirable"
@@ -29,10 +28,6 @@ type CachedLookup struct {
 	lru   *lru.LRU[cacheKey, bool]
 	sf    singleflight.Group
 
-	hits     atomic.Uint64
-	misses   atomic.Uint64
-	loadErrs atomic.Uint64
-
 	metrics Recorder
 }
 
@@ -54,12 +49,6 @@ func WithMetrics(r Recorder) Option {
 // `\x00` separator is collision-free for ASCII siteIDs and validated shortcodes.
 func (k cacheKey) String() string {
 	return k.siteID + "\x00" + k.shortcode
-}
-
-// CacheStats is a snapshot of a CachedLookup's counters.
-type CacheStats struct {
-	Hits, Misses, LoadErrors uint64
-	Size                     int
 }
 
 // NewCachedLookup wraps inner with an LRU+TTL cache; size, ttl, inner all required.
@@ -88,11 +77,9 @@ func NewCachedLookup(inner CustomEmojiLookup, size int, ttl time.Duration, opts 
 func (c *CachedLookup) CustomEmojiExists(ctx context.Context, siteID, shortcode string) (bool, error) {
 	k := cacheKey{siteID: siteID, shortcode: shortcode}
 	if v, ok := c.lru.Get(k); ok {
-		c.hits.Add(1)
 		c.metrics.Hit(ctx)
 		return v, nil
 	}
-	c.misses.Add(1)
 
 	v, err, _ := c.sf.Do(k.String(), func() (interface{}, error) {
 		if cached, ok := c.lru.Get(k); ok {
@@ -106,22 +93,11 @@ func (c *CachedLookup) CustomEmojiExists(ctx context.Context, siteID, shortcode 
 		return exists, nil
 	})
 	if err != nil {
-		c.loadErrs.Add(1)
 		c.metrics.Error(ctx)
 		return false, fmt.Errorf("custom emoji lookup %q for site %q: %w", shortcode, siteID, err)
 	}
 	c.metrics.Miss(ctx)
 	return v.(bool), nil
-}
-
-// Stats returns a snapshot of the cache's counters.
-func (c *CachedLookup) Stats() CacheStats {
-	return CacheStats{
-		Hits:       c.hits.Load(),
-		Misses:     c.misses.Load(),
-		LoadErrors: c.loadErrs.Load(),
-		Size:       c.lru.Len(),
-	}
 }
 
 // Invalidate removes the cached entry for (siteID, shortcode); safe on a miss.

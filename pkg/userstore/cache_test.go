@@ -142,8 +142,6 @@ func TestCache_FindUsersByAccounts_BatchPartialHit(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, got, 2)
 	assert.Equal(t, 2, store.byAccountCalls)
-	stats := cache.Stats()
-	assert.GreaterOrEqual(t, stats.Hits, uint64(1))
 }
 
 func TestCache_FindUsersByAccounts_CrossPopulatesByID(t *testing.T) {

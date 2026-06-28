@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync/atomic"
 	"time"
 
 	lru "github.com/hashicorp/golang-lru/v2/expirable"
@@ -47,9 +46,6 @@ type cachedSubStore struct {
 	lru *lru.LRU[subKey, cachedSubscription]
 	sf  singleflight.Group
 
-	hits   atomic.Uint64
-	misses atomic.Uint64
-
 	metrics cacheRecorder
 }
 
@@ -70,11 +66,9 @@ func newCachedSubStore(inner Store, size int, ttl time.Duration) (*cachedSubStor
 func (c *cachedSubStore) GetSubscription(ctx context.Context, account, roomID string) (*model.Subscription, error) {
 	key := subKey{roomID: roomID, account: account}
 	if v, ok := c.lru.Get(key); ok {
-		c.hits.Add(1)
 		c.metrics.Hit(ctx)
 		return fromCached(v), nil
 	}
-	c.misses.Add(1)
 
 	// roomIDs and accounts are validated as UUID/base62/email-style strings that
 	// cannot contain NUL bytes; the \x00 separator therefore makes the key
@@ -124,18 +118,5 @@ func fromCached(c cachedSubscription) *model.Subscription {
 	return &model.Subscription{
 		User:  model.SubscriptionUser{ID: c.ID, Account: c.Account},
 		Roles: c.Roles,
-	}
-}
-
-// SubStats is a snapshot of the subscription cache's hit/miss counters.
-type SubStats struct {
-	Hits, Misses uint64
-}
-
-// Stats returns a snapshot of the cache counters.
-func (c *cachedSubStore) Stats() SubStats {
-	return SubStats{
-		Hits:   c.hits.Load(),
-		Misses: c.misses.Load(),
 	}
 }

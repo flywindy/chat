@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync/atomic"
 	"time"
 
 	lru "github.com/hashicorp/golang-lru/v2/expirable"
@@ -32,17 +31,7 @@ type Cache struct {
 	store     UserStore
 	sf        singleflight.Group
 
-	hits     atomic.Uint64
-	misses   atomic.Uint64
-	loadErrs atomic.Uint64
-
 	metrics Recorder
-}
-
-// Stats is a snapshot of the cache's counters.
-type Stats struct {
-	Hits, Misses, LoadErrors uint64
-	SizeByID, SizeByAccount  int
 }
 
 // Option configures a Cache at construction.
@@ -80,11 +69,9 @@ func NewCache(store UserStore, size int, ttl time.Duration, opts ...Option) (*Ca
 // FindUserByID serves from byID; misses fall through. ErrUserNotFound is not negatively cached.
 func (c *Cache) FindUserByID(ctx context.Context, id string) (*model.User, error) {
 	if v, ok := c.byID.Get(id); ok {
-		c.hits.Add(1)
 		c.metrics.Hit(ctx)
 		return v, nil
 	}
-	c.misses.Add(1)
 	v, err, _ := c.sf.Do(id, func() (interface{}, error) {
 		if cached, ok := c.byID.Get(id); ok {
 			return cached, nil
@@ -97,7 +84,6 @@ func (c *Cache) FindUserByID(ctx context.Context, id string) (*model.User, error
 		return u, nil
 	})
 	if err != nil {
-		c.loadErrs.Add(1)
 		c.metrics.Error(ctx)
 		if errors.Is(err, ErrUserNotFound) {
 			return nil, err
@@ -111,11 +97,9 @@ func (c *Cache) FindUserByID(ctx context.Context, id string) (*model.User, error
 // FindUserByAccount serves from byAccount; cross-populates byID; SF key "account:"+account avoids ID collision.
 func (c *Cache) FindUserByAccount(ctx context.Context, account string) (*model.User, error) {
 	if v, ok := c.byAccount.Get(account); ok {
-		c.hits.Add(1)
 		c.metrics.Hit(ctx)
 		return v, nil
 	}
-	c.misses.Add(1)
 	v, err, _ := c.sf.Do("account:"+account, func() (interface{}, error) {
 		if cached, ok := c.byAccount.Get(account); ok {
 			return cached, nil
@@ -128,7 +112,6 @@ func (c *Cache) FindUserByAccount(ctx context.Context, account string) (*model.U
 		return u, nil
 	})
 	if err != nil {
-		c.loadErrs.Add(1)
 		c.metrics.Error(ctx)
 		if errors.Is(err, ErrUserNotFound) {
 			return nil, err
@@ -153,12 +136,10 @@ func (c *Cache) FindUsersByAccounts(ctx context.Context, accounts []string) ([]m
 		}
 		seen[a] = struct{}{}
 		if u, ok := c.byAccount.Get(a); ok {
-			c.hits.Add(1)
 			c.metrics.Hit(ctx)
 			hits = append(hits, *u)
 			continue
 		}
-		c.misses.Add(1)
 		missing = append(missing, a)
 	}
 	if len(missing) == 0 {
@@ -166,7 +147,6 @@ func (c *Cache) FindUsersByAccounts(ctx context.Context, accounts []string) ([]m
 	}
 	fresh, err := c.store.FindUsersByAccounts(ctx, missing)
 	if err != nil {
-		c.loadErrs.Add(uint64(len(missing)))
 		for range missing {
 			c.metrics.Error(ctx)
 		}
@@ -189,17 +169,6 @@ func (c *Cache) populate(u *model.User) {
 	c.byID.Add(u.ID, u)
 	if u.Account != "" {
 		c.byAccount.Add(u.Account, u)
-	}
-}
-
-// Stats returns a snapshot of cache counters.
-func (c *Cache) Stats() Stats {
-	return Stats{
-		Hits:          c.hits.Load(),
-		Misses:        c.misses.Load(),
-		LoadErrors:    c.loadErrs.Load(),
-		SizeByID:      c.byID.Len(),
-		SizeByAccount: c.byAccount.Len(),
 	}
 }
 

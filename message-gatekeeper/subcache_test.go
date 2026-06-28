@@ -189,21 +189,3 @@ func TestNewCachedSubStore_RejectsInvalidArgs(t *testing.T) {
 		})
 	}
 }
-
-func TestCachedSubStore_StatsTrackHitsAndMisses(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	inner := NewMockStore(ctrl)
-	want := &model.Subscription{User: model.SubscriptionUser{ID: "u1", Account: "alice"}}
-	inner.EXPECT().GetSubscription(gomock.Any(), "alice", "r1").Return(want, nil).Times(1)
-
-	cached, err := newCachedSubStore(inner, 10, time.Minute)
-	require.NoError(t, err)
-
-	_, _ = cached.GetSubscription(context.Background(), "alice", "r1") // miss
-	_, _ = cached.GetSubscription(context.Background(), "alice", "r1") // hit
-	_, _ = cached.GetSubscription(context.Background(), "alice", "r1") // hit
-
-	stats := cached.Stats()
-	assert.Equal(t, uint64(2), stats.Hits)
-	assert.Equal(t, uint64(1), stats.Misses)
-}

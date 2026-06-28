@@ -12,7 +12,6 @@ package readcache
 import (
 	"context"
 	"fmt"
-	"sync/atomic"
 	"time"
 
 	lru "github.com/hashicorp/golang-lru/v2/expirable"
@@ -30,18 +29,10 @@ type Recorder interface {
 	Error(ctx context.Context)
 }
 
-// Stats is a snapshot of a cache's counters.
-type Stats struct {
-	Hits, Misses uint64
-	Size         int
-}
-
 // ttlCache is an LRU+TTL cache whose misses are deduped via singleflight.
 type ttlCache[V any] struct {
 	lru     *lru.LRU[string, V]
 	sf      singleflight.Group
-	hits    atomic.Uint64
-	misses  atomic.Uint64
 	metrics Recorder
 }
 
@@ -63,11 +54,9 @@ func newTTLCache[V any](size int, ttl time.Duration, rec Recorder) (*ttlCache[V]
 // nothing is cached and the error is returned.
 func (c *ttlCache[V]) getOrLoad(ctx context.Context, key string, load func(context.Context) (V, bool, error)) (V, error) {
 	if v, ok := c.lru.Get(key); ok {
-		c.hits.Add(1)
 		c.metrics.Hit(ctx)
 		return v, nil
 	}
-	c.misses.Add(1)
 
 	v, err, _ := c.sf.Do(key, func() (any, error) {
 		// Re-check under singleflight in case a sibling populated the entry.
@@ -90,10 +79,6 @@ func (c *ttlCache[V]) getOrLoad(ctx context.Context, key string, load func(conte
 	}
 	c.metrics.Miss(ctx)
 	return v.(V), nil
-}
-
-func (c *ttlCache[V]) stats() Stats {
-	return Stats{Hits: c.hits.Load(), Misses: c.misses.Load(), Size: c.lru.Len()}
 }
 
 // SubscriptionSource is the subscription read the cache fronts.
@@ -139,9 +124,6 @@ func (c *SubscriptionCache) GetHistorySharedSince(ctx context.Context, account, 
 	}
 	return entry.sharedSince, entry.subscribed, nil
 }
-
-// Stats returns the subscription cache counters.
-func (c *SubscriptionCache) Stats() Stats { return c.cache.stats() }
 
 // GetSubscription bypasses the access-window cache and delegates to the
 // underlying source. Pin/unpin paths need the full subscription doc (roles,
@@ -210,11 +192,6 @@ func (c *RoomCache) GetMinUserLastSeenAt(ctx context.Context, roomID string) (*t
 		}
 		return t, true, nil
 	})
-}
-
-// Stats returns the room-times and min-last-seen cache counters.
-func (c *RoomCache) Stats() (times, minSeen Stats) {
-	return c.times.stats(), c.minSeen.stats()
 }
 
 // GetRoomUserCount bypasses the cache and delegates to the source. The

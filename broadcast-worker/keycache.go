@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"sync/atomic"
 	"time"
 
 	lru "github.com/hashicorp/golang-lru/v2/expirable"
@@ -52,9 +51,6 @@ type CachedKeyProvider struct {
 	lru   *lru.LRU[string, *roomkeystore.VersionedKeyPair]
 	sf    singleflight.Group
 
-	hits   atomic.Int64
-	misses atomic.Int64
-
 	metrics cacheRecorder
 }
 
@@ -78,11 +74,9 @@ func NewCachedKeyProvider(inner RoomKeyProvider, size int, ttl time.Duration) *C
 // ctx.Done() via the select below and can give up independently.
 func (c *CachedKeyProvider) Get(ctx context.Context, roomID string) (*roomkeystore.VersionedKeyPair, error) {
 	if key, ok := c.lru.Get(roomID); ok {
-		c.hits.Add(1)
 		c.metrics.Hit(ctx)
 		return key, nil
 	}
-	c.misses.Add(1)
 
 	resCh := c.sf.DoChan(roomID, func() (any, error) {
 		// Re-check under the singleflight gate: another flight may have
@@ -122,13 +116,6 @@ func (c *CachedKeyProvider) Get(ctx context.Context, roomID string) (*roomkeysto
 		c.metrics.Error(ctx)
 		return nil, ctx.Err()
 	}
-}
-
-// stats returns the current hit/miss counts without resetting them.
-// Hit/miss/error rates are now exported via cachemetrics (cache="roomkey",
-// tier="l1"); this remains for unit tests that assert on the raw counters.
-func (c *CachedKeyProvider) stats() (hits, misses int64) {
-	return c.hits.Load(), c.misses.Load()
 }
 
 // keyCacheTTLSafe reports whether a cache TTL is safe to use given the key

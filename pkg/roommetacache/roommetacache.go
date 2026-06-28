@@ -17,7 +17,6 @@ package roommetacache
 import (
 	"context"
 	"fmt"
-	"sync/atomic"
 	"time"
 
 	lru "github.com/hashicorp/golang-lru/v2/expirable"
@@ -53,17 +52,7 @@ type Cache struct {
 	loader Loader
 	sf     singleflight.Group
 
-	hits     atomic.Uint64
-	misses   atomic.Uint64
-	loadErrs atomic.Uint64
-
 	metrics Recorder
-}
-
-// Stats is a snapshot of the cache's hit/miss counters.
-type Stats struct {
-	Hits, Misses, LoadErrors uint64
-	Size                     int
 }
 
 // Option configures a Cache at construction.
@@ -104,11 +93,9 @@ func New(size int, ttl time.Duration, loader Loader, opts ...Option) (*Cache, er
 // are returned to the caller and not cached.
 func (c *Cache) Get(ctx context.Context, roomID string) (Meta, error) {
 	if v, ok := c.lru.Get(roomID); ok {
-		c.hits.Add(1)
 		c.metrics.Hit(ctx)
 		return v, nil
 	}
-	c.misses.Add(1)
 
 	v, err, _ := c.sf.Do(roomID, func() (interface{}, error) {
 		// Recheck the cache inside singleflight in case a sibling caller
@@ -124,22 +111,11 @@ func (c *Cache) Get(ctx context.Context, roomID string) (Meta, error) {
 		return loaded, nil
 	})
 	if err != nil {
-		c.loadErrs.Add(1)
 		c.metrics.Error(ctx)
 		return Meta{}, fmt.Errorf("get room meta for %q: %w", roomID, err)
 	}
 	c.metrics.Miss(ctx)
 	return v.(Meta), nil
-}
-
-// Stats returns a snapshot of the cache's counters.
-func (c *Cache) Stats() Stats {
-	return Stats{
-		Hits:       c.hits.Load(),
-		Misses:     c.misses.Load(),
-		LoadErrors: c.loadErrs.Load(),
-		Size:       c.lru.Len(),
-	}
 }
 
 // Invalidate removes any cached entry for roomID. Safe to call when

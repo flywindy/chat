@@ -406,48 +406,6 @@ func TestCachedKeyProvider_WinnerCancelDoesNotPoisonOtherCallers(t *testing.T) {
 	assert.Equal(t, 1, inner.callCount("room1"))
 }
 
-func TestCachedKeyProvider_StatsCountHitsAndMisses(t *testing.T) {
-	inner := newFakeKeyStore()
-	inner.set("room1", makeKey(1))
-	inner.set("room2", makeKey(2))
-
-	c := NewCachedKeyProvider(inner, testCacheSize, time.Minute)
-
-	// Two misses (one per room).
-	_, err := c.Get(context.Background(), "room1")
-	require.NoError(t, err)
-	_, err = c.Get(context.Background(), "room2")
-	require.NoError(t, err)
-
-	// Three hits.
-	for i := 0; i < 3; i++ {
-		_, err := c.Get(context.Background(), "room1")
-		require.NoError(t, err)
-	}
-
-	hits, misses := c.stats()
-	assert.Equal(t, int64(3), hits)
-	assert.Equal(t, int64(2), misses)
-}
-
-func TestCachedKeyProvider_StatsErrorAndCancelCountAsMisses(t *testing.T) {
-	// An error or caller-ctx cancellation means the caller did not get a
-	// value from the cache directly; both count as misses regardless of
-	// outcome. (Hit rate measures cache effectiveness; a failed lookup
-	// did not benefit from the cache.)
-	inner := newFakeKeyStore()
-	inner.err = errors.New("boom")
-
-	c := NewCachedKeyProvider(inner, testCacheSize, time.Minute)
-
-	_, err := c.Get(context.Background(), "room1")
-	require.Error(t, err)
-
-	hits, misses := c.stats()
-	assert.Equal(t, int64(0), hits)
-	assert.Equal(t, int64(1), misses)
-}
-
 func TestCachedKeyProvider_Metrics_HitMissError(t *testing.T) {
 	ctx := context.Background()
 	inner := newFakeKeyStore()

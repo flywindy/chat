@@ -136,21 +136,6 @@ func TestSubscriptionCache_SingleflightDedupesConcurrentMisses(t *testing.T) {
 	assert.Equal(t, int32(1), src.calls.Load(), "concurrent misses for the same key should load once")
 }
 
-func TestSubscriptionCache_Stats(t *testing.T) {
-	ts := time.Now().UTC()
-	src := &fakeSubSource{sharedSince: &ts, subscribed: true}
-	c, err := NewSubscriptionCache(src, 100, time.Minute)
-	require.NoError(t, err)
-
-	_, _, _ = c.GetHistorySharedSince(context.Background(), "alice", "r1") // miss
-	_, _, _ = c.GetHistorySharedSince(context.Background(), "alice", "r1") // hit
-	_, _, _ = c.GetHistorySharedSince(context.Background(), "alice", "r1") // hit
-
-	s := c.Stats()
-	assert.Equal(t, uint64(2), s.Hits)
-	assert.Equal(t, uint64(1), s.Misses)
-}
-
 func TestNewSubscriptionCache_InvalidConfig(t *testing.T) {
 	src := &fakeSubSource{}
 	_, err := NewSubscriptionCache(src, 0, time.Minute)

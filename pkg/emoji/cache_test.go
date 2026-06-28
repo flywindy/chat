@@ -199,25 +199,3 @@ func TestCachedLookup_Invalidate(t *testing.T) {
 
 	c.Invalidate("site-a", "never-cached")
 }
-
-func TestCachedLookup_Stats(t *testing.T) {
-	inner := newCountingLookup()
-	inner.results["site-a|tada"] = true
-	c, err := emoji.NewCachedLookup(inner, 16, time.Minute)
-	require.NoError(t, err)
-
-	_, _ = c.CustomEmojiExists(context.Background(), "site-a", "tada")
-	_, _ = c.CustomEmojiExists(context.Background(), "site-a", "tada")
-	_, _ = c.CustomEmojiExists(context.Background(), "site-a", "tada")
-
-	s := c.Stats()
-	assert.Equal(t, uint64(2), s.Hits)
-	assert.Equal(t, uint64(1), s.Misses)
-	assert.Equal(t, uint64(0), s.LoadErrors)
-	assert.Equal(t, 1, s.Size)
-
-	inner.err = errors.New("boom")
-	_, _ = c.CustomEmojiExists(context.Background(), "site-a", "newone")
-	s = c.Stats()
-	assert.Equal(t, uint64(1), s.LoadErrors)
-}

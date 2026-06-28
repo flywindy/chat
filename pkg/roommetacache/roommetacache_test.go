@@ -56,11 +56,6 @@ func TestCache_GetMissThenHit(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, makeMeta("r1"), got2)
 	assert.Equal(t, int32(1), loaderCalls.Load(), "loader should not run on hit")
-
-	stats := c.Stats()
-	assert.Equal(t, uint64(1), stats.Hits)
-	assert.Equal(t, uint64(1), stats.Misses)
-	assert.Equal(t, uint64(0), stats.LoadErrors)
 }
 
 func TestCache_LoaderErrorNotCached(t *testing.T) {
@@ -79,10 +74,6 @@ func TestCache_LoaderErrorNotCached(t *testing.T) {
 	assert.ErrorIs(t, err, wantErr)
 
 	assert.Equal(t, int32(2), calls.Load(), "errors should not be cached; loader must run again")
-
-	stats := c.Stats()
-	assert.Equal(t, uint64(2), stats.Misses)
-	assert.Equal(t, uint64(2), stats.LoadErrors)
 }
 
 func TestCache_TTLExpires(t *testing.T) {
