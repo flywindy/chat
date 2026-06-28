@@ -33,6 +33,7 @@ type fakeDrive struct {
 	uploadGot  struct {
 		userID, username, email, groupID, origin string
 		n                                        int
+		filenames                                []string
 	}
 
 	getResp *drive.GetGroupImageResponse
@@ -45,6 +46,10 @@ type fakeDrive struct {
 func (f *fakeDrive) UploadGroupImages(userID, username, email, groupID, origin string, files []drive.MultipartFile) ([]drive.UploadGroupImageResponse, error) {
 	f.uploadGot.userID, f.uploadGot.username, f.uploadGot.email = userID, username, email
 	f.uploadGot.groupID, f.uploadGot.origin, f.uploadGot.n = groupID, origin, len(files)
+	f.uploadGot.filenames = nil
+	for _, mf := range files {
+		f.uploadGot.filenames = append(f.uploadGot.filenames, mf.Filename)
+	}
 	return f.uploadResp, f.uploadErr
 }
 func (f *fakeDrive) GetGroupImage(host, groupID, fileID string) (*drive.GetGroupImageResponse, error) {
@@ -300,6 +305,175 @@ func TestHandleHealth(t *testing.T) {
 	h.HandleHealth(c)
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Contains(t, w.Body.String(), "ok")
+}
+
+func TestHandleUploadImages_SendsUniqueNames_ReturnsOriginals(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	store := NewMockStore(ctrl)
+	store.EXPECT().IsMember(gomock.Any(), "r1", "alice").Return(true, nil)
+	store.EXPECT().GetRoomSiteID(gomock.Any(), "r1").Return("site-x", nil)
+	fd := &fakeDrive{
+		baseURL: "https://drive.example.com",
+		uploadResp: []drive.UploadGroupImageResponse{
+			{Status: "success", File: drive.GroupImageObject{FileID: "img-1", GroupID: "r1", Filename: "a_1719312000000_0.png"}},
+		},
+	}
+	h := newHandler(store, fd)
+	h.nowMilli = func() int64 { return 1719312000000 }
+
+	body, ct := multipartBody(t, "images", map[string][]byte{"a.png": []byte("x")})
+	c, w := newUploadCtx(t, "r1", body, ct, okUser())
+	h.HandleUploadImages(c)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, []string{"a_1719312000000_0.png"}, fd.uploadGot.filenames, "drive receives the unique name")
+
+	var got struct {
+		Results []uploadResultItem `json:"results"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	require.Len(t, got.Results, 1)
+	assert.Equal(t, "success", got.Results[0].Status)
+	assert.Equal(t, "a.png", got.Results[0].Name, "response shows the original name")
+	assert.Equal(t, "api/v1/rooms/r1/file/img-1?drive_host=https://drive.example.com", got.Results[0].RelativePath)
+}
+
+// Two files with the SAME name in one batch must get distinct indexed names so
+// they don't collide in Drive; both response items keep the original name.
+func TestHandleUploadImages_DuplicateNamesInBatch_GetDistinctNames(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	store := NewMockStore(ctrl)
+	store.EXPECT().IsMember(gomock.Any(), "r1", "alice").Return(true, nil)
+	store.EXPECT().GetRoomSiteID(gomock.Any(), "r1").Return("site-x", nil)
+	fd := &fakeDrive{
+		baseURL: "https://drive.example.com",
+		uploadResp: []drive.UploadGroupImageResponse{
+			{Status: "success", File: drive.GroupImageObject{FileID: "img-0", GroupID: "r1", Filename: "a_1719312000000_0.png"}},
+			{Status: "success", File: drive.GroupImageObject{FileID: "img-1", GroupID: "r1", Filename: "a_1719312000000_1.png"}},
+		},
+	}
+	h := newHandler(store, fd)
+	h.nowMilli = func() int64 { return 1719312000000 }
+
+	// Two parts under the same field with the same filename.
+	body := &bytes.Buffer{}
+	mw := multipart.NewWriter(body)
+	for i := 0; i < 2; i++ {
+		fw, err := mw.CreateFormFile("images", "a.png")
+		require.NoError(t, err)
+		_, _ = fw.Write([]byte("x"))
+	}
+	require.NoError(t, mw.Close())
+
+	c, w := newUploadCtx(t, "r1", body, mw.FormDataContentType(), okUser())
+	h.HandleUploadImages(c)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, []string{"a_1719312000000_0.png", "a_1719312000000_1.png"}, fd.uploadGot.filenames, "duplicate names get distinct indexed names")
+
+	var got struct {
+		Results []uploadResultItem `json:"results"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	require.Len(t, got.Results, 2)
+	assert.Equal(t, "a.png", got.Results[0].Name)
+	assert.Equal(t, "a.png", got.Results[1].Name)
+}
+
+func TestHandleUploadImages_DriveErrorEmptyFilename_KeepsOriginalName(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	store := NewMockStore(ctrl)
+	store.EXPECT().IsMember(gomock.Any(), "r1", "alice").Return(true, nil)
+	store.EXPECT().GetRoomSiteID(gomock.Any(), "r1").Return("site-x", nil)
+	// Drive reports a per-file failure: status "failure", empty File (so
+	// resp.File.Filename == "").
+	fd := &fakeDrive{
+		baseURL: "https://drive.example.com",
+		uploadResp: []drive.UploadGroupImageResponse{
+			{Status: "failure", Error: "drive exploded", File: drive.GroupImageObject{}},
+		},
+	}
+	h := newHandler(store, fd)
+	h.nowMilli = func() int64 { return 1719312000000 }
+
+	body, ct := multipartBody(t, "images", map[string][]byte{"a.png": []byte("x")})
+	c, w := newUploadCtx(t, "r1", body, ct, okUser())
+	h.HandleUploadImages(c)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var got struct {
+		Results []uploadResultItem `json:"results"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	require.Len(t, got.Results, 1)
+	assert.Equal(t, "failure", got.Results[0].Status)
+	assert.Equal(t, "drive exploded", got.Results[0].Error)
+	assert.Equal(t, "a.png", got.Results[0].Name, "name falls back to original even when drive returns empty filename")
+	assert.Empty(t, got.Results[0].RelativePath)
+}
+
+func TestHandleUploadFile_SendsUniqueName_ReturnsOriginal(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	store := NewMockStore(ctrl)
+	store.EXPECT().IsMember(gomock.Any(), "r1", "alice").Return(true, nil)
+	store.EXPECT().GetRoomSiteID(gomock.Any(), "r1").Return("site-x", nil)
+	fd := &fakeDrive{
+		baseURL: "http://drive",
+		uploadResp: []drive.UploadGroupImageResponse{
+			{Status: "success", File: drive.GroupImageObject{FileID: "f1", GroupID: "r1", Filename: "photo_1719312000000_0.png", FileSize: 3}},
+		},
+	}
+	h := NewHandler(store, fd, 0, 0, 100<<20, newMediaTypeFilter("", "image/svg+xml"), imagePreview)
+	h.nowMilli = func() int64 { return 1719312000000 }
+
+	body := &bytes.Buffer{}
+	mw := multipart.NewWriter(body)
+	w, err := mw.CreateFormFile("file", "photo.png")
+	require.NoError(t, err)
+	_, _ = w.Write([]byte("xxx"))
+	require.NoError(t, mw.Close())
+
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/rooms/r1/upload", body)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	c.Request = req
+	c.Params = gin.Params{{Key: "roomId", Value: "r1"}}
+	c.Set(ctxUserKey, okUser())
+
+	h.HandleUploadFile(c)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, []string{"photo_1719312000000_0.png"}, fd.uploadGot.filenames, "drive receives the unique name")
+
+	var got struct {
+		Attachments []model.Attachment `json:"attachments"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	require.Len(t, got.Attachments, 1)
+	assert.Equal(t, "photo.png", got.Attachments[0].Title, "response keeps the original name")
+}
+
+func Test_uniqueName(t *testing.T) {
+	const milli int64 = 1719312000000
+	tests := []struct {
+		name string
+		in   string
+		i    int
+		want string
+	}{
+		{"with extension", "photo.png", 0, "photo_1719312000000_0.png"},
+		{"uppercase extension", "IMG.JPG", 1, "IMG_1719312000000_1.JPG"},
+		{"no extension", "README", 2, "README_1719312000000_2"},
+		{"multi dot", "a.tar.gz", 0, "a.tar_1719312000000_0.gz"},
+		{"dotfile (filepath.Ext semantics)", ".gitignore", 0, "_1719312000000_0.gitignore"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, uniqueName(tt.in, milli, tt.i))
+		})
+	}
 }
 
 func TestRegisterRoutes_HealthAndAuthGuard(t *testing.T) {
