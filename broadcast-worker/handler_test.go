@@ -2524,18 +2524,21 @@ func TestBuildClientMessage_DecodesAttachments(t *testing.T) {
 	require.NoError(t, err)
 	msg := model.Message{
 		ID: "m1", UserAccount: "alice", Attachments: [][]byte{blob},
-		QuotedParentMessage: &cassandra.QuotedParentMessage{Attachments: [][]byte{blob}},
+		QuotedParentMessage: &cassandra.QuotedParentMessage{
+			DecodedAttachments: []cassandra.Attachment{{ID: "f1", Title: "a.png", Type: "file"}},
+		},
 	}
 
 	cm := buildClientMessage(&msg, map[string]model.User{})
 
+	// Main message: raw blobs decoded onto the wrapper; embedded raw nilled (Task F).
 	require.Len(t, cm.Attachments, 1)
 	assert.Equal(t, "f1", cm.Attachments[0].ID)
+	assert.Nil(t, cm.Message.Attachments)
+
+	// Quoted parent: passed through already-decoded (no re-decode).
 	require.Len(t, cm.QuotedParentMessage.DecodedAttachments, 1)
 	assert.Equal(t, "f1", cm.QuotedParentMessage.DecodedAttachments[0].ID)
-
-	// Cloning the quoted parent must not mutate the caller's canonical message.
-	assert.Nil(t, msg.QuotedParentMessage.DecodedAttachments)
 
 	// The delivered JSON carries attachments as objects, not base64 strings.
 	out, err := json.Marshal(cm)

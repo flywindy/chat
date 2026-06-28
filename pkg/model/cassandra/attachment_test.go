@@ -30,6 +30,33 @@ func TestAttachment_RoundTrip(t *testing.T) {
 	assert.Contains(t, string(ab), `"id":"f2"`)
 }
 
+func TestAttachment_FileTypeRoundTrip(t *testing.T) {
+	in := Attachment{ID: "f1", Title: "a.pdf", Type: "file", FileType: "application/pdf"}
+	raw, err := json.Marshal(in)
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"fileType":"application/pdf"`)
+	var out Attachment
+	require.NoError(t, json.Unmarshal(raw, &out))
+	assert.Equal(t, "application/pdf", out.FileType)
+}
+
+func TestEncodeAttachments_RoundTrip(t *testing.T) {
+	in := []Attachment{
+		{ID: "f1", Title: "a.png", Type: "file"},
+		{ID: "f2", Title: "b.pdf", Type: "file"},
+	}
+	raw := EncodeAttachments(in)
+	require.Len(t, raw, 2)
+	out, skipped := DecodeAttachments(raw)
+	assert.Zero(t, skipped)
+	assert.Equal(t, in, out)
+}
+
+func TestEncodeAttachments_Empty(t *testing.T) {
+	assert.Nil(t, EncodeAttachments(nil))
+	assert.Nil(t, EncodeAttachments([]Attachment{}))
+}
+
 func TestDecodeAttachments(t *testing.T) {
 	good, err := json.Marshal(Attachment{ID: "f1", Title: "a.png", Type: "file"})
 	require.NoError(t, err)

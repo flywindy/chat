@@ -51,6 +51,7 @@ type quotedParentProjection struct {
 	CreatedAt             time.Time               `json:"createdAt"`
 	Msg                   string                  `json:"msg"`
 	Mentions              []cassandra.Participant `json:"mentions"`
+	DecodedAttachments    []cassandra.Attachment  `json:"attachments"`
 	ThreadParentID        string                  `json:"threadParentId"`
 	ThreadParentCreatedAt *time.Time              `json:"threadParentCreatedAt"`
 }
@@ -96,6 +97,7 @@ func (f *historyParentFetcher) FetchQuotedParent(
 		CreatedAt:             parent.CreatedAt,
 		Msg:                   parent.Msg,
 		Mentions:              parent.Mentions,
+		DecodedAttachments:    parent.DecodedAttachments,
 		MessageLink:           fmt.Sprintf("%s/%s/%s", f.chatBaseURL, parent.RoomID, messageID),
 		ThreadParentID:        parent.ThreadParentID,
 		ThreadParentCreatedAt: parent.ThreadParentCreatedAt,

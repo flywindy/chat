@@ -3,24 +3,78 @@ package main
 import "strings"
 
 // mediaTypeFilter decides whether an uploaded MIME type is allowed: blacklist
-// first (deny wins), then whitelist (when non-empty, the type must match).
+// first (deny wins), then whitelist (when non-empty, the type must match). Each
+// list is split into an exact-match set (O(1)) and a slice of wildcard patterns.
 type mediaTypeFilter struct {
-	whitelist []string
-	blacklist []string
+	whitelistExact    map[string]struct{}
+	whitelistWildcard []string
+	blacklistExact    map[string]struct{}
+	blacklistWildcard []string
 }
 
 func newMediaTypeFilter(whitelist, blacklist string) *mediaTypeFilter {
-	return &mediaTypeFilter{whitelist: parseMediaTypes(whitelist), blacklist: parseMediaTypes(blacklist)}
+	we, ww := parseMediaTypes(whitelist)
+	be, bw := parseMediaTypes(blacklist)
+	return &mediaTypeFilter{
+		whitelistExact:    we,
+		whitelistWildcard: ww,
+		blacklistExact:    be,
+		blacklistWildcard: bw,
+	}
 }
 
-func parseMediaTypes(csv string) []string {
-	var out []string
+// parseMediaTypes splits a CSV into an exact-match set and a wildcard slice
+// ("type/*" or bare "*"/"*/*"). Entries are normalized; blanks are dropped.
+func parseMediaTypes(csv string) (exact map[string]struct{}, wildcard []string) {
+	exact = make(map[string]struct{})
 	for _, p := range strings.Split(csv, ",") {
-		if p = normalizeMediaType(p); p != "" {
-			out = append(out, p)
+		p = normalizeMediaType(p)
+		if p == "" {
+			continue
+		}
+		if p == "*" || p == "*/*" || strings.HasSuffix(p, "/*") {
+			wildcard = append(wildcard, p)
+			continue
+		}
+		exact[p] = struct{}{}
+	}
+	return exact, wildcard
+}
+
+func (f *mediaTypeFilter) allowed(mime string) bool {
+	m := normalizeMediaType(mime)
+	if matchSet(f.blacklistExact, f.blacklistWildcard, m) {
+		return false
+	}
+	if len(f.whitelistExact) == 0 && len(f.whitelistWildcard) == 0 {
+		return true
+	}
+	return matchSet(f.whitelistExact, f.whitelistWildcard, m)
+}
+
+// matchSet returns true if mime is in the exact set (O(1)) or matches any
+// wildcard pattern in the slice.
+func matchSet(exact map[string]struct{}, wildcard []string, mime string) bool {
+	if _, ok := exact[mime]; ok {
+		return true
+	}
+	for _, w := range wildcard {
+		if matchMediaType(w, mime) {
+			return true
 		}
 	}
-	return out
+	return false
+}
+
+// matchMediaType supports "type/*" prefix wildcard and bare "*".
+func matchMediaType(pattern, mime string) bool {
+	if pattern == "*" || pattern == "*/*" {
+		return true
+	}
+	if strings.HasSuffix(pattern, "/*") {
+		return strings.HasPrefix(mime, strings.TrimSuffix(pattern, "*"))
+	}
+	return pattern == mime
 }
 
 // normalizeMediaType lowercases, trims, and drops any parameters after the first
@@ -31,33 +85,4 @@ func normalizeMediaType(v string) string {
 		v = base
 	}
 	return strings.ToLower(strings.TrimSpace(v))
-}
-
-func (f *mediaTypeFilter) allowed(mime string) bool {
-	m := normalizeMediaType(mime)
-	for _, b := range f.blacklist {
-		if matchMediaType(b, m) {
-			return false
-		}
-	}
-	if len(f.whitelist) == 0 {
-		return true
-	}
-	for _, w := range f.whitelist {
-		if matchMediaType(w, m) {
-			return true
-		}
-	}
-	return false
-}
-
-// matchMediaType supports exact match, "type/*" prefix wildcard, and bare "*".
-func matchMediaType(pattern, mime string) bool {
-	if pattern == "*" || pattern == "*/*" {
-		return true
-	}
-	if strings.HasSuffix(pattern, "/*") {
-		return strings.HasPrefix(mime, strings.TrimSuffix(pattern, "*"))
-	}
-	return pattern == mime
 }

@@ -17,6 +17,10 @@ func TestMediaTypeFilter_Allowed(t *testing.T) {
 		{"blacklist beats whitelist", "image/*", "image/svg+xml", "image/svg+xml", false},
 		{"bare star", "*", "", "anything/here", true},
 		{"trims spaces", " image/png , image/jpeg ", "", "image/jpeg", true},
+		{"exact map hit among mixed list", "image/png,text/*", "", "image/png", true},
+		{"wildcard hit among mixed list", "image/png,text/*", "", "text/csv", true},
+		{"exact miss with no wildcard match", "image/png,text/*", "", "image/gif", false},
+		{"deny wins over allow-all", "*", "application/x-msdownload", "application/x-msdownload", false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

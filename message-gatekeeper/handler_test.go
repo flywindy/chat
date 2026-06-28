@@ -836,7 +836,7 @@ func TestHandler_processMessage_RejectsInvalidThreadParentMessageID(t *testing.T
 		return &jetstream.PubAck{}, nil
 	}
 	reply := func(ctx context.Context, msg *nats.Msg) error { return nil }
-	h := NewHandler(store, nil, pub, reply, "site1", nil, 500)
+	h := NewHandler(store, nil, pub, reply, "site1", nil, 500, 1, 8192)
 
 	req := model.SendMessageRequest{
 		ID:                    idgen.GenerateMessageID(),
@@ -864,7 +864,7 @@ func TestHandler_processMessage_PropagatesRequestIDOnCanonicalPublish(t *testing
 	}
 	reply := func(ctx context.Context, msg *nats.Msg) error { return nil }
 
-	h := NewHandler(store, nil, pub, reply, "site1", nil, 500)
+	h := NewHandler(store, nil, pub, reply, "site1", nil, 500, 1, 8192)
 
 	// The JSON-payload requestId is the canonical source — it wins over any
 	// header-derived value already in ctx. Seed ctx with a stale "header" value
@@ -899,7 +899,7 @@ func TestHandler_processMessage_BridgesPayloadRequestIDWhenCtxHasNone(t *testing
 	}
 	reply := func(ctx context.Context, msg *nats.Msg) error { return nil }
 
-	h := NewHandler(store, nil, pub, reply, "site1", nil, 500)
+	h := NewHandler(store, nil, pub, reply, "site1", nil, 500, 1, 8192)
 
 	const payloadReqID = "01970a4f-8c2d-7c9a-abcd-e0123456789f"
 	req := model.SendMessageRequest{ID: idgen.GenerateMessageID(), Content: "hello", RequestID: payloadReqID}
@@ -942,7 +942,7 @@ func TestHandler_processMessage_PopulatesUserDisplayName(t *testing.T) {
 		return &jetstream.PubAck{}, nil
 	}
 	reply := func(_ context.Context, _ *nats.Msg) error { return nil }
-	h := NewHandler(store, users, pub, reply, "site1", nil, 500)
+	h := NewHandler(store, users, pub, reply, "site1", nil, 500, 1, 8192)
 
 	req := model.SendMessageRequest{ID: idgen.GenerateMessageID(), Content: "hi", RequestID: "01970a4f-8c2d-7c9a-abcd-e0123456789f"}
 	_, err := h.processMessage(context.Background(), "alice", "room-1", "site1", &req)
@@ -970,7 +970,7 @@ func TestHandler_processMessage_FallsBackToAccountWhenUserLookupFails(t *testing
 		return &jetstream.PubAck{}, nil
 	}
 	reply := func(_ context.Context, _ *nats.Msg) error { return nil }
-	h := NewHandler(store, users, pub, reply, "site1", nil, 500)
+	h := NewHandler(store, users, pub, reply, "site1", nil, 500, 1, 8192)
 
 	req := model.SendMessageRequest{ID: idgen.GenerateMessageID(), Content: "hi", RequestID: "01970a4f-8c2d-7c9a-abcd-e0123456789f"}
 	_, err := h.processMessage(context.Background(), "alice", "room-1", "site1", &req)
@@ -1458,7 +1458,7 @@ func TestHandler_sendReply(t *testing.T) {
 			*captured = append(*captured, msg)
 			return nil
 		}
-		return NewHandler(nil, nil, nil, reply, "site-a", nil, 500)
+		return NewHandler(nil, nil, nil, reply, "site-a", nil, 500, 1, 8192)
 	}
 
 	mk := func(requestID string) *model.SendMessageRequest {
@@ -1526,7 +1526,7 @@ func TestHandleJetStreamMsg_MalformedBody_Acks(t *testing.T) {
 		captured = append(captured, m)
 		return nil
 	}
-	h := NewHandler(nil, nil, nil, reply, "site-A", nil, 500)
+	h := NewHandler(nil, nil, nil, reply, "site-A", nil, 500, 1, 8192)
 
 	msg := &fakeJSMsg{
 		subject: "chat.user.alice.room.r1.site-A.msg.send",
@@ -1541,7 +1541,7 @@ func TestHandleJetStreamMsg_MalformedBody_Acks(t *testing.T) {
 
 // Invalid subject Acks (not retryable) and sends a best-effort reply.
 func TestHandleJetStreamMsg_InvalidSubject_Acks(t *testing.T) {
-	h := NewHandler(nil, nil, nil, func(context.Context, *nats.Msg) error { return nil }, "site-A", nil, 500)
+	h := NewHandler(nil, nil, nil, func(context.Context, *nats.Msg) error { return nil }, "site-A", nil, 500, 1, 8192)
 	msg := &fakeJSMsg{
 		subject: "chat.garbage",
 		data:    []byte(`{}`),
@@ -1573,7 +1573,7 @@ func TestHandler_processMessage_RequestTShowMapsToTShow(t *testing.T) {
 			Return(&cassandra.QuotedParentMessage{MessageID: parentID, RoomID: "room-1", CreatedAt: parentCreatedAt}, nil)
 
 		var published []publishedMsg
-		h := NewHandler(store, nil, makePublishFunc(&published, nil), replyFn, "site1", fetcher, 500)
+		h := NewHandler(store, nil, makePublishFunc(&published, nil), replyFn, "site1", fetcher, 500, 1, 8192)
 
 		req := model.SendMessageRequest{
 			ID:                    idgen.GenerateMessageID(),
@@ -1607,7 +1607,7 @@ func TestHandler_processMessage_RequestTShowMapsToTShow(t *testing.T) {
 			Return(&cassandra.QuotedParentMessage{MessageID: parentID, RoomID: "room-1", CreatedAt: parentCreatedAt}, nil)
 
 		var published []publishedMsg
-		h := NewHandler(store, nil, makePublishFunc(&published, nil), replyFn, "site1", fetcher, 500)
+		h := NewHandler(store, nil, makePublishFunc(&published, nil), replyFn, "site1", fetcher, 500, 1, 8192)
 
 		req := model.SendMessageRequest{
 			ID:                    idgen.GenerateMessageID(),
@@ -1633,7 +1633,7 @@ func TestHandler_processMessage_RequestTShowMapsToTShow(t *testing.T) {
 			Return(roommetacache.Meta{ID: "room-1", UserCount: 1}, nil)
 
 		var published []publishedMsg
-		h := NewHandler(store, nil, makePublishFunc(&published, nil), replyFn, "site1", nil, 500)
+		h := NewHandler(store, nil, makePublishFunc(&published, nil), replyFn, "site1", nil, 500, 1, 8192)
 
 		req := model.SendMessageRequest{
 			ID:        idgen.GenerateMessageID(),
@@ -1666,7 +1666,7 @@ func TestHandler_processMessage_CarriesAttachments(t *testing.T) {
 	var published []publishedMsg
 	pub := makePublishFunc(&published, nil)
 	reply := func(ctx context.Context, msg *nats.Msg) error { return nil }
-	h := NewHandler(store, nil, pub, reply, "site-a", nil, 500)
+	h := NewHandler(store, nil, pub, reply, "site-a", nil, 500, 1, 8192)
 
 	att := []byte(`{"id":"f1","title":"a.png","type":"file"}`)
 	req := model.SendMessageRequest{
@@ -1692,7 +1692,7 @@ func TestHandler_processMessage_EmptyContentRejectedWithoutAttachments(t *testin
 	store := NewMockStore(ctrl)
 	pub := makePublishFunc(nil, nil)
 	reply := func(ctx context.Context, msg *nats.Msg) error { return nil }
-	h := NewHandler(store, nil, pub, reply, "site-a", nil, 500)
+	h := NewHandler(store, nil, pub, reply, "site-a", nil, 500, 1, 8192)
 	req := model.SendMessageRequest{ID: idgen.GenerateMessageID(), Content: "", RequestID: "01970a4f-8c2d-7c9a-abcd-e0123456789f"}
 	_, err := h.processMessage(context.Background(), "alice", "room-1", "site-a", &req)
 	var ee *errcode.Error
@@ -1704,7 +1704,7 @@ func TestHandler_processMessage_RejectsTooManyAttachments(t *testing.T) {
 	store := NewMockStore(ctrl)
 	pub := makePublishFunc(nil, nil)
 	reply := func(ctx context.Context, msg *nats.Msg) error { return nil }
-	h := NewHandler(store, nil, pub, reply, "site-a", nil, 500)
+	h := NewHandler(store, nil, pub, reply, "site-a", nil, 500, 1, 8192)
 	req := model.SendMessageRequest{
 		ID: idgen.GenerateMessageID(), Content: "hi", RequestID: "01970a4f-8c2d-7c9a-abcd-e0123456789f",
 		Attachments: [][]byte{[]byte("a"), []byte("b")},
@@ -1712,4 +1712,31 @@ func TestHandler_processMessage_RejectsTooManyAttachments(t *testing.T) {
 	_, err := h.processMessage(context.Background(), "alice", "room-1", "site-a", &req)
 	var ee *errcode.Error
 	require.ErrorAs(t, err, &ee)
+}
+
+func TestHandler_processMessage_ConfigurableAttachmentCap(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	store := NewMockStore(ctrl)
+	store.EXPECT().GetSubscription(gomock.Any(), "alice", "room-1").
+		Return(&model.Subscription{User: model.SubscriptionUser{ID: "u1", Account: "alice"}, RoomID: "room-1", Roles: []model.Role{model.RoleMember}}, nil)
+	store.EXPECT().GetRoomMeta(gomock.Any(), "room-1").
+		Return(roommetacache.Meta{ID: "room-1", UserCount: 1}, nil)
+
+	var published []publishedMsg
+	pub := makePublishFunc(&published, nil)
+	reply := func(ctx context.Context, msg *nats.Msg) error { return nil }
+	// MaxAttachments=2 raises the default cap of 1.
+	h := NewHandler(store, nil, pub, reply, "site-a", nil, 500, 2, 8192)
+
+	req := model.SendMessageRequest{
+		ID: idgen.GenerateMessageID(), Content: "hi", RequestID: "01970a4f-8c2d-7c9a-abcd-e0123456789f",
+		Attachments: [][]byte{[]byte(`{"id":"f1"}`), []byte(`{"id":"f2"}`)},
+	}
+	_, err := h.processMessage(context.Background(), "alice", "room-1", "site-a", &req)
+	require.NoError(t, err)
+
+	require.Len(t, published, 1)
+	var evt model.MessageEvent
+	require.NoError(t, json.Unmarshal(published[0].data, &evt))
+	require.Len(t, evt.Message.Attachments, 2)
 }

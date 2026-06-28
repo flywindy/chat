@@ -894,13 +894,14 @@ func buildClientMessage(msg *model.Message, userMap map[string]model.User) *mode
 		Sender:      &sender,
 		Attachments: decoded,
 	}
-	// Clone the quoted parent before filling its decoded attachments so the
-	// caller's canonical *msg (a shared pointer) is not mutated.
-	if msg.QuotedParentMessage != nil {
-		qp := *msg.QuotedParentMessage
-		qp.DecodedAttachments, _ = cassandra.DecodeAttachments(qp.Attachments)
-		cm.QuotedParentMessage = &qp
-	}
+	// The embedded Message.Attachments (raw [][]byte) is an internal transport
+	// detail; cm.Attachments (decoded) is the sole client-facing form. Null the
+	// raw copy so the object carries one representation. Safe: Message: *msg is a
+	// value copy, so reassigning this slice header does not touch the caller's *msg.
+	cm.Message.Attachments = nil
+	// The quoted parent arrives already-decoded on the canonical wire (the
+	// gatekeeper projects its DecodedAttachments into the snapshot), so no decode
+	// is needed here — it rides along via the embedded Message: *msg copy.
 	return cm
 }
 

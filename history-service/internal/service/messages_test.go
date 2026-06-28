@@ -671,6 +671,23 @@ func TestHistoryService_GetMessageByID_NoHSS(t *testing.T) {
 	assert.Equal(t, "m1", result.MessageID)
 }
 
+func TestHistoryService_GetMessageByID_DecodesAttachments(t *testing.T) {
+	svc, msgs, subs, _, _ := newService(t)
+	c := testContext()
+
+	blob, err := json.Marshal(model.Attachment{ID: "f1", Title: "a.png", Type: "file"})
+	require.NoError(t, err)
+	createdAt := joinTime.Add(1 * time.Minute)
+	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(&joinTime, true, nil)
+	msg := &models.Message{MessageID: "m1", RoomID: "r1", CreatedAt: createdAt, Attachments: [][]byte{blob}}
+	msgs.EXPECT().GetMessageByID(gomock.Any(), "m1").Return(msg, nil)
+
+	result, err := svc.GetMessageByID(c, models.GetMessageByIDRequest{MessageID: "m1"})
+	require.NoError(t, err)
+	require.Len(t, result.DecodedAttachments, 1)
+	assert.Equal(t, "f1", result.DecodedAttachments[0].ID)
+}
+
 func TestHistoryService_LoadNextMessages_HasNextFalse(t *testing.T) {
 	svc, msgs, subs, _, _ := newService(t)
 	c := testContext()
@@ -2161,6 +2178,23 @@ func TestHistoryService_GetMessagesByIDs_Success(t *testing.T) {
 	assert.Equal(t, "m1", result.Messages[0].MessageID)
 	assert.Equal(t, "m2", result.Messages[1].MessageID)
 	assert.Equal(t, "m3", result.Messages[2].MessageID)
+}
+
+func TestHistoryService_GetMessagesByIDs_DecodesAttachments(t *testing.T) {
+	svc, msgs, subs, _, _ := newService(t)
+	c := testContext()
+
+	blob, err := json.Marshal(model.Attachment{ID: "f1", Title: "a.png", Type: "file"})
+	require.NoError(t, err)
+	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(&joinTime, true, nil)
+	fetched := []models.Message{{MessageID: "m1", RoomID: "r1", CreatedAt: joinTime.Add(time.Minute), Attachments: [][]byte{blob}}}
+	msgs.EXPECT().GetMessagesByIDs(gomock.Any(), []string{"m1"}).Return(fetched, nil)
+
+	resp, err := svc.GetMessagesByIDs(c, models.GetMessagesByIDsRequest{MessageIDs: []string{"m1"}})
+	require.NoError(t, err)
+	require.Len(t, resp.Messages, 1)
+	require.Len(t, resp.Messages[0].DecodedAttachments, 1)
+	assert.Equal(t, "f1", resp.Messages[0].DecodedAttachments[0].ID)
 }
 
 func TestHistoryService_GetMessagesByIDs_PartialResult_MissingIDsSilentlyOmitted(t *testing.T) {

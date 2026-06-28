@@ -319,6 +319,10 @@ func buildCassandraMessage(msg *model.Message) cassandra.Message {
 	}
 	if msg.QuotedParentMessage != nil {
 		q := *msg.QuotedParentMessage
+		// gocql persists the LIST<BLOB> attachments column from the raw Attachments
+		// field; only DecodedAttachments crosses the canonical wire, so re-encode
+		// it here (before encryption — Attachments is an encrypted field).
+		q.Attachments = cassandra.EncodeAttachments(q.DecodedAttachments)
 		cm.QuotedParentMessage = &q
 	}
 	return cm

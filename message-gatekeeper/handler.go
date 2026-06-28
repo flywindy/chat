@@ -27,11 +27,6 @@ import (
 
 const maxContentBytes = 20 * 1024 // 20 KB
 
-const (
-	maxAttachments     = 1
-	maxAttachmentBytes = 8 * 1024 // 8 KiB total; blobs are small JSON Attachment metadata
-)
-
 // replyFunc is the function signature for publishing a reply to a NATS subject.
 type replyFunc func(ctx context.Context, msg *nats.Msg) error
 
@@ -54,12 +49,14 @@ type Handler struct {
 	siteID             string
 	parentFetcher      ParentMessageFetcher
 	largeRoomThreshold int
+	maxAttachments     int
+	maxAttachmentBytes int
 }
 
 // NewHandler constructs a new Handler with the given dependencies.
 // users may be nil; when nil, sender display-name resolution is skipped and
 // downstream consumers fall back to UserAccount.
-func NewHandler(store Store, users UserGetter, publish publishFunc, reply replyFunc, siteID string, parentFetcher ParentMessageFetcher, largeRoomThreshold int) *Handler {
+func NewHandler(store Store, users UserGetter, publish publishFunc, reply replyFunc, siteID string, parentFetcher ParentMessageFetcher, largeRoomThreshold, maxAttachments, maxAttachmentBytes int) *Handler {
 	return &Handler{
 		store:              store,
 		users:              users,
@@ -68,6 +65,8 @@ func NewHandler(store Store, users UserGetter, publish publishFunc, reply replyF
 		siteID:             siteID,
 		parentFetcher:      parentFetcher,
 		largeRoomThreshold: largeRoomThreshold,
+		maxAttachments:     maxAttachments,
+		maxAttachmentBytes: maxAttachmentBytes,
 	}
 }
 
@@ -247,8 +246,8 @@ func (h *Handler) processMessage(ctx context.Context, account, roomID, siteID st
 	// Validate attachments: count + total byte caps. Blobs are otherwise opaque
 	// here (decoded leniently on the read path) — but an empty blob is rejected
 	// since it carries no attachment and would yield a contentless message.
-	if len(req.Attachments) > maxAttachments {
-		return nil, errcode.BadRequest(fmt.Sprintf("too many attachments: max %d", maxAttachments))
+	if len(req.Attachments) > h.maxAttachments {
+		return nil, errcode.BadRequest(fmt.Sprintf("too many attachments: max %d", h.maxAttachments))
 	}
 	var attachmentBytes int
 	for i, a := range req.Attachments {
@@ -257,8 +256,8 @@ func (h *Handler) processMessage(ctx context.Context, account, roomID, siteID st
 		}
 		attachmentBytes += len(a)
 	}
-	if attachmentBytes > maxAttachmentBytes {
-		return nil, errcode.BadRequest(fmt.Sprintf("attachments exceed maximum size of %d bytes", maxAttachmentBytes))
+	if attachmentBytes > h.maxAttachmentBytes {
+		return nil, errcode.BadRequest(fmt.Sprintf("attachments exceed maximum size of %d bytes", h.maxAttachmentBytes))
 	}
 
 	// #322: the gatekeeper resolves the parent's createdAt server-side

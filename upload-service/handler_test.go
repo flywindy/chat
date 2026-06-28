@@ -321,6 +321,25 @@ func TestRegisterRoutes_HealthAndAuthGuard(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
 }
 
+func TestRegisterRoutes_UploadFilePath(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	h := newHandler(NewMockStore(ctrl), &fakeDrive{})
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	registerRoutes(r, h, nil, true)
+
+	// New path is registered: with no ssoToken the auth middleware returns 401
+	// (NOT 404 — 404 would mean the route does not exist).
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/v1/rooms/r1/upload/file", nil))
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+
+	// Old bare path no longer exists.
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/v1/rooms/r1/upload", nil))
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
 type readCloser struct{ *strings.Reader }
 
 func (readCloser) Close() error { return nil }
@@ -575,7 +594,7 @@ func TestRoute_UploadRegistered(t *testing.T) {
 	registerRoutes(r, &Handler{}, nil, true)
 	found := false
 	for _, ri := range r.Routes() {
-		if ri.Method == http.MethodPost && ri.Path == "/api/v1/rooms/:roomId/upload" {
+		if ri.Method == http.MethodPost && ri.Path == "/api/v1/rooms/:roomId/upload/file" {
 			found = true
 		}
 	}

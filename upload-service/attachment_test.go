@@ -57,6 +57,21 @@ func TestBuildAttachment_Video(t *testing.T) {
 	assert.Equal(t, int64(7), att.VideoSize)
 }
 
+func TestBuildAttachment_FileTypeAllFamilies(t *testing.T) {
+	cases := []struct{ mime string }{
+		{"application/pdf"}, {"image/png"}, {"audio/mpeg"}, {"video/mp4"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.mime, func(t *testing.T) {
+			att := buildAttachment(fileMeta{id: "f1", name: "x", mime: tc.mime, size: 1}, "", "http://link", "", nil)
+			assert.Equal(t, tc.mime, att.FileType)
+		})
+	}
+	// Mixed case is normalized like the other media fields.
+	att := buildAttachment(fileMeta{id: "f1", name: "x", mime: "Image/PNG", size: 1}, "", "http://link", "", nil)
+	assert.Equal(t, "image/png", att.FileType)
+}
+
 func TestBuildAttachment_MixedCaseMIME(t *testing.T) {
 	img := buildAttachment(fileMeta{id: "f1", name: "p.png", mime: "Image/PNG", size: 1}, "", "http://link", "", nil)
 	assert.Equal(t, "http://link", img.ImageURL)

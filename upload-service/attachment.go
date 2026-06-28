@@ -31,6 +31,7 @@ func buildAttachment(m fileMeta, description, url, imagePreview string, dims *mo
 		Description:       description,
 		TitleLink:         url,
 		TitleLinkDownload: true,
+		FileType:          mime,
 	}
 	switch {
 	case strings.HasPrefix(mime, "image/"):

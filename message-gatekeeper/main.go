@@ -38,6 +38,8 @@ type config struct {
 	MongoPassword      string                  `env:"MONGO_PASSWORD"  envDefault:""`
 	MaxWorkers         int                     `env:"MAX_WORKERS"     envDefault:"100"`
 	LargeRoomThreshold int                     `env:"LARGE_ROOM_THRESHOLD" envDefault:"500"`
+	MaxAttachments     int                     `env:"MAX_ATTACHMENTS"      envDefault:"1"`
+	MaxAttachmentBytes int                     `env:"MAX_ATTACHMENT_BYTES" envDefault:"8192"`
 	ChatBaseURL        string                  `env:"CHAT_BASE_URL"   envDefault:"http://localhost:3000"`
 	SubCacheSize       int                     `env:"GATEKEEPER_SUB_CACHE_SIZE"  envDefault:"100000"`
 	SubCacheTTL        time.Duration           `env:"GATEKEEPER_SUB_CACHE_TTL"   envDefault:"2m"`
@@ -147,7 +149,7 @@ func main() {
 		return nil
 	}
 	parentFetcher := newHistoryParentFetcher(nc, cfg.ChatBaseURL)
-	handler := NewHandler(store, users, pub, reply, cfg.SiteID, parentFetcher, cfg.LargeRoomThreshold)
+	handler := NewHandler(store, users, pub, reply, cfg.SiteID, parentFetcher, cfg.LargeRoomThreshold, cfg.MaxAttachments, cfg.MaxAttachmentBytes)
 
 	if err := bootstrapStreams(ctx, js, cfg.SiteID, cfg.Bootstrap.Enabled); err != nil {
 		slog.Error("bootstrap streams failed", "error", err)

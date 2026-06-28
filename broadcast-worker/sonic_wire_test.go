@@ -11,6 +11,7 @@ package main
 // Run: go test -run 'TestSonic' -v ./broadcast-worker/
 
 import (
+	"encoding/base64"
 	stdjson "encoding/json"
 	"testing"
 	"time"
@@ -57,6 +58,30 @@ func htmlContentMessageEvent() model.MessageEvent {
 		SiteID:    "site-a",
 		Timestamp: ev.Timestamp,
 	}
+}
+
+// TestSonic_ClientMessageAttachmentShadow pins that the wrapper's decoded
+// Attachments shadows the embedded raw Message.Attachments under sonic: with both
+// fields populated, the "attachments" key must serialize the decoded objects (not
+// the base64 of the raw blob), and sonic must agree with stdlib.
+func TestSonic_ClientMessageAttachmentShadow(t *testing.T) {
+	blob, err := stdjson.Marshal(model.Attachment{ID: "f1", Title: "a.png", Type: "file"})
+	require.NoError(t, err)
+	cm := model.ClientMessage{
+		Message: model.Message{
+			ID: "m1", RoomID: "r1", UserAccount: "alice",
+			Attachments: [][]byte{blob}, // raw embedded — must be shadowed
+		},
+		Attachments: []model.Attachment{{ID: "f1", Title: "a.png", Type: "file"}}, // decoded wrapper
+	}
+	std, err := stdjson.Marshal(cm)
+	require.NoError(t, err)
+	son, err := sonic.Marshal(cm)
+	require.NoError(t, err)
+
+	assert.JSONEq(t, string(std), string(son))
+	assert.Contains(t, string(son), `"id":"f1"`)
+	assert.NotContains(t, string(son), base64.StdEncoding.EncodeToString(blob))
 }
 
 // TestSonicSemanticEquivalence: sonic default output must parse to the same

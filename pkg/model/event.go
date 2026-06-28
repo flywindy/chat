@@ -214,8 +214,13 @@ type Participant struct {
 
 // ClientMessage wraps Message with enriched sender info for client consumption.
 type ClientMessage struct {
-	Message     `json:",inline" bson:",inline"`
-	Sender      *Participant `json:"sender,omitempty"`
+	Message `json:",inline" bson:",inline"`
+	Sender  *Participant `json:"sender,omitempty"`
+	// Attachments is the sole client-facing attachments representation. It
+	// deliberately shadows the embedded raw Message.Attachments ([][]byte) under
+	// the same "attachments" JSON key: Go's promotion rule emits this (shallower)
+	// field and suppresses the embedded one. buildClientMessage also nils the
+	// embedded raw so only one representation exists in memory.
 	Attachments []Attachment `json:"attachments,omitempty"`
 }
 

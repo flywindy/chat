@@ -374,9 +374,9 @@ A whole-request failure (not a per-file rejection) uses the
 
 ---
 
-#### POST /api/v1/rooms/:roomId/upload
+#### POST /api/v1/rooms/:roomId/upload/file
 
-**Endpoint:** `POST /api/v1/rooms/:roomId/upload`
+**Endpoint:** `POST /api/v1/rooms/:roomId/upload/file`
 **Reply:** synchronous HTTP response
 
 Uploads a single file (image/audio/video/document) for a room on behalf of the
@@ -524,6 +524,7 @@ fields are present only for the matching MIME family.
 | `description` | string | Optional. |
 | `titleLink` | string | Relative download URL (the GET image endpoint). |
 | `titleLinkDownload` | boolean | Always `true`. |
+| `fileType` | string | Optional. Canonical lowercased MIME type, present on every attachment family. |
 | `imageUrl` | string | Image only. Same as `titleLink`. |
 | `imageType` | string | Image only. MIME type. |
 | `imageSize` | number | Image only. Bytes. |
