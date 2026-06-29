@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/hmchangw/chat/pkg/model"
+	"github.com/hmchangw/chat/pkg/model/cassandra"
 )
 
 //go:generate mockgen -destination=mock_store_test.go -package=main . Store,ThreadStore
@@ -15,6 +16,12 @@ type Store interface {
 	SaveMessage(ctx context.Context, msg *model.Message, sender *cassParticipant, siteID string) error
 	SaveThreadMessage(ctx context.Context, msg *model.Message, sender *cassParticipant, siteID string, threadRoomID string) (*int, error)
 	GetMessageSender(ctx context.Context, messageID string) (*cassParticipant, error)
+	// GetQuotedParentSnapshot re-projects the authoritative quoted-parent snapshot
+	// for messageID from messages_by_id (decrypting the body when the store has a
+	// cipher). The bool is false (nil error) when the row is absent. Used to
+	// correct an untrusted degraded-mode placeholder snapshot before the durable
+	// write; MessageLink is left empty (the caller preserves the gatekeeper-built link).
+	GetQuotedParentSnapshot(ctx context.Context, messageID string) (*cassandra.QuotedParentMessage, bool, error)
 	UpdateParentMessageThreadRoomID(ctx context.Context, parentMessageID, roomID string, parentCreatedAt time.Time, threadRoomID string) error
 }
 

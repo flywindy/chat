@@ -98,7 +98,7 @@ func (f *historyParentFetcher) FetchQuotedParent(
 		Msg:                   parent.Msg,
 		Mentions:              parent.Mentions,
 		DecodedAttachments:    parent.DecodedAttachments,
-		MessageLink:           fmt.Sprintf("%s/%s/%s", f.chatBaseURL, parent.RoomID, messageID),
+		MessageLink:           messageLink(f.chatBaseURL, parent.RoomID, messageID),
 		ThreadParentID:        parent.ThreadParentID,
 		ThreadParentCreatedAt: parent.ThreadParentCreatedAt,
 	}, nil

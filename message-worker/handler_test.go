@@ -2007,6 +2007,163 @@ func TestHandler_ProcessMessage_Quote(t *testing.T) {
 	})
 }
 
+func TestHandler_ProcessMessage_Quote_Unverified(t *testing.T) {
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	user := &model.User{ID: "u-1", Account: "alice", SiteID: "site-a", EngName: "Alice Wang", ChineseName: "愛麗絲"}
+
+	// clientFallback is the UNTRUSTED snapshot the gatekeeper fell back to: the
+	// sender and text could be fabricated. The link/id are already sanitized by
+	// the gatekeeper.
+	clientFallback := func() *cassandra.QuotedParentMessage {
+		return &cassandra.QuotedParentMessage{
+			MessageID:   "parent-msg-uuid",
+			RoomID:      "r1",
+			Sender:      cassandra.Participant{ID: "u-evil", Account: "evil", EngName: "Not Bob"},
+			CreatedAt:   time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC),
+			Msg:         "fabricated words in bob's mouth",
+			MessageLink: "http://localhost:3000/r1/parent-msg-uuid",
+		}
+	}
+
+	buildEvt := func(fb *cassandra.QuotedParentMessage) []byte {
+		evt := model.MessageEvent{
+			Message: model.Message{
+				ID: "msg-quote-1", RoomID: "r1", UserID: "u-1", UserAccount: "alice",
+				Content: "great point!", CreatedAt: now, QuotedParentMessage: fb,
+			},
+			SiteID:                 "site-a",
+			Timestamp:              now.UnixMilli(),
+			QuotedParentUnverified: true,
+		}
+		data, err := json.Marshal(evt)
+		require.NoError(t, err)
+		return data
+	}
+
+	t.Run("re-projects authoritative snapshot, preserving the trusted link", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		store := NewMockStore(ctrl)
+		userStore := NewMockUserStore(ctrl)
+		threadStore := NewMockThreadStore(ctrl)
+		threadStore.EXPECT().AddReplyAccounts(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		userStore.EXPECT().FindUserByID(gomock.Any(), "u-1").Return(user, nil)
+
+		authoritative := &cassandra.QuotedParentMessage{
+			MessageID: "parent-msg-uuid",
+			RoomID:    "r1",
+			Sender:    cassandra.Participant{ID: "u-bob", Account: "bob", EngName: "Bob Chen"},
+			CreatedAt: time.Date(2026, 1, 1, 11, 0, 0, 0, time.UTC),
+			Msg:       "the real original message",
+			// no MessageLink — the store leaves it to the caller
+		}
+		store.EXPECT().GetQuotedParentSnapshot(gomock.Any(), "parent-msg-uuid").Return(authoritative, true, nil)
+		store.EXPECT().
+			SaveMessage(gomock.Any(), gomock.Any(), gomock.Any(), "site-a").
+			DoAndReturn(func(_ context.Context, m *model.Message, _ *cassParticipant, _ string) error {
+				require.NotNil(t, m.QuotedParentMessage)
+				assert.Equal(t, "bob", m.QuotedParentMessage.Sender.Account, "fabricated sender must be overwritten")
+				assert.Equal(t, "the real original message", m.QuotedParentMessage.Msg, "fabricated text must be overwritten")
+				assert.Equal(t, "http://localhost:3000/r1/parent-msg-uuid", m.QuotedParentMessage.MessageLink, "trusted link preserved")
+				return nil
+			})
+
+		h := NewHandler(store, userStore, threadStore, "site-a", func(_ context.Context, _ string, _ []byte, _ string) error { return nil })
+		require.NoError(t, h.processMessage(context.Background(), buildEvt(clientFallback()), false))
+	})
+
+	t.Run("drops the quote when the parent cannot be confirmed", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		store := NewMockStore(ctrl)
+		userStore := NewMockUserStore(ctrl)
+		threadStore := NewMockThreadStore(ctrl)
+		threadStore.EXPECT().AddReplyAccounts(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		userStore.EXPECT().FindUserByID(gomock.Any(), "u-1").Return(user, nil)
+
+		store.EXPECT().GetQuotedParentSnapshot(gomock.Any(), "parent-msg-uuid").Return(nil, false, nil)
+		store.EXPECT().
+			SaveMessage(gomock.Any(), gomock.Any(), gomock.Any(), "site-a").
+			DoAndReturn(func(_ context.Context, m *model.Message, _ *cassParticipant, _ string) error {
+				assert.Nil(t, m.QuotedParentMessage, "unverifiable fabricated quote must be dropped, not persisted")
+				return nil
+			})
+
+		h := NewHandler(store, userStore, threadStore, "site-a", func(_ context.Context, _ string, _ []byte, _ string) error { return nil })
+		require.NoError(t, h.processMessage(context.Background(), buildEvt(clientFallback()), false))
+	})
+
+	t.Run("drops the quote when the authoritative parent is in a different room (security)", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		store := NewMockStore(ctrl)
+		userStore := NewMockUserStore(ctrl)
+		threadStore := NewMockThreadStore(ctrl)
+		threadStore.EXPECT().AddReplyAccounts(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		userStore.EXPECT().FindUserByID(gomock.Any(), "u-1").Return(user, nil)
+
+		// The ID resolves to a real message — but in room r2, which the sender
+		// referenced by raw ID during the outage. Its body must not leak into r1.
+		foreignRoom := &cassandra.QuotedParentMessage{
+			MessageID: "parent-msg-uuid",
+			RoomID:    "r2",
+			Sender:    cassandra.Participant{ID: "u-bob", Account: "bob", EngName: "Bob Chen"},
+			CreatedAt: time.Date(2026, 1, 1, 11, 0, 0, 0, time.UTC),
+			Msg:       "secret from another room",
+		}
+		store.EXPECT().GetQuotedParentSnapshot(gomock.Any(), "parent-msg-uuid").Return(foreignRoom, true, nil)
+		store.EXPECT().
+			SaveMessage(gomock.Any(), gomock.Any(), gomock.Any(), "site-a").
+			DoAndReturn(func(_ context.Context, m *model.Message, _ *cassParticipant, _ string) error {
+				assert.Nil(t, m.QuotedParentMessage, "cross-room authoritative quote must be dropped, not persisted")
+				return nil
+			})
+
+		h := NewHandler(store, userStore, threadStore, "site-a", func(_ context.Context, _ string, _ []byte, _ string) error { return nil })
+		require.NoError(t, h.processMessage(context.Background(), buildEvt(clientFallback()), false))
+	})
+
+	t.Run("re-projection store error NAKs (no persist)", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		store := NewMockStore(ctrl)
+		userStore := NewMockUserStore(ctrl)
+		threadStore := NewMockThreadStore(ctrl)
+		userStore.EXPECT().FindUserByID(gomock.Any(), "u-1").Return(user, nil)
+
+		store.EXPECT().GetQuotedParentSnapshot(gomock.Any(), "parent-msg-uuid").Return(nil, false, fmt.Errorf("cassandra down"))
+		// SaveMessage must NOT be called — the error short-circuits before persist.
+
+		h := NewHandler(store, userStore, threadStore, "site-a", func(_ context.Context, _ string, _ []byte, _ string) error { return nil })
+		err := h.processMessage(context.Background(), buildEvt(clientFallback()), false)
+		require.Error(t, err)
+	})
+}
+
+func TestAuthoritativeQuoteMatchesConversation(t *testing.T) {
+	tests := []struct {
+		name      string
+		msgRoom   string
+		msgThread string // Message.ThreadParentMessageID
+		snapRoom  string
+		snapID    string // QuotedParentMessage.MessageID
+		snapPID   string // QuotedParentMessage.ThreadParentID
+		want      bool
+	}{
+		{name: "main-room quotes main-room parent, same room", msgRoom: "r1", snapRoom: "r1", snapID: "p1", want: true},
+		{name: "different room rejected", msgRoom: "r1", snapRoom: "r2", snapID: "p1", want: false},
+		{name: "main-room quoting a thread reply rejected", msgRoom: "r1", snapRoom: "r1", snapID: "p1", snapPID: "t1", want: false},
+		{name: "thread reply quotes same-thread message", msgRoom: "r1", msgThread: "t1", snapRoom: "r1", snapID: "p1", snapPID: "t1", want: true},
+		{name: "thread reply quotes unrelated main-room message rejected", msgRoom: "r1", msgThread: "t1", snapRoom: "r1", snapID: "p2", snapPID: "", want: false},
+		{name: "thread reply quotes different thread rejected", msgRoom: "r1", msgThread: "t1", snapRoom: "r1", snapID: "p1", snapPID: "t2", want: false},
+		{name: "thread reply quotes its own thread root", msgRoom: "r1", msgThread: "t1", snapRoom: "r1", snapID: "t1", snapPID: "", want: true},
+		{name: "thread reply quotes a foreign-room same-thread-id rejected", msgRoom: "r1", msgThread: "t1", snapRoom: "r2", snapID: "p1", snapPID: "t1", want: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			msg := &model.Message{RoomID: tc.msgRoom, ThreadParentMessageID: tc.msgThread}
+			snap := &cassandra.QuotedParentMessage{RoomID: tc.snapRoom, MessageID: tc.snapID, ThreadParentID: tc.snapPID}
+			assert.Equal(t, tc.want, authoritativeQuoteMatchesConversation(msg, snap))
+		})
+	}
+}
+
 func TestHandler_ProcessMessage_ThreadReplyPublish(t *testing.T) {
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	parentCreatedAt := now.Add(-10 * time.Minute)

@@ -17,6 +17,7 @@ import (
 	"github.com/hmchangw/chat/pkg/logctx"
 	"github.com/hmchangw/chat/pkg/mention"
 	"github.com/hmchangw/chat/pkg/model"
+	"github.com/hmchangw/chat/pkg/model/cassandra"
 	"github.com/hmchangw/chat/pkg/natsutil"
 	"github.com/hmchangw/chat/pkg/subject"
 	"github.com/hmchangw/chat/pkg/userstore"
@@ -105,6 +106,12 @@ func (h *Handler) processMessage(ctx context.Context, data []byte, isMigration b
 	slog.DebugContext(ctx, "message-worker sender resolved",
 		"request_id", natsutil.RequestIDFromContext(ctx), "has_sender", sender != nil)
 
+	// Correct an untrusted degraded-mode (placeholder) quoted snapshot before any
+	// durable write, so a fabricated snapshot never persists or re-renders.
+	if err := h.reprojectUnverifiedQuote(ctx, &evt); err != nil {
+		return fmt.Errorf("re-project unverified quote: %w", err)
+	}
+
 	if evt.Message.ThreadParentMessageID != "" {
 		// Resolve (or create) the thread room first so we have the threadRoomID
 		// before persisting the message to Cassandra.
@@ -143,6 +150,76 @@ func (h *Handler) processMessage(ctx context.Context, data []byte, isMigration b
 	}
 
 	return nil
+}
+
+// reprojectUnverifiedQuote corrects an untrusted quoted-parent snapshot before the
+// durable write. When the gatekeeper set QuotedParentUnverified (it degraded to a
+// server-built placeholder during a transient history outage), re-read the
+// authoritative snapshot from Cassandra and overwrite the sensitive fields —
+// preserving the gatekeeper-built MessageLink — or drop the quote when the parent
+// can't be confirmed, so a fabricated snapshot never persists. No-op on the happy
+// path; a Cassandra failure NAKs and replays.
+func (h *Handler) reprojectUnverifiedQuote(ctx context.Context, evt *model.MessageEvent) error {
+	if !evt.QuotedParentUnverified || evt.Message.QuotedParentMessage == nil {
+		return nil
+	}
+	q := evt.Message.QuotedParentMessage
+	snap, found, err := h.store.GetQuotedParentSnapshot(ctx, q.MessageID)
+	if err != nil {
+		return fmt.Errorf("get authoritative quoted parent %s: %w", q.MessageID, err)
+	}
+	// The quote is resolved authoritatively from here on, so the marker is
+	// cleared regardless of whether the parent was found.
+	evt.QuotedParentUnverified = false
+	if !found {
+		// Accepted trade-off: MESSAGES_CANONICAL doesn't order the parent's persist
+		// relative to this reply, so a parent row still in flight reads as not-found
+		// and the quote is dropped permanently (no bounded retry). Quoting a parent
+		// that hasn't landed yet is a narrow race; dropping the quote is preferred
+		// over NAK-looping the reply on the hot path.
+		slog.WarnContext(ctx, "unverified quoted parent not found in history — dropping quote",
+			"request_id", natsutil.RequestIDFromContext(ctx),
+			"quoted_id", q.MessageID, "message_id", evt.Message.ID)
+		evt.Message.QuotedParentMessage = nil
+		return nil
+	}
+	if !authoritativeQuoteMatchesConversation(&evt.Message, snap) {
+		// On the degrade path the gatekeeper could not enforce the
+		// same-conversation rule (history was down), so re-check it here against
+		// the authoritative snapshot. Drop the quote rather than persist a parent
+		// from a foreign room/thread that a client referenced by raw message ID.
+		slog.WarnContext(ctx, "authoritative quoted parent is in a different room/thread — dropping quote",
+			"request_id", natsutil.RequestIDFromContext(ctx),
+			"quoted_id", q.MessageID, "message_id", evt.Message.ID,
+			"quoted_room_id", snap.RoomID, "message_room_id", evt.Message.RoomID,
+			"quoted_thread_parent_id", snap.ThreadParentID,
+			"message_thread_parent_id", evt.Message.ThreadParentMessageID)
+		evt.Message.QuotedParentMessage = nil
+		return nil
+	}
+	snap.MessageLink = q.MessageLink // preserve the gatekeeper-built (trusted) link
+	evt.Message.QuotedParentMessage = snap
+	return nil
+}
+
+// authoritativeQuoteMatchesConversation reports whether the authoritative quoted
+// parent snap belongs to the same conversation as msg — same room and same
+// thread context — mirroring the gatekeeper's checkQuoteThreadContext rule plus a
+// room check. The gatekeeper enforces this on the happy path (via history-service);
+// the worker re-checks it here for the degraded re-projection, where the snapshot is
+// read from messages_by_id by ID alone with no access control.
+func authoritativeQuoteMatchesConversation(msg *model.Message, snap *cassandra.QuotedParentMessage) bool {
+	if snap.RoomID != msg.RoomID {
+		return false
+	}
+	if msg.ThreadParentMessageID == "" {
+		// Main-room message: may only quote a main-room parent.
+		return snap.ThreadParentID == ""
+	}
+	// Thread reply: quote a same-thread message, or the thread's own root (a
+	// main-room message whose ID is the thread parent).
+	return snap.ThreadParentID == msg.ThreadParentMessageID ||
+		(snap.ThreadParentID == "" && snap.MessageID == msg.ThreadParentMessageID)
 }
 
 // debugFlowPersisted emits the flow-rung breadcrumb marking the message as

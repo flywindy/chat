@@ -1160,6 +1160,82 @@ func TestCassandraStore_SaveMessage_WithQuotedParent(t *testing.T) {
 	})
 }
 
+func TestCassandraStore_GetQuotedParentSnapshot(t *testing.T) {
+	cassSession := setupCassandra(t)
+	store := NewCassandraStore(cassSession, msgbucket.New(24*time.Hour), nil)
+	ctx := context.Background()
+
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	sender := &cassParticipant{ID: "u-bob", EngName: "Bob Chen", Account: "bob"}
+	parent := &model.Message{
+		ID:          "parent-reproj",
+		RoomID:      "r-reproj",
+		UserID:      "u-bob",
+		UserAccount: "bob",
+		Content:     "the authoritative original",
+		CreatedAt:   now,
+		Mentions:    []model.Participant{{UserID: "u-carol", Account: "carol", EngName: "Carol Lee"}},
+	}
+	require.NoError(t, store.SaveMessage(ctx, parent, sender, "site-a"))
+
+	t.Run("re-projects the authoritative snapshot from messages_by_id", func(t *testing.T) {
+		got, found, err := store.GetQuotedParentSnapshot(ctx, "parent-reproj")
+		require.NoError(t, err)
+		require.True(t, found)
+		require.NotNil(t, got)
+		assert.Equal(t, "parent-reproj", got.MessageID)
+		assert.Equal(t, "r-reproj", got.RoomID)
+		assert.Equal(t, "the authoritative original", got.Msg)
+		assert.Equal(t, "bob", got.Sender.Account)
+		assert.Equal(t, "Bob Chen", got.Sender.EngName)
+		assert.Equal(t, now, got.CreatedAt.UTC().Truncate(time.Millisecond))
+		require.Len(t, got.Mentions, 1)
+		assert.Equal(t, "carol", got.Mentions[0].Account)
+		assert.Empty(t, got.MessageLink, "store leaves MessageLink to the caller")
+		assert.Empty(t, got.ThreadParentID)
+	})
+
+	t.Run("returns found=false for an absent parent", func(t *testing.T) {
+		got, found, err := store.GetQuotedParentSnapshot(ctx, "no-such-message")
+		require.NoError(t, err)
+		assert.False(t, found)
+		assert.Nil(t, got)
+	})
+}
+
+func TestCassandraStore_GetQuotedParentSnapshot_Encrypted(t *testing.T) {
+	ctx := context.Background()
+	session := setupCassandra(t)
+	mongoDB := setupMongo(t)
+
+	wrapper := newTestVaultWrapper(t, ctx)
+	cipher := atrest.NewCipher(wrapper, atrest.NewMongoDEKStore(mongoDB.Collection(atrest.CollectionName)),
+		atrest.Config{DEKCacheSize: 100, DEKCacheTTL: time.Hour})
+	store := NewCassandraStore(session, msgbucket.New(24*time.Hour), cipher)
+
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	sender := &cassParticipant{ID: "u-bob", EngName: "Bob Chen", Account: "bob"}
+	parent := &model.Message{
+		ID:          "parent-enc-reproj",
+		RoomID:      "r-enc-reproj",
+		UserID:      "u-bob",
+		UserAccount: "bob",
+		Content:     "the encrypted original",
+		CreatedAt:   now,
+	}
+	require.NoError(t, store.SaveMessage(ctx, parent, sender, "site-a"))
+
+	// The msg column is NULL on the encrypted row; GetQuotedParentSnapshot must
+	// decrypt enc_payload to recover the body.
+	got, found, err := store.GetQuotedParentSnapshot(ctx, "parent-enc-reproj")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.NotNil(t, got)
+	assert.Equal(t, "the encrypted original", got.Msg, "encrypted body must be decrypted")
+	assert.Equal(t, "bob", got.Sender.Account)
+	assert.Equal(t, "r-enc-reproj", got.RoomID)
+}
+
 func TestCassandraStore_SaveMessage_NilQuotedParent(t *testing.T) {
 	cassSession := setupCassandra(t)
 	store := NewCassandraStore(cassSession, msgbucket.New(24*time.Hour), nil)

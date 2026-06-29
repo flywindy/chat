@@ -4530,7 +4530,7 @@ The same subject and request body cover three send variants: plain message, thre
 | `attachments` | string[] | no | Optional. Each entry is base64-encoded bytes — the JSON of one [Attachment](#attachment) from the upload endpoint ([§2.3](#23-http--protected-image-uploaddownload)). Max 1 entry, ≤ 8 KiB total. Stored opaquely and returned **decoded** (as `Attachment[]`) in message payloads. |
 | `threadParentMessageId` | string | no | Set when posting a thread reply. Must be a valid 20-char base62 message ID. |
 | `tshow` | boolean | no | The "Also send to channel" option. Only meaningful on a thread reply (`threadParentMessageId` set): the reply is persisted into the parent room's channel timeline as well as the thread (dual-write into `messages_by_room` in addition to `thread_messages_by_thread` + `messages_by_id`), and is surfaced with `tshow: true` on the persisted message. On a non-thread send the flag is **ignored and normalized to `false`** — the request is not rejected. |
-| `quotedParentMessageId` | string | no | Set when posting a quoted message. The gatekeeper fetches the parent and embeds a snapshot in the persisted message; the client does not send the snapshot itself. |
+| `quotedParentMessageId` | string | no | Set when posting a quoted message. The gatekeeper fetches the authoritative parent snapshot from message history and embeds it in the persisted message. If that fetch fails *transiently* (history briefly unavailable), the message is not dropped: the gatekeeper inserts a placeholder snapshot for live delivery (body `"Content temporarily unavailable"`), and `message-worker` re-projects the authoritative snapshot (or drops the quote) from history before the durable write, so the placeholder never persists. A genuinely missing/forbidden parent is still rejected. |
 
 ##### Plain message
 
@@ -4563,6 +4563,8 @@ The same subject and request body cover three send variants: plain message, thre
   "quotedParentMessageId": "01970a4f8c2d7c9aQRST"
 }
 ```
+
+The client sends `quotedParentMessageId`; the server fetches and embeds the authoritative quoted-parent snapshot. During a transient history outage the server fills the live copy with a `"Content temporarily unavailable"` placeholder and re-projects the authoritative quote (or drops it) before persisting, so the placeholder never persists.
 
 ##### Thread reply quoting the thread-starter
 

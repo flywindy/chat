@@ -42,6 +42,15 @@ type MessageEvent struct {
 	// NewThreadLastMsgAt is the timestamp of the most recent surviving thread reply
 	// after this operation (nil when no replies remain).
 	NewThreadLastMsgAt *time.Time `json:"newThreadLastMsgAt,omitempty" bson:"newThreadLastMsgAt,omitempty"`
+	// QuotedParentUnverified marks Message.QuotedParentMessage as the untrusted
+	// degraded placeholder the gatekeeper builds on a transient history outage:
+	// message-worker re-projects the authoritative snapshot from Cassandra and
+	// clears the flag, or drops the quote when the parent can't be confirmed (not
+	// found, or in a different room/thread). Envelope-only (never
+	// persisted, never reaches clients); always false on the happy path. The
+	// bson:"-" tag enforces the never-persisted contract — MessageEvent carries
+	// bson tags on its other fields, so an untagged field would round-trip.
+	QuotedParentUnverified bool `json:"quotedParentUnverified,omitempty" bson:"-"`
 }
 
 // ReactionAction is the toggle direction on ReactionDelta.Action; defined

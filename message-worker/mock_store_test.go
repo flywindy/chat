@@ -15,6 +15,7 @@ import (
 	time "time"
 
 	model "github.com/hmchangw/chat/pkg/model"
+	cassandra "github.com/hmchangw/chat/pkg/model/cassandra"
 	gomock "go.uber.org/mock/gomock"
 )
 
@@ -55,6 +56,22 @@ func (m *MockStore) GetMessageSender(ctx context.Context, messageID string) (*ca
 func (mr *MockStoreMockRecorder) GetMessageSender(ctx, messageID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetMessageSender", reflect.TypeOf((*MockStore)(nil).GetMessageSender), ctx, messageID)
+}
+
+// GetQuotedParentSnapshot mocks base method.
+func (m *MockStore) GetQuotedParentSnapshot(ctx context.Context, messageID string) (*cassandra.QuotedParentMessage, bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetQuotedParentSnapshot", ctx, messageID)
+	ret0, _ := ret[0].(*cassandra.QuotedParentMessage)
+	ret1, _ := ret[1].(bool)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
+}
+
+// GetQuotedParentSnapshot indicates an expected call of GetQuotedParentSnapshot.
+func (mr *MockStoreMockRecorder) GetQuotedParentSnapshot(ctx, messageID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetQuotedParentSnapshot", reflect.TypeOf((*MockStore)(nil).GetQuotedParentSnapshot), ctx, messageID)
 }
 
 // SaveMessage mocks base method.
