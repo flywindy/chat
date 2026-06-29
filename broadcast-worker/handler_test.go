@@ -15,6 +15,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.uber.org/mock/gomock"
 
+	"github.com/hmchangw/chat/pkg/errcode"
 	"github.com/hmchangw/chat/pkg/model"
 	"github.com/hmchangw/chat/pkg/model/cassandra"
 	"github.com/hmchangw/chat/pkg/roomcrypto"
@@ -385,6 +386,8 @@ func TestHandler_HandleMessage_Errors(t *testing.T) {
 
 		err := h.HandleMessage(context.Background(), []byte("not json"))
 		require.Error(t, err)
+		_, perm := errcode.IsPermanent(err)
+		assert.True(t, perm, "a malformed payload can never parse on redelivery — must be a permanent (drop) error")
 		assert.Empty(t, pub.records)
 	})
 

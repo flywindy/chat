@@ -19,6 +19,7 @@ import (
 
 	"github.com/hmchangw/chat/pkg/errcode"
 	"github.com/hmchangw/chat/pkg/idgen"
+	"github.com/hmchangw/chat/pkg/jsretry"
 	"github.com/hmchangw/chat/pkg/logctx"
 	"github.com/hmchangw/chat/pkg/model"
 	"github.com/hmchangw/chat/pkg/natsrouter"
@@ -225,34 +226,9 @@ func (h *Handler) HandleJetStreamMsg(ctx context.Context, msg jetstream.Msg) {
 	default:
 		slog.WarnContext(ctx, "unknown member operation", "subject", subj)
 	}
-	if err != nil {
-		// NB: do NOT slog.Error here — fillAsyncError → errcode.Classify already
-		// logs the failure exactly once at a category-aware level (internal/
-		// unavailable → ERROR, expected client errors → INFO). An extra ERROR
-		// line here would double-log every failure and force ERROR on client-
-		// category permanent errors (e.g. NotFound for missing user), defeating
-		// the category-aware level the migration shipped.
-		//
-		// Permanent failures must Ack so JetStream stops redelivering. The async-job
-		// error event has already been published to the requester via the per-handler
-		// defer in processCreateRoom / processAddMembers / processRemove*. Permanence
-		// is explicit (the errcode.Permanent marker), never inferred from the errcode
-		// category — many permanent errors classify to internal and would otherwise
-		// be Nak'd forever.
-		if _, ok := errcode.IsPermanent(err); ok {
-			if ackErr := msg.Ack(); ackErr != nil {
-				slog.ErrorContext(ctx, "failed to ack permanent-error message", "error", ackErr)
-			}
-			return
-		}
-		if nakErr := msg.Nak(); nakErr != nil {
-			slog.ErrorContext(ctx, "failed to nak message", "error", nakErr)
-		}
-		return
-	}
-	if err := msg.Ack(); err != nil {
-		slog.ErrorContext(ctx, "failed to ack message", "error", err)
-	}
+	// SettleQuiet, not Settle: fillAsyncError → errcode.Classify already logged
+	// this error once at a category-aware level, so re-logging would double-log.
+	jsretry.SettleQuiet(ctx, msg, jsretry.DefaultBackoff, err)
 }
 
 func (h *Handler) processRemoveMember(ctx context.Context, data []byte) (err error) {

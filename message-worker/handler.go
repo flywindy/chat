@@ -11,7 +11,9 @@ import (
 
 	"github.com/nats-io/nats.go/jetstream"
 
+	"github.com/hmchangw/chat/pkg/errcode"
 	"github.com/hmchangw/chat/pkg/idgen"
+	"github.com/hmchangw/chat/pkg/jsretry"
 	"github.com/hmchangw/chat/pkg/logctx"
 	"github.com/hmchangw/chat/pkg/mention"
 	"github.com/hmchangw/chat/pkg/model"
@@ -58,24 +60,17 @@ func (h *Handler) HandleJetStreamMsg(ctx context.Context, msg jetstream.Msg) {
 
 	// Migrated (X-Migration: live) events are persisted, but downstream thread side-effects are suppressed (see processMessage).
 	isMigration := natsutil.IsMigrationLiveHeader(msg.Headers())
-	if err := h.processMessage(ctx, msg.Data(), isMigration); err != nil {
-		slog.Log(ctx, logctx.LevelFlow, "message-worker nak", "phase", "nak", "request_id", natsutil.RequestIDFromContext(ctx))
-		slog.ErrorContext(ctx, "process message failed", "error", err, "request_id", natsutil.RequestIDFromContext(ctx))
-		if nakErr := msg.Nak(); nakErr != nil {
-			slog.ErrorContext(ctx, "failed to nack message", "error", nakErr, "request_id", natsutil.RequestIDFromContext(ctx))
-		}
-		return
-	}
-
-	if err := msg.Ack(); err != nil {
-		slog.ErrorContext(ctx, "failed to ack message", "error", err, "request_id", natsutil.RequestIDFromContext(ctx))
-	}
+	// Sole persister of message history to Cassandra: transient failures must
+	// retry with backoff (never drop); malformed events Ack-drop as poison.
+	jsretry.Settle(ctx, msg, jsretry.DefaultBackoff, h.processMessage(ctx, msg.Data(), isMigration))
 }
 
 func (h *Handler) processMessage(ctx context.Context, data []byte, isMigration bool) error {
 	var evt model.MessageEvent
 	if err := sonic.Unmarshal(data, &evt); err != nil {
-		return fmt.Errorf("unmarshal message event: %w", err)
+		// Malformed payload — it will never parse on redelivery. Mark permanent
+		// so the handler Acks (drops) it instead of retrying until MaxDeliver.
+		return errcode.Permanent(errcode.BadRequest("malformed message event"))
 	}
 
 	resolved, err := mention.Resolve(ctx, evt.Message.Content, h.userStore.FindUsersByAccounts)

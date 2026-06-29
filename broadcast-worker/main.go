@@ -19,6 +19,7 @@ import (
 
 	"github.com/hmchangw/chat/pkg/health"
 	"github.com/hmchangw/chat/pkg/jobguard"
+	"github.com/hmchangw/chat/pkg/jsretry"
 	"github.com/hmchangw/chat/pkg/logctx"
 	"github.com/hmchangw/chat/pkg/mongoutil"
 	"github.com/hmchangw/chat/pkg/natsutil"
@@ -301,8 +302,9 @@ type messageIterator interface {
 }
 
 // broadcastProcessor builds the per-message processing closure for the
-// canonical consumer: stamp the request ID, run the handler, Ack on success or
-// Nak on error.
+// canonical consumer: stamp the request ID, run the handler, then settle via
+// jsretry. Fan-out is latency-sensitive — short first retry; malformed events
+// Ack-drop.
 func broadcastProcessor(handler *Handler) messageProcessor {
 	return func(msgCtx context.Context, msg jetstream.Msg) {
 		handlerCtx, reqID := natsutil.StampRequestID(msgCtx, msg.Headers(), msg.Subject())
@@ -329,16 +331,8 @@ func broadcastProcessor(handler *Handler) messageProcessor {
 				"phase", "received", "request_id", natsutil.RequestIDFromContext(handlerCtx),
 				"subject", msg.Subject(), "bytes", len(msg.Data()), "stream_wait_ms", streamWaitMs)
 		}
-		if err := handler.HandleMessage(handlerCtx, msg.Data()); err != nil {
-			slog.Error("handle message failed", "error", err, "request_id", natsutil.RequestIDFromContext(handlerCtx))
-			if err := msg.Nak(); err != nil {
-				slog.Error("failed to nak message", "error", err)
-			}
-			return
-		}
-		if err := msg.Ack(); err != nil {
-			slog.Error("failed to ack message", "error", err)
-		}
+		// Fan-out is latency-sensitive — short first retry; malformed events Ack-drop.
+		jsretry.Settle(handlerCtx, msg, jsretry.LowLatencyBackoff, handler.HandleMessage(handlerCtx, msg.Data()))
 	}
 }
 

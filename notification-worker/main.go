@@ -24,6 +24,7 @@ import (
 	"github.com/hmchangw/chat/pkg/cachemetrics"
 	"github.com/hmchangw/chat/pkg/health"
 	"github.com/hmchangw/chat/pkg/jobguard"
+	"github.com/hmchangw/chat/pkg/jsretry"
 	"github.com/hmchangw/chat/pkg/model"
 	"github.com/hmchangw/chat/pkg/mongoutil"
 	"github.com/hmchangw/chat/pkg/natsutil"
@@ -312,16 +313,9 @@ func main() {
 						}
 						return
 					}
-					if err := handler.HandleMessage(handlerCtx, msg.Data()); err != nil {
-						slog.Error("handle message failed", "error", err, "request_id", natsutil.RequestIDFromContext(handlerCtx))
-						if err := msg.Nak(); err != nil {
-							slog.Error("failed to nak message", "error", err)
-						}
-						return
-					}
-					if err := msg.Ack(); err != nil {
-						slog.Error("failed to ack message", "error", err)
-					}
+					// Transient failures retry with backoff (never drop); malformed
+					// events Ack-drop as poison.
+					jsretry.Settle(handlerCtx, msg, jsretry.DefaultBackoff, handler.HandleMessage(handlerCtx, msg.Data()))
 				})
 			}()
 		}

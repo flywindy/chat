@@ -10,6 +10,7 @@ import (
 
 	"github.com/bytedance/sonic"
 
+	"github.com/hmchangw/chat/pkg/errcode"
 	"github.com/hmchangw/chat/pkg/mention"
 	"github.com/hmchangw/chat/pkg/model"
 	"github.com/hmchangw/chat/pkg/natsutil"
@@ -75,7 +76,9 @@ func NewHandler(deps HandlerDeps) *Handler { //nolint:gocritic // hugeParam: one
 func (h *Handler) HandleMessage(ctx context.Context, data []byte) error {
 	var evt model.MessageEvent
 	if err := sonic.Unmarshal(data, &evt); err != nil {
-		return fmt.Errorf("unmarshal message event: %w", err)
+		// Malformed payload — it will never parse on redelivery. Mark permanent
+		// so the caller Acks (drops) it instead of retrying until MaxDeliver.
+		return errcode.Permanent(errcode.BadRequest("malformed message event"))
 	}
 	// Non-created events are filtered at the broker; defensive backstop only.
 	if evt.Event != model.EventCreated && evt.Event != "" {

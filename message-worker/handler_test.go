@@ -1831,27 +1831,35 @@ func TestHandler_MarkThreadMentions_HasMentionInPayload(t *testing.T) {
 }
 
 // fakeJSMsg is a minimal jetstream.Msg test double that records whether Ack or
-// Nak was called so tests can assert on ack/nak behaviour.
+// Nak was called so tests can assert on ack/nak behaviour. numDelivered seeds
+// the metadata so backoff selection can be exercised; nakDelay captures the
+// delay passed to NakWithDelay.
 type fakeJSMsg struct {
-	data  []byte
-	acked bool
-	naked bool
+	data         []byte
+	numDelivered uint64
+	acked        bool
+	naked        bool
+	nakDelay     time.Duration
 }
 
 func (m *fakeJSMsg) Data() []byte { return m.data }
 func (m *fakeJSMsg) Metadata() (*jetstream.MsgMetadata, error) {
-	return &jetstream.MsgMetadata{}, nil
+	return &jetstream.MsgMetadata{NumDelivered: m.numDelivered}, nil
 }
-func (m *fakeJSMsg) Headers() nats.Header             { return nil }
-func (m *fakeJSMsg) Subject() string                  { return "test.subject" }
-func (m *fakeJSMsg) Reply() string                    { return "" }
-func (m *fakeJSMsg) Ack() error                       { m.acked = true; return nil }
-func (m *fakeJSMsg) DoubleAck(context.Context) error  { m.acked = true; return nil }
-func (m *fakeJSMsg) Nak() error                       { m.naked = true; return nil }
-func (m *fakeJSMsg) NakWithDelay(time.Duration) error { m.naked = true; return nil }
-func (m *fakeJSMsg) InProgress() error                { return nil }
-func (m *fakeJSMsg) Term() error                      { return nil }
-func (m *fakeJSMsg) TermWithReason(string) error      { return nil }
+func (m *fakeJSMsg) Headers() nats.Header            { return nil }
+func (m *fakeJSMsg) Subject() string                 { return "test.subject" }
+func (m *fakeJSMsg) Reply() string                   { return "" }
+func (m *fakeJSMsg) Ack() error                      { m.acked = true; return nil }
+func (m *fakeJSMsg) DoubleAck(context.Context) error { m.acked = true; return nil }
+func (m *fakeJSMsg) Nak() error                      { m.naked = true; return nil }
+func (m *fakeJSMsg) NakWithDelay(d time.Duration) error {
+	m.naked = true
+	m.nakDelay = d
+	return nil
+}
+func (m *fakeJSMsg) InProgress() error           { return nil }
+func (m *fakeJSMsg) Term() error                 { return nil }
+func (m *fakeJSMsg) TermWithReason(string) error { return nil }
 
 func TestHandler_HandleJetStreamMsg(t *testing.T) {
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
@@ -1872,11 +1880,12 @@ func TestHandler_HandleJetStreamMsg(t *testing.T) {
 	}
 
 	tests := []struct {
-		name       string
-		msgData    []byte
-		setupMocks func(store *MockStore, us *MockUserStore, ts *MockThreadStore)
-		wantAck    bool
-		wantNak    bool
+		name         string
+		msgData      []byte
+		setupMocks   func(store *MockStore, us *MockUserStore, ts *MockThreadStore)
+		wantAck      bool
+		wantNak      bool
+		wantNakDelay bool
 	}{
 		{
 			name:    "success — Ack called",
@@ -1888,10 +1897,25 @@ func TestHandler_HandleJetStreamMsg(t *testing.T) {
 			wantAck: true,
 		},
 		{
-			name:       "failure — Nak called",
+			// A malformed event can never parse on redelivery, so it is a poison
+			// message: Ack to drop it rather than retry forever / waste the budget.
+			name:       "malformed event — Ack to drop poison",
 			msgData:    invalidData,
 			setupMocks: func(store *MockStore, us *MockUserStore, ts *MockThreadStore) {},
-			wantNak:    true,
+			wantAck:    true,
+		},
+		{
+			// A transient Cassandra failure must NOT be dropped — Nak with a
+			// positive backoff delay so a brief outage doesn't burn through
+			// MaxDeliver and silently lose a persisted message.
+			name:    "transient store error — Nak with backoff delay",
+			msgData: validData,
+			setupMocks: func(store *MockStore, us *MockUserStore, ts *MockThreadStore) {
+				us.EXPECT().FindUserByID(gomock.Any(), "u-1").Return(user, nil)
+				store.EXPECT().SaveMessage(gomock.Any(), &msg, &expectedSender, "site-a").Return(errors.New("cassandra unavailable"))
+			},
+			wantNak:      true,
+			wantNakDelay: true,
 		},
 	}
 
@@ -1913,6 +1937,9 @@ func TestHandler_HandleJetStreamMsg(t *testing.T) {
 
 			assert.Equal(t, tt.wantAck, fakeMsg.acked, "acked")
 			assert.Equal(t, tt.wantNak, fakeMsg.naked, "naked")
+			if tt.wantNakDelay {
+				assert.Positive(t, fakeMsg.nakDelay, "nak delay should be a positive backoff")
+			}
 		})
 	}
 }

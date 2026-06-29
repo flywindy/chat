@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/hmchangw/chat/pkg/errcode"
 	"github.com/hmchangw/chat/pkg/model"
 	"github.com/hmchangw/chat/pkg/roommetacache"
 	"github.com/hmchangw/chat/pkg/roomsubcache"
@@ -368,6 +369,8 @@ func TestHandle_InvalidJSON(t *testing.T) {
 	h := newTestHandler(&stubMembers{}, &stubFollowers{}, noopPresenceSnapshotter{}, noopVetoer{}, emit)
 	err := h.HandleMessage(context.Background(), []byte("not json"))
 	assert.Error(t, err)
+	_, perm := errcode.IsPermanent(err)
+	assert.True(t, perm, "a malformed payload can never parse on redelivery — must be a permanent (drop) error")
 }
 
 type errHook struct{}
