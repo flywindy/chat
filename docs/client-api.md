@@ -489,6 +489,60 @@ See [Error envelope](#6-error-envelope-reference). HTTP statuses:
 
 ---
 
+#### GET /api/v1/file-upload/:fileId/:fileName
+
+**Endpoint:** `GET /api/v1/file-upload/:fileId/:fileName`
+**Reply:** synchronous HTTP response (raw file bytes, not JSON)
+
+Downloads a previously-uploaded file. Metadata is resolved from the `uploads`
+collection by `fileId`; the bytes are streamed straight from the MinIO/S3 bucket.
+The response is always served as an attachment.
+
+#### Request
+
+| Field | Source | Type | Required | Notes |
+|---|---|---|---|---|
+| `ssoToken` | header | string | yes | OIDC-issued SSO token. |
+| `fileId` | path | string | yes | Upload ID (the `uploads._id`); used for the metadata lookup. |
+| `fileName` | path | string | yes | Cosmetic — accepted but ignored; the served filename comes from the stored metadata. |
+
+The caller must be a member of the room the file belongs to (`uploads.rid`).
+
+#### Success response
+
+`HTTP 200` — raw file binary streamed directly (not JSON), with these headers:
+
+| Header | Value |
+|---|---|
+| `Content-Type` | the upload's `type` (defaults to `application/octet-stream`). |
+| `Content-Length` | the upload's `size`. |
+| `Content-Disposition` | `attachment; filename*=UTF-8''<percent-encoded name>`. |
+| `Content-Security-Policy` | `default-src 'none'`. |
+| `Cache-Control` | `private, max-age=<FILE_DOWNLOAD_CACHE_MAX_AGE_SECONDS>` (default `31536000`). `private` because the response is authorization-gated. |
+
+#### Error response
+
+See [Error envelope](#6-error-envelope-reference). HTTP statuses:
+
+| Status | `code` | `reason` | Example body |
+|---|---|---|---|
+| 400 | `bad_request` | — | `{ "code": "bad_request", "error": "fileId is required" }` |
+| 401 | `unauthenticated` | `invalid_sso_token` / `sso_token_expired` / `missing_fields` | `{ "code": "unauthenticated", "reason": "invalid_sso_token", "error": "invalid sso token" }` |
+| 403 | `forbidden` | `not_room_member` | `{ "code": "forbidden", "reason": "not_room_member", "error": "user alice is not in room r1" }` |
+| 404 | `not_found` | — | `{ "code": "not_found", "error": "file not found" }` |
+| 500 | `internal` | — | `{ "code": "internal", "error": "internal error" }` — user missing in context. |
+| 503 | `unavailable` | — | `{ "code": "unavailable", "error": "failed to retrieve file" }` — S3 GetObject/Stat failure. |
+
+#### Triggered events — success path
+
+`None — HTTP-only.`
+
+#### Triggered events — error path
+
+`None.`
+
+---
+
 ## 3. Request/Reply Methods
 
 ### 3.0 Shared schemas

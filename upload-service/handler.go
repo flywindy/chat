@@ -7,6 +7,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"time"
@@ -43,25 +44,33 @@ type driveClient interface {
 // dimensions; injected for testability.
 type previewFunc func(data []byte, mime string) (string, *model.ImageDimensions, error)
 
+// objectStore streams a stored object by key. Satisfied by *minioObjectStore.
+type objectStore interface {
+	Open(ctx context.Context, key string) (io.ReadCloser, error)
+}
+
 // Handler holds the upload-service dependencies.
 type Handler struct {
 	store        Store
 	drive        driveClient
+	s3           objectStore
 	maxFiles     int
 	maxImageSize int64
 	maxFileSize  int64
 	mimeFilter   *mediaTypeFilter
 	preview      previewFunc
 	nowMilli     func() int64
+	cacheMaxAge  int
 }
 
 // NewHandler wires the handler dependencies. maxFiles/maxImageSize gate the image
-// endpoint; maxFileSize/mimeFilter/preview gate the file endpoint.
-func NewHandler(store Store, dc driveClient, maxFiles int, maxImageSize, maxFileSize int64,
-	mimeFilter *mediaTypeFilter, preview previewFunc) *Handler {
+// endpoint; maxFileSize/mimeFilter/preview gate the file endpoint; s3 backs the
+// MinIO/S3 download endpoint; cacheMaxAge is its Cache-Control max-age in seconds.
+func NewHandler(store Store, dc driveClient, s3 objectStore, maxFiles int, maxImageSize, maxFileSize int64,
+	mimeFilter *mediaTypeFilter, preview previewFunc, cacheMaxAge int) *Handler {
 	return &Handler{
-		store: store, drive: dc, maxFiles: maxFiles, maxImageSize: maxImageSize,
-		maxFileSize: maxFileSize, mimeFilter: mimeFilter, preview: preview,
+		store: store, drive: dc, s3: s3, maxFiles: maxFiles, maxImageSize: maxImageSize,
+		maxFileSize: maxFileSize, mimeFilter: mimeFilter, preview: preview, cacheMaxAge: cacheMaxAge,
 		nowMilli: func() int64 { return time.Now().UTC().UnixMilli() },
 	}
 }
@@ -309,6 +318,63 @@ func (h *Handler) HandleDownloadFile(c *gin.Context) {
 	// GetGroupImage already defaults ContentType to application/octet-stream, so
 	// stream the body straight through with no intermediate buffering.
 	c.DataFromReader(http.StatusOK, img.ContentLength, img.ContentType, img.Reader, map[string]string{})
+}
+
+// HandleDownloadMinioS3File streams a legacy-uploaded file out of MinIO/S3. It
+// resolves the upload metadata from Mongo, authorizes the caller (authenticated
+// + room member), then pipes the object straight to the client with download
+// headers. The :fileName path segment is cosmetic (accepted but ignored); the
+// lookup is by :fileId and the response is always an attachment.
+func (h *Handler) HandleDownloadMinioS3File(c *gin.Context) {
+	ctx := logCtx(c)
+
+	fileID := c.Param("fileId")
+	if fileID == "" {
+		errhttp.Write(ctx, c, errcode.BadRequest("fileId is required"))
+		return
+	}
+
+	user, ok := userFromContext(c)
+	if !ok {
+		errhttp.Write(ctx, c, errcode.Internal("user not authenticated"))
+		return
+	}
+
+	up, err := h.store.GetUpload(ctx, fileID)
+	if err != nil {
+		if errIsUploadNotFound(err) {
+			errhttp.Write(ctx, c, errcode.NotFound("file not found"))
+			return
+		}
+		errhttp.Write(ctx, c, fmt.Errorf("get upload: %w", err))
+		return
+	}
+
+	if !h.requireMembership(ctx, c, up.RID, user.Account) {
+		return
+	}
+
+	reader, err := h.s3.Open(ctx, up.AmazonS3.Path)
+	if err != nil {
+		errhttp.Write(ctx, c, errcode.Unavailable("failed to retrieve file", errcode.WithCause(err)))
+		return
+	}
+	defer reader.Close()
+
+	contentType := up.Type
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	// RFC 5987 filename*: percent-encode UTF-8 like encodeURIComponent (space -> %20, not +).
+	encodedName := strings.ReplaceAll(url.QueryEscape(up.Name), "+", "%20")
+	extraHeaders := map[string]string{
+		"Content-Disposition":     fmt.Sprintf("attachment; filename*=UTF-8''%s", encodedName),
+		"Content-Security-Policy": "default-src 'none'",
+		// private: this response is authorization-gated (auth + room membership),
+		// so only the user agent may cache it — never a shared/intermediary cache.
+		"Cache-Control": fmt.Sprintf("private, max-age=%d", h.cacheMaxAge),
+	}
+	c.DataFromReader(http.StatusOK, up.Size, contentType, reader, extraHeaders)
 }
 
 // requireMembership verifies the account is a member of roomID, writing the

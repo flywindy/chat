@@ -12,6 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/hmchangw/chat/pkg/drive"
+	"github.com/hmchangw/chat/pkg/minioutil"
 	"github.com/hmchangw/chat/pkg/mongoutil"
 	pkgoidc "github.com/hmchangw/chat/pkg/oidc"
 	"github.com/hmchangw/chat/pkg/otelutil"
@@ -38,10 +39,19 @@ type config struct {
 	// FileUploadMediaTypeWhitelist/Blacklist gate the file endpoint's MIME types.
 	FileUploadMediaTypeWhitelist string `env:"FILE_UPLOAD_MEDIA_TYPE_WHITELIST" envDefault:""`
 	FileUploadMediaTypeBlacklist string `env:"FILE_UPLOAD_MEDIA_TYPE_BLACKLIST" envDefault:"image/svg+xml"`
+	// FileDownloadCacheMaxAgeSeconds is the Cache-Control max-age (seconds) on the
+	// MinIO/S3 download response (default 1 year).
+	FileDownloadCacheMaxAgeSeconds int `env:"FILE_DOWNLOAD_CACHE_MAX_AGE_SECONDS" envDefault:"31536000"`
 
 	OIDCIssuerURL string   `env:"OIDC_ISSUER_URL"`
 	OIDCAudiences []string `env:"OIDC_AUDIENCES" envSeparator:","`
 	TLSSkipVerify bool     `env:"TLS_SKIP_VERIFY" envDefault:"false"`
+
+	MinioEndpoint  string `env:"MINIO_ENDPOINT,required"`
+	MinioAccessKey string `env:"MINIO_ACCESS_KEY,required"`
+	MinioSecretKey string `env:"MINIO_SECRET_KEY,required"`
+	MinioUseSSL    bool   `env:"MINIO_USE_SSL" envDefault:"false"`
+	MinioBucket    string `env:"MINIO_BUCKET"`
 
 	Drive drive.Config `envPrefix:"DRIVE_"`
 }
@@ -75,6 +85,16 @@ func run() error {
 	store := NewMongoStore(mongoClient.Database(cfg.MongoDB))
 	driveClient := drive.NewClient(&cfg.Drive)
 
+	minioClient, err := minioutil.Connect(ctx, cfg.MinioEndpoint, cfg.MinioUseSSL, cfg.MinioAccessKey, cfg.MinioSecretKey)
+	if err != nil {
+		return fmt.Errorf("minio connect: %w", err)
+	}
+	bucket := cfg.MinioBucket
+	if bucket == "" {
+		bucket = "chat-" + cfg.SiteID
+	}
+	s3Store := newMinioObjectStore(minioClient, bucket)
+
 	var validator TokenValidator
 	if !cfg.DevMode {
 		if cfg.OIDCIssuerURL == "" || len(cfg.OIDCAudiences) == 0 {
@@ -92,8 +112,8 @@ func run() error {
 	}
 
 	mimeFilter := newMediaTypeFilter(cfg.FileUploadMediaTypeWhitelist, cfg.FileUploadMediaTypeBlacklist)
-	handler := NewHandler(store, driveClient, cfg.MaxFiles, cfg.MaxImageSizeBytes,
-		cfg.FileUploadMaxFileSize, mimeFilter, imagePreview)
+	handler := NewHandler(store, driveClient, s3Store, cfg.MaxFiles, cfg.MaxImageSizeBytes,
+		cfg.FileUploadMaxFileSize, mimeFilter, imagePreview, cfg.FileDownloadCacheMaxAgeSeconds)
 
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()

@@ -12,4 +12,5 @@ func registerRoutes(r *gin.Engine, h *Handler, v TokenValidator, devMode bool) {
 	api.POST("/rooms/:roomId/upload/images", h.HandleUploadImages)
 	api.POST("/rooms/:roomId/upload/file", h.HandleUploadFile)
 	api.GET("/rooms/:roomId/file/:fileId", h.HandleDownloadFile)
+	api.GET("/file-upload/:fileId/:fileName", h.HandleDownloadMinioS3File)
 }
