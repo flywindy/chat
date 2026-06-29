@@ -1821,6 +1821,14 @@ func TestHandler_ListMembers(t *testing.T) {
 							Member: model.RoomMemberEntry{
 								ID: "alice", Type: model.RoomMemberIndividual, Account: "alice",
 								EngName: "Alice Wang", ChineseName: "愛麗絲", IsOwner: true,
+								SectName: "Cardiology", EmployeeID: "E10293",
+							},
+						},
+						{
+							ID: "rm2", RoomID: roomID, Ts: time.Unix(2, 0).UTC(),
+							Member: model.RoomMemberEntry{
+								ID: "DEPT-100", Type: model.RoomMemberOrg,
+								OrgName: "Cardiology Department", OrgDescription: "Inpatient care", MemberCount: 42,
 							},
 						},
 					}, nil)
@@ -1831,6 +1839,14 @@ func TestHandler_ListMembers(t *testing.T) {
 					Member: model.RoomMemberEntry{
 						ID: "alice", Type: model.RoomMemberIndividual, Account: "alice",
 						EngName: "Alice Wang", ChineseName: "愛麗絲", IsOwner: true,
+						SectName: "Cardiology", EmployeeID: "E10293",
+					},
+				},
+				{
+					ID: "rm2", RoomID: roomID, Ts: time.Unix(2, 0).UTC(),
+					Member: model.RoomMemberEntry{
+						ID: "DEPT-100", Type: model.RoomMemberOrg,
+						OrgName: "Cardiology Department", OrgDescription: "Inpatient care", MemberCount: 42,
 					},
 				},
 			}},

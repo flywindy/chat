@@ -563,6 +563,9 @@ func (s *MongoStore) getRoomMembers(ctx context.Context, roomID string, limit, o
 		rm.Member.IsOwner = d.IsOwner
 		if rm.Member.Type == model.RoomMemberOrg {
 			orgIDs = append(orgIDs, rm.Member.ID)
+		} else {
+			rm.Member.SectName = d.SectName
+			rm.Member.EmployeeID = d.EmployeeID
 		}
 		members[i] = rm
 	}
@@ -594,6 +597,7 @@ func (s *MongoStore) attachOrgDisplay(ctx context.Context, roomID string, member
 			members[i].Member.MemberCount = a.memberCount
 		}
 		members[i].Member.OrgName = orgDisplaySectName(agg[id], id)
+		members[i].Member.OrgDescription = orgDisplayDescription(agg[id])
 	}
 	return nil
 }
@@ -610,13 +614,15 @@ func (s *MongoStore) fetchOrgDisplayUsers(ctx context.Context, orgIDs []string) 
 			{"sectId": bson.M{"$in": orgIDs}},
 		}},
 		options.Find().SetProjection(bson.M{
-			"_id":        0,
-			"deptId":     1,
-			"sectId":     1,
-			"deptName":   1,
-			"deptTCName": 1,
-			"sectName":   1,
-			"sectTCName": 1,
+			"_id":             0,
+			"deptId":          1,
+			"sectId":          1,
+			"deptName":        1,
+			"deptTCName":      1,
+			"sectName":        1,
+			"sectTCName":      1,
+			"deptDescription": 1,
+			"sectDescription": 1,
 		}),
 	)
 	if err != nil {
@@ -647,6 +653,8 @@ type roomMemberEnrichedDisplay struct {
 	EngName     string `bson:"engName,omitempty"`
 	ChineseName string `bson:"chineseName,omitempty"`
 	IsOwner     bool   `bson:"isOwner,omitempty"`
+	SectName    string `bson:"sectName,omitempty"`
+	EmployeeID  string `bson:"employeeId,omitempty"`
 }
 
 // enrichRoomMembersStages returns the $lookup + $set stages appended to the
@@ -670,7 +678,7 @@ func enrichRoomMembersStages(roomID string) []bson.D {
 					bson.M{"$eq": bson.A{"$account", "$$acct"}},
 				}}}},
 				bson.M{"$limit": 1},
-				bson.M{"$project": bson.M{"engName": 1, "chineseName": 1, "_id": 0}},
+				bson.M{"$project": bson.M{"engName": 1, "chineseName": 1, "sectName": 1, "employeeId": 1, "_id": 0}},
 			},
 			"as": "_userMatch",
 		}}},
@@ -697,6 +705,8 @@ func enrichRoomMembersStages(roomID string) []bson.D {
 			"display": bson.M{
 				"engName":     bson.M{"$arrayElemAt": bson.A{"$_userMatch.engName", 0}},
 				"chineseName": bson.M{"$arrayElemAt": bson.A{"$_userMatch.chineseName", 0}},
+				"sectName":    bson.M{"$arrayElemAt": bson.A{"$_userMatch.sectName", 0}},
+				"employeeId":  bson.M{"$arrayElemAt": bson.A{"$_userMatch.employeeId", 0}},
 				"isOwner": bson.M{"$in": bson.A{
 					"owner",
 					bson.M{"$ifNull": bson.A{
@@ -808,6 +818,8 @@ func (s *MongoStore) attachUserDisplayNames(ctx context.Context, roomID string, 
 		if u, ok := userByAccount[acct]; ok {
 			members[i].Member.EngName = u.EngName
 			members[i].Member.ChineseName = u.ChineseName
+			members[i].Member.SectName = u.SectName
+			members[i].Member.EmployeeID = u.EmployeeID
 			continue
 		}
 		if name, ok := appByAssistant[acct]; ok {
@@ -823,7 +835,7 @@ func (s *MongoStore) attachUserDisplayNames(ctx context.Context, roomID string, 
 func (s *MongoStore) findUsersForDisplay(ctx context.Context, accounts []string) (map[string]*model.User, error) {
 	cursor, err := s.users.Find(ctx,
 		bson.M{"account": bson.M{"$in": accounts}},
-		options.Find().SetProjection(bson.M{"_id": 0, "account": 1, "engName": 1, "chineseName": 1}),
+		options.Find().SetProjection(bson.M{"_id": 0, "account": 1, "engName": 1, "chineseName": 1, "sectName": 1, "employeeId": 1}),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("find users for display: %w", err)

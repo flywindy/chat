@@ -1266,7 +1266,7 @@ When the synchronous reply is an error envelope, the request was rejected before
 |---|---|---|---|
 | `limit` | number | no | If set, must be `> 0`. Caps the number of members returned. |
 | `offset` | number | no | If set, must be `>= 0`. For pagination. |
-| `enrich` | boolean | no | When `true`, populates the display fields (`engName`, `chineseName`, `name`, `isOwner`, `orgName`, `memberCount`) on each entry. Omitted-or-`false` returns the lean record only. |
+| `enrich` | boolean | no | When `true`, populates the display fields (`engName`, `chineseName`, `name`, `isOwner`, `sectName`, `employeeId`, `orgName`, `memberCount`, `orgDescription`) on each entry. Omitted-or-`false` returns the lean record only. |
 
 ```json
 { "limit": 50, "enrich": true }
@@ -1296,10 +1296,13 @@ When the synchronous reply is an error envelope, the request was rejected before
 | `account` | string | Optional. Account name (set for individuals). |
 | `engName` | string | Optional. Populated only when request had `enrich: true`. |
 | `chineseName` | string | Optional. Populated only when `enrich: true`. |
+| `sectName` | string | Optional. The member's section name. Populated only when `enrich: true` and entry is an individual. |
+| `employeeId` | string | Optional. The member's employee ID. Populated only when `enrich: true` and entry is an individual. |
 | `name` | string | Optional. Bot/app display name from `apps.name` when the member's account ends with `.bot`. Mutually exclusive with `engName`/`chineseName`. |
 | `isOwner` | boolean | Optional. Populated only when `enrich: true`. |
 | `orgName` | string | Optional. Org's display name (dept name preferred, sect name fallback). Populated only when `enrich: true` and entry is an org. |
 | `memberCount` | number | Optional. Populated only when `enrich: true` and entry is an org. |
+| `orgDescription` | string | Optional. Org's description, from the same org unit shown in `orgName` (dept-first); omitted when empty. Populated only when `enrich: true` and entry is an org. |
 
 ```json
 {
@@ -1314,7 +1317,21 @@ When the synchronous reply is an error envelope, the request was rejected before
         "account": "alice",
         "engName": "Alice",
         "chineseName": "愛麗絲",
-        "isOwner": true
+        "isOwner": true,
+        "sectName": "Cardiology",
+        "employeeId": "E10293"
+      }
+    },
+    {
+      "id": "01970a4f8c2d7c9a01970a4f8c2d7c9c",
+      "rid": "01970a4f8c2d7c9aQ",
+      "ts": "2026-05-01T10:05:00Z",
+      "member": {
+        "id": "DEPT-100",
+        "type": "org",
+        "orgName": "Cardiology Department",
+        "orgDescription": "Inpatient & outpatient cardiac care",
+        "memberCount": 42
       }
     }
   ]
