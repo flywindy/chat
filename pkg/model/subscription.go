@@ -58,7 +58,9 @@ type Subscription struct {
 	// Subscription-level metadata persisted on the Mongo subscriptions document.
 	// UpdatedAt is a nullable pointer so a creating writer that doesn't stamp it
 	// (e.g. room-worker's $setOnInsert) never persists a zero-time placeholder.
-	FavoritedAt *time.Time `json:"favoritedAt,omitempty" bson:"favoritedAt,omitempty"`
+	// Last favorite-toggle time (also bumped on un-favorite). bson key matches what the
+	// writers store; the old `favoritedAt` key was never written, so the value never surfaced.
+	FavoriteUpdatedAt *time.Time `json:"favoriteUpdatedAt,omitempty" bson:"favoriteUpdatedAt,omitempty"`
 	// Stored as `_updatedAt` in Mongo (matches the canonical subscriptions schema);
 	// serialized on the wire as `updatedAt`. Rooms keep the plain `updatedAt` field.
 	UpdatedAt *time.Time `json:"updatedAt,omitempty" bson:"_updatedAt,omitempty"`

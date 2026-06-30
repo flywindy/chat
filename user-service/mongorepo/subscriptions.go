@@ -177,14 +177,14 @@ func subscriptionProjection(extra bson.M) bson.M {
 		"hasMention":         1,
 		// hasGroupMention removed from the schema; hasUnread is computed at read
 		// time (bson:"-"). Neither is projected from Mongo.
-		"threadUnread":   1,
-		"alert":          1,
-		"muted":          1,
-		"favorite":       1,
-		"restricted":     1,
-		"externalAccess": 1,
-		"favoritedAt":    1,
-		"_updatedAt":     1, // subscription's Mongo field (wire: updatedAt)
+		"threadUnread":      1,
+		"alert":             1,
+		"muted":             1,
+		"favorite":          1,
+		"restricted":        1,
+		"externalAccess":    1,
+		"favoriteUpdatedAt": 1,
+		"_updatedAt":        1, // subscription's Mongo field (wire: updatedAt)
 		// room baseline copied to the top level (consumed by local enrichment)
 		"userCount":         1,
 		"lastMsgAt":         1,
