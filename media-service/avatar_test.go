@@ -15,15 +15,6 @@ func TestIsBot(t *testing.T) {
 	assert.False(t, isBot("alice"))
 }
 
-func TestParseAccount(t *testing.T) {
-	l, d := parseAccount("helper.bot@site2.example.com")
-	assert.Equal(t, "helper.bot", l)
-	assert.Equal(t, "site2.example.com", d)
-	l, d = parseAccount("alice")
-	assert.Equal(t, "alice", l)
-	assert.Equal(t, "", d)
-}
-
 func TestSanitizeInitial(t *testing.T) {
 	cases := map[string]string{
 		"alice":   "A",

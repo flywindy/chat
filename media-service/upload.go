@@ -29,7 +29,7 @@ type botUploadResponse struct {
 
 func (h *handler) HandleBotUpload(c *gin.Context) {
 	ctx := c.Request.Context()
-	account, _ := parseAccount(c.Param("botName"))
+	account := c.Param("botName")
 
 	if !isBot(account) {
 		errhttp.Write(ctx, c, errcode.BadRequest("not a bot account"))

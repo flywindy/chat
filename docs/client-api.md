@@ -58,7 +58,7 @@ paths.
 4. [Message Send](#4-message-send)
 5. [Room Encryption](#5-room-encryption)
 6. [Error envelope reference](#6-error-envelope-reference)
-7. [Avatar Service](#7-avatar-service)
+7. [Media Service](#7-media-service)
    - [GET /avatar/v1/:accountName](#get-avatarv1accountname)
    - [GET /avatar/v1/room/:roomID](#get-avatarv1roomroomid)
    - [PUT /avatar/v1/bot/:botName](#put-avatarv1botbotname)
@@ -5037,9 +5037,9 @@ Compute the trigger as `reason ?? code` and branch on that. Use `code` for gener
 
 ---
 
-## 7. Avatar Service
+## 7. Media Service
 
-Public HTTP endpoints served by `avatar-service`. GET image responses (streamed custom image and generated default SVG) set `X-Content-Type-Options: nosniff` and `Content-Security-Policy: default-src 'none'`; redirects do not, and the upload sets `nosniff` only.
+Public HTTP endpoints served by `media-service`. GET image responses (streamed custom image and generated default SVG) set `X-Content-Type-Options: nosniff` and `Content-Security-Policy: default-src 'none'`; redirects do not, and the upload sets `nosniff` only.
 
 **Bot detection:** an account is a bot if it ends in `.bot` **or** begins with `p_`. Everything else is a user.
 
@@ -5166,7 +5166,7 @@ The service decodes the image bytes to verify they are a valid PNG or JPEG — m
 }
 ```
 
-On `409`, the response body carries a human-readable message indicating which cluster to re-upload to (e.g. `"bot is owned by site-b — upload to https://avatar-service-site-b"`). The client must re-issue the `PUT` to the correct domain.
+On `409`, the response body carries a human-readable message indicating which cluster to re-upload to (e.g. `"bot is owned by site-b — upload to https://media-service-site-b"`). The client must re-issue the `PUT` to the correct domain.
 
 On success, the custom image takes effect immediately: subsequent `GET /avatar/v1/:accountName` calls for that bot will stream it (or return `304`). A re-upload overwrites the previous image; there is no delete/reset in v1.
 

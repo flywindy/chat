@@ -17,7 +17,9 @@ import (
 	"github.com/hmchangw/chat/pkg/testutil"
 )
 
-func TestMain(m *testing.M) { testutil.RunTestsWithPrewarm(m, testutil.EnsureMongo, testutil.EnsureMinIO) }
+func TestMain(m *testing.M) {
+	testutil.RunTestsWithPrewarm(m, testutil.EnsureMongo, testutil.EnsureMinIO)
+}
 
 func TestMongoStore_EmployeeID(t *testing.T) {
 	db := testutil.MongoDB(t, "avatar")

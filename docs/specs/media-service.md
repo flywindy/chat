@@ -1,7 +1,7 @@
-# Spec: avatar-service — User / Bot / Room avatar resolver + image server
+# Spec: media-service — User / Bot / Room avatar resolver + image server
 
 > **Status:** DESIGN — not yet implemented. This document is the agreed design
-> record from the brainstorming session on branch `claude/avatar-service`.
+> record from the brainstorming session on branch `claude/media-service`.
 > Forward-looking language ("the service will …", "the handler …") describes
 > planned work, not shipped behaviour.
 
@@ -52,7 +52,7 @@ production**.
 
 ## 2. Service shape
 
-A new flat service `avatar-service/` at repo root, following the per-service
+A new flat service `media-service/` at repo root, following the per-service
 layout. **It does not use NATS, and v1 has no auth** (§7a.4). Mongo + MinIO backed.
 
 | File | Responsibility |
@@ -104,8 +104,8 @@ label — instrumented at one seam, not scattered across the decision tree.
 
 `CLUSTER_DOMAINS` is a **JSON array** of `{"siteID","domain"}` objects mapping
 each `siteID` to the **full base URL (including scheme)** of *that cluster's*
-avatar-service, e.g.
-`[{"siteID":"site2","domain":"https://avatar-service-site2"}]`. Parsed via a
+media-service, e.g.
+`[{"siteID":"site2","domain":"https://media-service-site2"}]`. Parsed via a
 `TextUnmarshaler` on the config type (not env's key/val splitting). Redirect
 targets use the `domain` value **verbatim** — `clusterBaseURL(siteID)` returns it
 and the handler never prepends a scheme. Cross-cluster redirects and
@@ -134,7 +134,7 @@ warm-cache revalidation never touches MinIO:
    - other error → `fmt.Errorf("stat avatar object: %w", err)` → collapses to `internal`.
 4. `c.DataFromReader(http.StatusOK, st.Size, st.ContentType, obj, nil)` — streams.
 
-Rationale: the cacheable URL stays stable (avatar-service's own URL), so
+Rationale: the cacheable URL stays stable (media-service's own URL), so
 `Cache-Control`/`ETag` work and the 304 is answered from Mongo alone; redirecting
 to a MinIO presigned URL would defeat caching (expiring `Location`) and add a hop.
 The 200 (cold-fetch) path uses the authoritative `Stat` values so it stays correct
@@ -170,14 +170,14 @@ guarantee.
 
 ### 4.4 The `avatars` collection (custom-image existence source)
 
-A dedicated Mongo collection **owned by avatar-service**. **Presence of a
+A dedicated Mongo collection **owned by media-service**. **Presence of a
 document = "this subject has a custom image in MinIO";** absence = serve the
 dynamic default (§8). It is the authoritative existence check for both kinds, so
 the common "no custom image" case is a cheap `_id` point-lookup that never
 touches MinIO.
 
-- **Writers:** avatar-service writes a doc on a bot upload (§7a); the legacy-data
-  **migration** writes docs for pre-existing room (and bot) images. avatar-service
+- **Writers:** media-service writes a doc on a bot upload (§7a); the legacy-data
+  **migration** writes docs for pre-existing room (and bot) images. media-service
   never writes into room-service's `rooms` or the upstream `apps` collection — it
   owns only `avatars`, respecting service data boundaries.
 - **Readers:** the GET path looks up the doc by `_id` to decide
@@ -246,7 +246,7 @@ Migration rules:
 4. Legacy `progress` / `complete` / `uploading` are **not** carried over — the
    single-PUT upload model (§7a.2) tracks no upload state.
 
-The migration is a **separate one-off job, run outside avatar-service**, and is
+The migration is a **separate one-off job, run outside media-service**, and is
 **idempotent** (upsert by `_id`), so it can be re-run safely. It needs no
 coordination with the service: a doc becomes live the moment it is written.
 
@@ -354,7 +354,7 @@ else:
   route dm/botDM rooms to this endpoint). Without the hint, the full path below
   runs.
 - Owning site, room type, and room name come from the `subscriptions` collection
-  (`Subscription.SiteID` / `.RoomType` / `.Name`), so avatar-service does not read
+  (`Subscription.SiteID` / `.RoomType` / `.Name`), so media-service does not read
   room-service's `rooms` collection, and the default's initial is the room's name
   (§8.1). **`Subscription.SiteID` is the room's *owning* site** (verified:
   `inbox-worker` mirrors a remote room's membership onto each member's home site
@@ -415,7 +415,7 @@ follow-up `GET`. (`200`+body rather than `204`, since the result is useful.)
   only after the object is durably stored, so "doc exists ⟺ a complete image
   exists" — no upload-state flags are needed (contrast the legacy
   `progress`/`complete`/`uploading` fields, dropped in §4.4).
-- The object's key is chosen by avatar-service and stored **verbatim** in
+- The object's key is chosen by media-service and stored **verbatim** in
   `minioKey`, used as-is on reads — never re-derived from a convention (migrated
   room objects keep their legacy paths, §4.4). The **detected** content-type
   (from decode, not the client header) is set as object metadata and stored.
@@ -447,7 +447,7 @@ locally even for a remote bot):
 is a deliberate interim decision: the auth model is deferred until it is decided
 (candidates: OIDC + platform-admin role, an internal/service token, or a per-bot
 owner source). **It is a known risk and MUST be gated before any production
-exposure** (network-restrict the endpoint in the meantime). avatar-service
+exposure** (network-restrict the endpoint in the meantime). media-service
 therefore has **no `pkg/oidc` dependency and no auth config** in v1.
 
 Read endpoints (GET) are public by design.
@@ -522,9 +522,9 @@ the rendering in one place.
 **Resolved:**
 - **Write scope** → **bot uploads only** in v1; no room/user upload, no
   `DELETE`/reset (§1).
-- **`avatars` collection** → avatar-service-owned; **doc presence = has custom
+- **`avatars` collection** → media-service-owned; **doc presence = has custom
   image**; authoritative existence source for room + bot; migration writes room
-  docs, avatar-service writes bot docs (§4.4).
+  docs, media-service writes bot docs (§4.4).
 - **Unified read model** → resolve owning `siteID` → cross-cluster redirect →
   local `avatars`-doc lookup → MinIO stream or dynamic default (§6, §7).
 - **Bot owning site** → from `User.SiteID` via `store.BotSite` (bots are users,
@@ -608,7 +608,7 @@ the rendering in one place.
 
 ## 11. Docs to update on implementation
 
-- `docs/client-api.md` is NATS/auth-HTTP-scoped; avatar-service is a new public
+- `docs/client-api.md` is NATS/auth-HTTP-scoped; media-service is a new public
   HTTP surface — add a section there (or link this spec) describing the two
   endpoints, redirect semantics, cache headers, and the default-image behaviour.
 - Delete any `docs/reviews/*` working notes before opening a PR.

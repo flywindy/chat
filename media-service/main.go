@@ -19,7 +19,7 @@ import (
 
 func main() {
 	if err := run(); err != nil {
-		slog.Error("avatar-service exited", "error", err)
+		slog.Error("media-service exited", "error", err)
 		os.Exit(1)
 	}
 }
@@ -50,7 +50,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("connect minio: %w", err)
 	}
-	blobs := newMinioBlobStore(minioClient, cfg.AvatarBucket)
+	blobs := newMinioBlobStore(minioClient, cfg.MinioBucket)
 
 	h := newHandler(store, blobs, &cfg)
 
@@ -70,11 +70,11 @@ func run() error {
 	}
 
 	go shutdown.Wait(ctx, 25*time.Second, func(ctx context.Context) error {
-		slog.Info("shutting down avatar-service")
+		slog.Info("shutting down media-service")
 		return srv.Shutdown(ctx)
 	})
 
-	slog.Info("avatar-service listening", "port", cfg.Port, "site", cfg.SiteID)
+	slog.Info("media-service listening", "port", cfg.Port, "site", cfg.SiteID)
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("listen and serve: %w", err)
 	}

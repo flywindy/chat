@@ -9,7 +9,7 @@ import (
 )
 
 func TestClusterBaseURL(t *testing.T) {
-	c := config{ClusterDomains: clusterDomains{entries: []clusterDomain{{SiteID: "site-b", Domain: "https://avatar-b"}}}}
+	c := config{ClusterDomains: clusterDomains{byID: map[string]string{"site-b": "https://avatar-b"}}}
 	assert.Equal(t, "https://avatar-b", c.clusterBaseURL("site-b"))
 	assert.Equal(t, "", c.clusterBaseURL("unknown"))
 }
@@ -22,6 +22,14 @@ func TestClusterDomains_UnmarshalText(t *testing.T) {
 	assert.Equal(t, "", cd.baseURL("missing"))
 
 	assert.Error(t, (&clusterDomains{}).UnmarshalText([]byte(`not json`)))
+}
+
+func TestClusterDomains_UnmarshalText_RejectsDuplicateSiteID(t *testing.T) {
+	var cd clusterDomains
+	err := cd.UnmarshalText([]byte(`[{"siteID":"s1","domain":"https://a"},{"siteID":"s1","domain":"https://b"}]`))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate siteID")
+	assert.Contains(t, err.Error(), "s1")
 }
 
 // TestClusterDomains_EnvParse proves caarlos0/env honors the TextUnmarshaler, so

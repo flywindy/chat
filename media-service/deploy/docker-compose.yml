@@ -1,10 +1,10 @@
-name: avatar-service
+name: media-service
 
 services:
-  avatar-service:
+  media-service:
     build:
       context: ../..
-      dockerfile: avatar-service/deploy/Dockerfile
+      dockerfile: media-service/deploy/Dockerfile
     pull_policy: build
     ports:
       - "8080:8080"
@@ -21,7 +21,7 @@ services:
       - MINIO_ACCESS_KEY=minioadmin
       - MINIO_SECRET_KEY=minioadmin
       - MINIO_USE_SSL=false
-      - AVATAR_BUCKET=avatars
+      - MINIO_BUCKET=avatars
       - MAX_UPLOAD_BYTES=1048576
       - CACHE_MAX_AGE_SECONDS=21600
       - EID_CACHE_TTL=24h

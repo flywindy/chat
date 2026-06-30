@@ -5,7 +5,7 @@ trigger:
       - develop
   paths:
     include:
-      - avatar-service/
+      - media-service/
       - pkg/
 
 pr:
@@ -14,12 +14,12 @@ pr:
       - main
   paths:
     include:
-      - avatar-service/
+      - media-service/
       - pkg/
 
 variables:
   GO_VERSION: '1.25.11'
-  SERVICE_NAME: avatar-service
+  SERVICE_NAME: media-service
   REGISTRY: '$(containerRegistry)'
 
 stages:

@@ -16,7 +16,7 @@ type handler struct {
 	store    avatarStore
 	blobs    blobStore
 	cfg      config
-	eidCache *ttlCache
+	eidCache *eidCache
 }
 
 func newHandler(store avatarStore, blobs blobStore, cfg *config) *handler {
@@ -24,7 +24,7 @@ func newHandler(store avatarStore, blobs blobStore, cfg *config) *handler {
 		store:    store,
 		blobs:    blobs,
 		cfg:      *cfg,
-		eidCache: newTTLCache(cfg.EIDCacheCapacity, cfg.EIDCacheTTL),
+		eidCache: newEIDCache(store, cfg.EIDCacheCapacity, cfg.EIDCacheTTL),
 	}
 }
 
@@ -146,7 +146,7 @@ func (h *handler) serveRoomLocal(c *gin.Context, roomID, name string) {
 }
 
 func (h *handler) HandleAccountAvatar(c *gin.Context) {
-	account, _ := parseAccount(c.Param("accountName"))
+	account := c.Param("accountName")
 	ctx := c.Request.Context()
 
 	if isBot(account) {
@@ -182,21 +182,15 @@ func (h *handler) HandleAccountAvatar(c *gin.Context) {
 	}
 
 	// user (always local)
-	eid, ok := h.eidCache.Get(account)
-	if !ok {
-		var found bool
-		var err error
-		eid, found, err = h.store.EmployeeID(ctx, account)
-		if err != nil {
-			c.Set("avatar_outcome", "error")
-			errhttp.Write(c.Request.Context(), c, err)
-			return
-		}
-		if !found {
-			h.serveDefault(c, "user", account, account)
-			return
-		}
-		h.eidCache.Put(account, eid)
+	eid, found, err := h.eidCache.get(ctx, account)
+	if err != nil {
+		c.Set("avatar_outcome", "error")
+		errhttp.Write(c.Request.Context(), c, err)
+		return
+	}
+	if !found {
+		h.serveDefault(c, "user", account, account)
+		return
 	}
 	c.Set("avatar_kind", "user")
 	c.Set("avatar_outcome", "redirect")

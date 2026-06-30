@@ -5,7 +5,6 @@ import (
 	"hash/fnv"
 	"html"
 	"regexp"
-	"strings"
 	"unicode"
 	"unicode/utf8"
 )
@@ -17,15 +16,6 @@ const svgTemplateVersion = "v1"
 var botPattern = regexp.MustCompile(`\.bot$|^p_`)
 
 func isBot(account string) bool { return botPattern.MatchString(account) }
-
-// parseAccount splits "<local>@<domain>" into its parts; domain is "" if absent.
-// Accounts are bare in practice; this just defensively strips a stray @domain.
-func parseAccount(account string) (local, domain string) {
-	if i := strings.IndexByte(account, '@'); i >= 0 {
-		return account[:i], account[i+1:]
-	}
-	return account, ""
-}
 
 var palette = []string{
 	"#1abc9c", "#2ecc71", "#3498db", "#9b59b6",
