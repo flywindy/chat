@@ -115,15 +115,19 @@ func (h *Handler) HandleMessage(ctx context.Context, data []byte) error {
 	isThreadOnlyReply := msg.ThreadParentMessageID != "" && !msg.TShow
 
 	var followers map[string]struct{}
+	// parentCreatedAt comes from thread_rooms (written by message-worker), not the
+	// event; nil (thread room not created yet) drives conservative suppression.
+	var parentCreatedAt *time.Time
 	if isThreadOnlyReply {
-		f, ferr := h.deps.Followers.Followers(ctx, msg.ThreadParentMessageID)
+		// A clean miss returns empty followers + nil error (handled below as the
+		// first-reply race); an actual Mongo failure must NAK rather than silently
+		// ack and drop follower-only recipients and restricted-room filtering.
+		info, ferr := h.deps.Followers.Lookup(ctx, msg.ThreadParentMessageID)
 		if ferr != nil {
-			slog.Warn("thread followers lookup failed, treating as empty",
-				"error", ferr, "parentMessageId", msg.ThreadParentMessageID,
-				"request_id", natsutil.RequestIDFromContext(ctx))
-			f = map[string]struct{}{}
+			return fmt.Errorf("lookup thread room for parent %s: %w", msg.ThreadParentMessageID, ferr)
 		}
-		followers = f
+		followers = info.Followers
+		parentCreatedAt = info.ParentCreatedAt
 	}
 
 	roomType := members[0].RoomType
@@ -145,7 +149,7 @@ func (h *Handler) HandleMessage(ctx context.Context, data []byte) error {
 		if m.Muted {
 			continue
 		}
-		if isRestricted(m, msg, isThreadOnlyReply) {
+		if isRestricted(m, msg, isThreadOnlyReply, parentCreatedAt) {
 			continue
 		}
 
@@ -253,17 +257,17 @@ func mentionedSet(parsed mention.ParseResult) map[string]bool {
 	return out
 }
 
-// isRestricted filters members who joined after the relevant message timestamp.
-// Thread replies use the parent's CreatedAt; a nil parent ts is "no access" (legacy records).
-func isRestricted(m roomsubcache.Member, msg model.Message, isThreadOnlyReply bool) bool { //nolint:gocritic // hugeParam: hot loop, pointer indirection adds no benefit
+// isRestricted filters members who joined after the message timestamp (the parent's
+// createdAt for thread-only replies); a nil parentCreatedAt suppresses, not leaks.
+func isRestricted(m roomsubcache.Member, msg model.Message, isThreadOnlyReply bool, parentCreatedAt *time.Time) bool { //nolint:gocritic // hugeParam: hot loop, pointer indirection adds no benefit
 	if m.HistorySharedSince == nil {
 		return false
 	}
 	if isThreadOnlyReply {
-		if msg.ThreadParentMessageCreatedAt == nil {
+		if parentCreatedAt == nil {
 			return true
 		}
-		return msg.ThreadParentMessageCreatedAt.UnixMilli() < *m.HistorySharedSince
+		return parentCreatedAt.UnixMilli() < *m.HistorySharedSince
 	}
 	return msg.CreatedAt.UnixMilli() < *m.HistorySharedSince
 }

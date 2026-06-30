@@ -472,6 +472,22 @@ func (s *CassandraStore) GetQuotedParentSnapshot(ctx context.Context, messageID 
 	}, true, nil
 }
 
+// GetMessageCreatedAt point-reads created_at from messages_by_id. Returns
+// (zero, false, nil) when absent; a Cassandra failure errors so the worker NAKs.
+func (s *CassandraStore) GetMessageCreatedAt(ctx context.Context, messageID string) (time.Time, bool, error) {
+	var createdAt time.Time
+	if err := s.cassSession.Query(
+		`SELECT created_at FROM messages_by_id WHERE message_id = ? LIMIT 1`,
+		messageID,
+	).WithContext(ctx).Scan(&createdAt); err != nil {
+		if errors.Is(err, gocql.ErrNotFound) {
+			return time.Time{}, false, nil
+		}
+		return time.Time{}, false, fmt.Errorf("get createdAt for message %s: %w", messageID, err)
+	}
+	return createdAt, true, nil
+}
+
 // GetMessageSender reads the sender UDT from messages_by_id for the given message ID.
 // Returns an error if the message does not exist.
 func (s *CassandraStore) GetMessageSender(ctx context.Context, messageID string) (*cassParticipant, error) {

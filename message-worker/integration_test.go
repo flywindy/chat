@@ -401,6 +401,37 @@ func TestCassandraStore_GetMessageSender(t *testing.T) {
 	})
 }
 
+func TestCassandraStore_GetMessageCreatedAt(t *testing.T) {
+	cassSession := setupCassandra(t)
+	store := NewCassandraStore(cassSession, msgbucket.New(24*time.Hour), nil)
+	ctx := context.Background()
+
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	sender := &cassParticipant{ID: "u-1", Account: "alice"}
+	msg := &model.Message{
+		ID:          "m-createdat-test",
+		RoomID:      "r-1",
+		UserID:      "u-1",
+		UserAccount: "alice",
+		Content:     "hello",
+		CreatedAt:   now,
+	}
+	require.NoError(t, store.SaveMessage(ctx, msg, sender, "site-a"))
+
+	t.Run("existing message returns its createdAt", func(t *testing.T) {
+		got, found, err := store.GetMessageCreatedAt(ctx, "m-createdat-test")
+		require.NoError(t, err)
+		require.True(t, found)
+		assert.True(t, got.Equal(now), "want %s, got %s", now, got)
+	})
+
+	t.Run("non-existent message returns found=false, no error", func(t *testing.T) {
+		_, found, err := store.GetMessageCreatedAt(ctx, "does-not-exist")
+		require.NoError(t, err)
+		assert.False(t, found)
+	})
+}
+
 func TestHandler_Integration(t *testing.T) {
 	ctx := context.Background()
 

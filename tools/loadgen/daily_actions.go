@@ -175,7 +175,8 @@ func threadReply(a actionCtx, u *userState, parentID, content string) error {
 	msgID := idgen.GenerateMessageID()
 	reqID := idgen.GenerateRequestID()
 	req := model.SendMessageRequest{
-		ID: msgID, Content: content, RequestID: reqID, ThreadParentMessageID: parentID,
+		ID: msgID, Content: content, RequestID: reqID,
+		ThreadParentMessageID: parentID,
 	}
 	data, err := json.Marshal(req)
 	if err != nil {

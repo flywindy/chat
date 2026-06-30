@@ -137,38 +137,50 @@ func (d *directNATSAsyncPub) PublishMsg(_ context.Context, msg *nats.Msg) error 
 	return d.nc.PublishMsg(msg)
 }
 
-func TestMongoThreadFollowers_Followers(t *testing.T) {
+func TestMongoThreadFollowers_Lookup(t *testing.T) {
 	db := testutil.MongoDB(t, "notification_worker_test")
 	ctx := context.Background()
 	col := db.Collection("thread_rooms")
 
+	parentCreatedAt := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 	_, err := col.InsertMany(ctx, []any{
-		model.ThreadRoom{ID: "tr1", ParentMessageID: "parent-1", RoomID: "r1", SiteID: "site-a", ReplyAccounts: []string{"alice", "bob"}},
+		model.ThreadRoom{ID: "tr1", ParentMessageID: "parent-1", RoomID: "r1", SiteID: "site-a", ReplyAccounts: []string{"alice", "bob"}, ThreadParentCreatedAt: parentCreatedAt},
 		model.ThreadRoom{ID: "tr2", ParentMessageID: "parent-2", RoomID: "r1", SiteID: "site-a", ReplyAccounts: []string{"carol"}},
 	})
 	require.NoError(t, err)
 
 	tf := newMongoThreadFollowers(col)
 
-	t.Run("returns replyAccounts for parent", func(t *testing.T) {
-		got, err := tf.Followers(ctx, "parent-1")
+	t.Run("returns replyAccounts and parent createdAt for parent", func(t *testing.T) {
+		got, err := tf.Lookup(ctx, "parent-1")
 		require.NoError(t, err)
-		assert.Len(t, got, 2)
-		assert.Contains(t, got, "alice")
-		assert.Contains(t, got, "bob")
-		assert.NotContains(t, got, "carol")
+		assert.Len(t, got.Followers, 2)
+		assert.Contains(t, got.Followers, "alice")
+		assert.Contains(t, got.Followers, "bob")
+		assert.NotContains(t, got.Followers, "carol")
+		require.NotNil(t, got.ParentCreatedAt, "threadParentCreatedAt must be read from the doc")
+		assert.True(t, parentCreatedAt.Equal(*got.ParentCreatedAt), "parent createdAt round-trips")
+	})
+
+	t.Run("missing threadParentCreatedAt yields nil ParentCreatedAt", func(t *testing.T) {
+		got, err := tf.Lookup(ctx, "parent-2")
+		require.NoError(t, err)
+		assert.Len(t, got.Followers, 1)
+		assert.Nil(t, got.ParentCreatedAt, "unset timestamp must stay nil")
 	})
 
 	t.Run("empty parentMessageID returns empty set", func(t *testing.T) {
-		got, err := tf.Followers(ctx, "")
+		got, err := tf.Lookup(ctx, "")
 		require.NoError(t, err)
-		assert.Empty(t, got)
+		assert.Empty(t, got.Followers)
+		assert.Nil(t, got.ParentCreatedAt)
 	})
 
 	t.Run("unknown parent returns empty set", func(t *testing.T) {
-		got, err := tf.Followers(ctx, "no-such-parent")
+		got, err := tf.Lookup(ctx, "no-such-parent")
 		require.NoError(t, err)
-		assert.Empty(t, got)
+		assert.Empty(t, got.Followers)
+		assert.Nil(t, got.ParentCreatedAt)
 	})
 }
 

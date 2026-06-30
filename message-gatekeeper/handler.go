@@ -277,9 +277,6 @@ func (h *Handler) processMessage(ctx context.Context, account, roomID, siteID st
 		return nil, errcode.BadRequest(fmt.Sprintf("attachments exceed maximum size of %d bytes", h.maxAttachmentBytes))
 	}
 
-	// #322: the gatekeeper resolves the parent's createdAt server-side
-	// (resolveThreadParentCreatedAt) rather than trusting the request.
-
 	// Verify subscription
 	sub, err := h.store.GetSubscription(ctx, account, roomID)
 	if err != nil {
@@ -333,14 +330,8 @@ func (h *Handler) processMessage(ctx context.Context, account, roomID, siteID st
 		slog.DebugContext(ctx, "gatekeeper quote resolved", "request_id", req.RequestID, "quoted_id", req.QuotedParentMessageID, "unverified", quotedUnverified)
 	}
 
-	// #322: resolve the thread parent's createdAt server-side. The
-	// server-resolved value always wins over any client-sent value — a wrong
-	// client value must not corrupt downstream consumers. Done after the quote
-	// resolution so a quote-context failure short-circuits the extra fetch.
-	threadParentCreatedAt, err := h.resolveThreadParentCreatedAt(ctx, account, roomID, siteID, req.ThreadParentMessageID, req.QuotedParentMessageID, quotedSnapshot, quotedUnverified)
-	if err != nil {
-		return nil, err
-	}
+	// The canonical event does NOT carry the thread parent's createdAt: each consumer
+	// re-resolves it from a store it owns, so a Cassandra outage NAK-replays downstream.
 
 	// Compose the sender's render-ready display name once at write time so every
 	// downstream consumer (notification-worker, future search-sync-worker) reads
@@ -366,18 +357,17 @@ func (h *Handler) processMessage(ctx context.Context, account, roomID, siteID st
 	tshow := req.TShow && req.ThreadParentMessageID != ""
 
 	msg := model.Message{
-		ID:                           req.ID,
-		RoomID:                       roomID,
-		UserID:                       sub.User.ID,
-		UserAccount:                  sub.User.Account,
-		UserDisplayName:              displayName,
-		Content:                      req.Content,
-		CreatedAt:                    now,
-		ThreadParentMessageID:        req.ThreadParentMessageID,
-		ThreadParentMessageCreatedAt: threadParentCreatedAt,
-		TShow:                        tshow,
-		QuotedParentMessage:          quotedSnapshot,
-		Attachments:                  req.Attachments,
+		ID:                    req.ID,
+		RoomID:                roomID,
+		UserID:                sub.User.ID,
+		UserAccount:           sub.User.Account,
+		UserDisplayName:       displayName,
+		Content:               req.Content,
+		CreatedAt:             now,
+		ThreadParentMessageID: req.ThreadParentMessageID,
+		TShow:                 tshow,
+		QuotedParentMessage:   quotedSnapshot,
+		Attachments:           req.Attachments,
 	}
 
 	// Publish MessageEvent to MESSAGES_CANONICAL. QuotedParentUnverified rides the
@@ -400,47 +390,6 @@ func (h *Handler) processMessage(ctx context.Context, account, roomID, siteID st
 		"phase", "published", "request_id", req.RequestID, "subject", canonicalSubj, "bytes", len(evtData))
 
 	return sonic.Marshal(msg)
-}
-
-// resolveThreadParentCreatedAt resolves the thread parent's createdAt
-// server-side (#322), returning nil for a non-thread reply. It reuses the quote
-// snapshot's CreatedAt when the parent is also the quoted message, otherwise
-// fetches by ID. A fetch failure returns a bare error so the handler Naks for
-// redelivery rather than dropping the correctness-critical value.
-func (h *Handler) resolveThreadParentCreatedAt(
-	ctx context.Context,
-	account, roomID, siteID, threadParentMessageID, quotedParentMessageID string,
-	quotedSnapshot *cassandra.QuotedParentMessage,
-	quotedUnverified bool,
-) (*time.Time, error) {
-	if threadParentMessageID == "" {
-		return nil, nil
-	}
-
-	// Reuse the quote snapshot's CreatedAt only when authoritative. The unverified
-	// placeholder carries a synthetic timestamp, and the thread parent's createdAt
-	// (#322) isn't re-resolved downstream, so fetch it authoritatively instead
-	// (NAKs if history is still down).
-	if quotedSnapshot != nil && !quotedUnverified && quotedParentMessageID == threadParentMessageID {
-		t := quotedSnapshot.CreatedAt.UTC()
-		return &t, nil
-	}
-
-	snap, err := h.parentFetcher.FetchQuotedParent(ctx, account, roomID, siteID, threadParentMessageID)
-	if err != nil {
-		// Bare error → infra → Nak for redelivery (see HandleJetStreamMsg). Wrap
-		// only with a short description; never include the raw fetch error body
-		// in a client-facing path (it returns to the dispatcher log, not the
-		// client, but keep the convention consistent).
-		return nil, fmt.Errorf("resolve thread parent createdAt for %s: %w", threadParentMessageID, err)
-	}
-	if snap == nil {
-		// Contract violation (nil snapshot, nil error) — treat as infra so the
-		// reply is redelivered rather than shipped without the resolved value.
-		return nil, fmt.Errorf("resolve thread parent createdAt for %s: fetcher returned nil snapshot", threadParentMessageID)
-	}
-	t := snap.CreatedAt.UTC()
-	return &t, nil
 }
 
 // resolveQuoteSnapshot resolves the quoted parent into a snapshot, preferring the

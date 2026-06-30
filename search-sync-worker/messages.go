@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -12,6 +13,12 @@ import (
 	"github.com/hmchangw/chat/pkg/searchindex"
 	"github.com/hmchangw/chat/pkg/stream"
 )
+
+// parentCreatedAtResolver resolves a thread parent's authoritative createdAt;
+// ok=false leaves the field unset. Never errors. Satisfied by *esParentResolver.
+type parentCreatedAtResolver interface {
+	ResolveParentCreatedAt(ctx context.Context, messageID string) (time.Time, bool)
+}
 
 // messageCollection implements Collection for message search sync.
 //
@@ -26,6 +33,9 @@ import (
 type messageCollection struct {
 	indexPrefix string
 	syncFrom    time.Time
+	// parentResolver re-resolves the thread parent's createdAt from ES before
+	// indexing (search-service needs it for restricted-room access); nil disables it.
+	parentResolver parentCreatedAtResolver
 }
 
 func newMessageCollection(indexPrefix string, syncFrom time.Time) *messageCollection {
@@ -85,7 +95,19 @@ func (c *messageCollection) BuildAction(data []byte) ([]searchengine.BulkAction,
 	if evt.Event == model.EventReacted {
 		return nil, nil
 	}
+	c.resolveThreadParentCreatedAt(&evt)
 	return []searchengine.BulkAction{buildMessageAction(&evt, c.indexPrefix)}, nil
+}
+
+// resolveThreadParentCreatedAt re-resolves the parent createdAt from the ES index
+// (the canonical event omits it); no-op for nil resolver/non-thread/delete, miss→unset.
+func (c *messageCollection) resolveThreadParentCreatedAt(evt *model.MessageEvent) {
+	if c.parentResolver == nil || evt.Message.ThreadParentMessageID == "" || evt.Event == model.EventDeleted {
+		return
+	}
+	if createdAt, ok := c.parentResolver.ResolveParentCreatedAt(context.Background(), evt.Message.ThreadParentMessageID); ok {
+		evt.Message.ThreadParentMessageCreatedAt = &createdAt
+	}
 }
 
 // --- Message-specific internals ---

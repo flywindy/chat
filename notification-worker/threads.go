@@ -4,17 +4,23 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
-// ThreadFollowerLister returns the set of accounts following the thread rooted at parentMessageID.
-// Backed by thread_rooms.replyAccounts (every replier + parent author seeded at creation) — matches
-// the legacy notification rule.
+// ThreadRoomInfo is the per-thread metadata read from thread_rooms in one query.
+// ParentCreatedAt (nil on the first-reply race) drives restricted-room suppression.
+type ThreadRoomInfo struct {
+	Followers       map[string]struct{}
+	ParentCreatedAt *time.Time
+}
+
+// ThreadFollowerLister reads thread metadata for the thread rooted at parentMessageID.
 type ThreadFollowerLister interface {
-	Followers(ctx context.Context, parentMessageID string) (map[string]struct{}, error)
+	Lookup(ctx context.Context, parentMessageID string) (ThreadRoomInfo, error)
 }
 
 type mongoThreadFollowers struct {
@@ -25,20 +31,21 @@ func newMongoThreadFollowers(col *mongo.Collection) *mongoThreadFollowers {
 	return &mongoThreadFollowers{col: col}
 }
 
-func (m *mongoThreadFollowers) Followers(ctx context.Context, parentMessageID string) (map[string]struct{}, error) {
+func (m *mongoThreadFollowers) Lookup(ctx context.Context, parentMessageID string) (ThreadRoomInfo, error) {
 	if parentMessageID == "" {
-		return map[string]struct{}{}, nil
+		return ThreadRoomInfo{Followers: map[string]struct{}{}}, nil
 	}
 	var doc struct {
-		ReplyAccounts []string `bson:"replyAccounts"`
+		ReplyAccounts         []string  `bson:"replyAccounts"`
+		ThreadParentCreatedAt time.Time `bson:"threadParentCreatedAt"`
 	}
-	opts := options.FindOne().SetProjection(bson.M{"replyAccounts": 1, "_id": 0})
+	opts := options.FindOne().SetProjection(bson.M{"replyAccounts": 1, "threadParentCreatedAt": 1, "_id": 0})
 	err := m.col.FindOne(ctx, bson.M{"parentMessageId": parentMessageID}, opts).Decode(&doc)
 	if err != nil {
 		if errors.Is(err, mongo.ErrNoDocuments) {
-			return map[string]struct{}{}, nil
+			return ThreadRoomInfo{Followers: map[string]struct{}{}}, nil
 		}
-		return nil, fmt.Errorf("find thread room by parent %s: %w", parentMessageID, err)
+		return ThreadRoomInfo{}, fmt.Errorf("find thread room by parent %s: %w", parentMessageID, err)
 	}
 	out := make(map[string]struct{}, len(doc.ReplyAccounts))
 	for _, a := range doc.ReplyAccounts {
@@ -46,5 +53,10 @@ func (m *mongoThreadFollowers) Followers(ctx context.Context, parentMessageID st
 			out[a] = struct{}{}
 		}
 	}
-	return out, nil
+	info := ThreadRoomInfo{Followers: out}
+	if !doc.ThreadParentCreatedAt.IsZero() {
+		t := doc.ThreadParentCreatedAt.UTC()
+		info.ParentCreatedAt = &t
+	}
+	return info, nil
 }

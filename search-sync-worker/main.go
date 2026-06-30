@@ -164,8 +164,13 @@ func main() {
 		os.Exit(1)
 	}
 
+	msgColl := newMessageCollection(cfg.MsgIndexPrefix, syncMessagesFrom)
+	// search-service filters restricted-room access by threadParentMessageCreatedAt,
+	// so re-resolve it from the parent's indexed createdAt (the event omits it).
+	msgColl.parentResolver = newESParentResolver(engine, cfg.MsgIndexPrefix)
+
 	collections := []Collection{
-		newMessageCollection(cfg.MsgIndexPrefix, syncMessagesFrom),
+		msgColl,
 		newSpotlightCollection(cfg.SpotlightIndex),
 		newUserRoomCollection(cfg.UserRoomIndex),
 	}

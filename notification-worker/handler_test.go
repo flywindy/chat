@@ -50,14 +50,19 @@ func (s *stubMembers) Invalidate(_ context.Context, roomID string) {
 }
 
 type stubFollowers struct {
-	out map[string]map[string]struct{}
+	out       map[string]map[string]struct{}
+	createdAt map[string]*time.Time // parentID → thread parent createdAt (nil = unresolved)
 }
 
-func (s *stubFollowers) Followers(_ context.Context, parentID string) (map[string]struct{}, error) {
+func (s *stubFollowers) Lookup(_ context.Context, parentID string) (ThreadRoomInfo, error) {
+	info := ThreadRoomInfo{Followers: map[string]struct{}{}}
 	if v, ok := s.out[parentID]; ok {
-		return v, nil
+		info.Followers = v
 	}
-	return map[string]struct{}{}, nil
+	if s.createdAt != nil {
+		info.ParentCreatedAt = s.createdAt[parentID]
+	}
+	return info, nil
 }
 
 type stubPresence struct {
@@ -413,21 +418,54 @@ func TestHandle_ThreadOnlyReply_NilParentCreatedAt_Restricted(t *testing.T) {
 
 	msg := model.Message{
 		ID: "m1", RoomID: "r1", UserID: "alice", UserAccount: "alice", CreatedAt: time.Now(),
-		ThreadParentMessageID:        "parent-1",
-		ThreadParentMessageCreatedAt: nil, // legacy: no parent ts
-		TShow:                        false,
+		ThreadParentMessageID: "parent-1",
+		TShow:                 false,
 	}
+	// The stub returns no createdAt (thread room not created yet), so isRestricted
+	// suppresses conservatively for the restricted member bob.
 	require.NoError(t, h.HandleMessage(context.Background(), msgEvent(&msg)))
-	assert.Empty(t, emit.accounts(), "nil parent CreatedAt with HistorySharedSince must restrict bob")
+	assert.Empty(t, emit.accounts(), "unresolved parent createdAt with HistorySharedSince must restrict bob")
+}
+
+// The parent createdAt comes from thread_rooms (stub), not the event: a member who
+// joined before the parent is notified; one who joined after is suppressed.
+func TestHandle_ThreadOnlyReply_ParentCreatedAtFromThreadRoom(t *testing.T) {
+	parentMillis := int64(1700000000000)
+	parentCreatedAt := time.UnixMilli(parentMillis).UTC()
+	before := parentMillis - 1000 // joined before the parent → not restricted
+	after := parentMillis + 1000  // joined after the parent → restricted
+
+	members := &stubMembers{out: map[string][]roomsubcache.Member{
+		"r1": {
+			{ID: "alice", Account: "alice"},
+			{ID: "bob", Account: "bob", HistorySharedSince: &before},
+			{ID: "carol", Account: "carol", HistorySharedSince: &after},
+		},
+	}}
+	followers := &stubFollowers{
+		out:       map[string]map[string]struct{}{"parent-1": {"bob": {}, "carol": {}}},
+		createdAt: map[string]*time.Time{"parent-1": &parentCreatedAt},
+	}
+	emit := &recordingEmitter{}
+	h := newTestHandler(members, followers, noopPresenceSnapshotter{}, noopVetoer{}, emit)
+
+	require.NoError(t, h.HandleMessage(context.Background(), msgEvent(&model.Message{
+		ID: "m1", RoomID: "r1", UserID: "alice", UserAccount: "alice", CreatedAt: time.Now(),
+		ThreadParentMessageID: "parent-1",
+		TShow:                 false,
+		Content:               "thread reply",
+	})))
+	assert.ElementsMatch(t, []string{"bob"}, emit.accounts(),
+		"bob (joined before parent) notified; carol (joined after parent) suppressed")
 }
 
 type errFollowers struct{}
 
-func (errFollowers) Followers(context.Context, string) (map[string]struct{}, error) {
-	return nil, fmt.Errorf("mongo timeout")
+func (errFollowers) Lookup(context.Context, string) (ThreadRoomInfo, error) {
+	return ThreadRoomInfo{}, fmt.Errorf("mongo timeout")
 }
 
-func TestHandle_ThreadFollowersError_FailOpenEmptySet(t *testing.T) {
+func TestHandle_ThreadFollowersError_NAKs(t *testing.T) {
 	members := &stubMembers{out: map[string][]roomsubcache.Member{
 		"r1": {
 			{ID: "alice", Account: "alice"},
@@ -444,8 +482,11 @@ func TestHandle_ThreadFollowersError_FailOpenEmptySet(t *testing.T) {
 		TShow:                 false,
 		CreatedAt:             time.Now(),
 	}
-	require.NoError(t, h.HandleMessage(context.Background(), msgEvent(msg)))
-	assert.Empty(t, emit.accounts(), "non-mentioned non-followers are dropped when follower lookup fails")
+	// An actual thread-room lookup failure (Mongo down) must NAK for redelivery, not
+	// silently ack and drop follower-only recipients + restricted-room filtering.
+	err := h.HandleMessage(context.Background(), msgEvent(msg))
+	require.Error(t, err)
+	assert.Empty(t, emit.accounts(), "no notifications emitted when the lookup fails")
 }
 
 func TestNewHandler_DefaultLargeRoomThreshold(t *testing.T) {

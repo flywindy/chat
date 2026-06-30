@@ -24,6 +24,7 @@ func ptrTime(t time.Time) *time.Time { return &t }
 
 func TestHandler_ProcessMessage(t *testing.T) {
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	parentCreatedAt := now.Add(-time.Hour)
 	user := &model.User{
 		ID:          "u-1",
 		Account:     "alice",
@@ -43,13 +44,14 @@ func TestHandler_ProcessMessage(t *testing.T) {
 	validData, _ := json.Marshal(evt)
 
 	threadMsg := model.Message{
-		ID:                    "msg-2",
-		RoomID:                "r1",
-		UserID:                "u-1",
-		UserAccount:           "alice",
-		Content:               "thread reply",
-		CreatedAt:             now,
-		ThreadParentMessageID: "msg-1",
+		ID:                           "msg-2",
+		RoomID:                       "r1",
+		UserID:                       "u-1",
+		UserAccount:                  "alice",
+		Content:                      "thread reply",
+		CreatedAt:                    now,
+		ThreadParentMessageID:        "msg-1",
+		ThreadParentMessageCreatedAt: &parentCreatedAt,
 	}
 	threadEvt := model.MessageEvent{Message: threadMsg, SiteID: "site-a", Timestamp: now.UnixMilli()}
 	threadData, _ := json.Marshal(threadEvt)
@@ -490,6 +492,10 @@ func TestHandler_ProcessMessage(t *testing.T) {
 			mockUserStore := NewMockUserStore(ctrl)
 			mockThreadStore := NewMockThreadStore(ctrl)
 			mockThreadStore.EXPECT().AddReplyAccounts(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+			// Thread replies resolve the parent createdAt from messages_by_id; default to
+			// found so cases proceed (the parent-row stamp is allowed but not asserted here).
+			mockStore.EXPECT().GetMessageCreatedAt(gomock.Any(), gomock.Any()).Return(parentCreatedAt, true, nil).AnyTimes()
+			mockStore.EXPECT().UpdateParentMessageThreadRoomID(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 			tt.setupMocks(mockStore, mockUserStore, mockThreadStore)
 
 			h := NewHandler(mockStore, mockUserStore, mockThreadStore, "site-a", func(_ context.Context, _ string, _ []byte, _ string) error {
@@ -510,15 +516,17 @@ func TestHandler_ProcessMessage(t *testing.T) {
 // the handler calls publishThreadReplyEvent on the MESSAGES_CANONICAL stream.
 func TestHandler_ProcessMessage_ThreadReply_PublishesBadgeEvent(t *testing.T) {
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	parentCreatedAt := now.Add(-time.Hour)
 	user := &model.User{ID: "u-1", Account: "alice", SiteID: "site-a", EngName: "Alice Wang", ChineseName: "愛麗絲"}
 	threadMsg := model.Message{
-		ID:                    "msg-reply",
-		RoomID:                "r1",
-		UserID:                "u-1",
-		UserAccount:           "alice",
-		Content:               "reply",
-		CreatedAt:             now,
-		ThreadParentMessageID: "msg-parent",
+		ID:                           "msg-reply",
+		RoomID:                       "r1",
+		UserID:                       "u-1",
+		UserAccount:                  "alice",
+		Content:                      "reply",
+		CreatedAt:                    now,
+		ThreadParentMessageID:        "msg-parent",
+		ThreadParentMessageCreatedAt: &parentCreatedAt,
 	}
 	threadEvt := model.MessageEvent{Message: threadMsg, SiteID: "site-a", Timestamp: now.UnixMilli()}
 	data, _ := json.Marshal(threadEvt)
@@ -530,12 +538,14 @@ func TestHandler_ProcessMessage_ThreadReply_PublishesBadgeEvent(t *testing.T) {
 	mockUserStore := NewMockUserStore(ctrl)
 	mockThreadStore := NewMockThreadStore(ctrl)
 
+	mockStore.EXPECT().GetMessageCreatedAt(gomock.Any(), gomock.Any()).Return(parentCreatedAt, true, nil).AnyTimes()
 	mockUserStore.EXPECT().FindUserByID(gomock.Any(), "u-1").Return(user, nil)
 	mockThreadStore.EXPECT().CreateThreadRoom(gomock.Any(), gomock.Any()).Return(errThreadRoomExists)
 	mockThreadStore.EXPECT().GetThreadRoomByParentMessageID(gomock.Any(), "msg-parent").
 		Return(&model.ThreadRoom{ID: "tr-99"}, nil)
 	mockStore.EXPECT().GetMessageSender(gomock.Any(), "msg-parent").
 		Return(&cassParticipant{ID: "u-parent", Account: "parent-user"}, nil)
+	mockStore.EXPECT().UpdateParentMessageThreadRoomID(gomock.Any(), "msg-parent", "r1", parentCreatedAt, "tr-99").Return(nil)
 	mockUserStore.EXPECT().FindUserByID(gomock.Any(), "u-parent").
 		Return(&model.User{ID: "u-parent", Account: "parent-user", SiteID: "site-a"}, nil)
 	mockThreadStore.EXPECT().UpsertThreadSubscription(gomock.Any(), gomock.Any()).Return(nil)
@@ -574,15 +584,17 @@ func TestHandler_ProcessMessage_ThreadReply_PublishesBadgeEvent(t *testing.T) {
 // reply persists + bumps the room but publishes nothing — no tcount badge, no cross-site sub inbox.
 func TestHandler_ProcessMessage_MigratedThreadReply_SuppressesBadgeAndOutbox(t *testing.T) {
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	parentCreatedAt := now.Add(-time.Hour)
 	user := &model.User{ID: "u-1", Account: "alice", SiteID: "site-a", EngName: "Alice Wang", ChineseName: "愛麗絲"}
 	threadMsg := model.Message{
-		ID:                    "msg-reply",
-		RoomID:                "r1",
-		UserID:                "u-1",
-		UserAccount:           "alice",
-		Content:               "reply",
-		CreatedAt:             now,
-		ThreadParentMessageID: "msg-parent",
+		ID:                           "msg-reply",
+		RoomID:                       "r1",
+		UserID:                       "u-1",
+		UserAccount:                  "alice",
+		Content:                      "reply",
+		CreatedAt:                    now,
+		ThreadParentMessageID:        "msg-parent",
+		ThreadParentMessageCreatedAt: &parentCreatedAt,
 	}
 	threadEvt := model.MessageEvent{Message: threadMsg, SiteID: "site-a", Timestamp: now.UnixMilli()}
 	data, _ := json.Marshal(threadEvt)
@@ -596,12 +608,14 @@ func TestHandler_ProcessMessage_MigratedThreadReply_SuppressesBadgeAndOutbox(t *
 	mockThreadStore.EXPECT().AddReplyAccounts(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
 	mockUserStore.EXPECT().FindUserByID(gomock.Any(), "u-1").Return(user, nil)
+	mockStore.EXPECT().GetMessageCreatedAt(gomock.Any(), "msg-parent").Return(parentCreatedAt, true, nil)
 	mockThreadStore.EXPECT().CreateThreadRoom(gomock.Any(), gomock.Any()).Return(errThreadRoomExists)
 	mockThreadStore.EXPECT().GetThreadRoomByParentMessageID(gomock.Any(), "msg-parent").
 		Return(&model.ThreadRoom{ID: "tr-99"}, nil)
 	mockStore.EXPECT().GetMessageSender(gomock.Any(), "msg-parent").
 		Return(&cassParticipant{ID: "u-parent", Account: "parent-user"}, nil)
 	// No UpsertThreadSubscription, no owner-site lookup. lastMsg pointer kept.
+	mockStore.EXPECT().UpdateParentMessageThreadRoomID(gomock.Any(), "msg-parent", "r1", parentCreatedAt, "tr-99").Return(nil)
 	mockThreadStore.EXPECT().UpdateThreadRoomLastMessage(gomock.Any(), "tr-99", "msg-reply", gomock.Any(), now).Return(nil)
 	// SaveThreadMessage returns a non-nil tcount — in the live path this would trigger the badge.
 	mockStore.EXPECT().SaveThreadMessage(gomock.Any(), &threadMsg, &expectedSender, "site-a", "tr-99").
@@ -626,6 +640,7 @@ func TestHandler_ProcessMessage_MigratedThreadReply_SuppressesBadgeAndOutbox(t *
 // both a normal reply and a migration replay (#396; migration per mliu33 review on #398).
 func TestHandler_ProcessMessage_ThreadReply_AdvancesReplierLastSeen(t *testing.T) {
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	parentCreatedAt := now.Add(-time.Hour)
 	user := &model.User{ID: "u-1", Account: "alice", SiteID: "site-a", EngName: "Alice Wang", ChineseName: "愛麗絲"}
 	threadMsg := model.Message{
 		ID: "msg-reply", RoomID: "r1", UserID: "u-1", UserAccount: "alice",
@@ -636,9 +651,11 @@ func TestHandler_ProcessMessage_ThreadReply_AdvancesReplierLastSeen(t *testing.T
 	// subsequent-reply scaffolding shared by both subtests (known threadRoomID for exact-arg assert).
 	setupSubsequentReply := func(store *MockStore, us *MockUserStore, ts *MockThreadStore, migration bool) {
 		us.EXPECT().FindUserByID(gomock.Any(), "u-1").Return(user, nil)
+		store.EXPECT().GetMessageCreatedAt(gomock.Any(), "msg-parent").Return(parentCreatedAt, true, nil)
 		ts.EXPECT().CreateThreadRoom(gomock.Any(), gomock.Any()).Return(errThreadRoomExists)
 		ts.EXPECT().GetThreadRoomByParentMessageID(gomock.Any(), "msg-parent").Return(&model.ThreadRoom{ID: "tr-77"}, nil)
 		store.EXPECT().GetMessageSender(gomock.Any(), "msg-parent").Return(&cassParticipant{ID: "u-parent", Account: "parent-user"}, nil)
+		store.EXPECT().UpdateParentMessageThreadRoomID(gomock.Any(), "msg-parent", "r1", parentCreatedAt, "tr-77").Return(nil)
 		if !migration {
 			us.EXPECT().FindUserByID(gomock.Any(), "u-parent").Return(&model.User{ID: "u-parent", Account: "parent-user", SiteID: "site-a"}, nil)
 			ts.EXPECT().UpsertThreadSubscription(gomock.Any(), gomock.Any()).Return(nil).Times(2)
@@ -2195,6 +2212,8 @@ func TestHandler_ProcessMessage_ThreadReplyPublish(t *testing.T) {
 	threadData, _ := json.Marshal(threadEvt)
 
 	setupCommonMocks := func(store *MockStore, us *MockUserStore, ts *MockThreadStore) {
+		// Parent resolved from messages_by_id; the stamp below uses this value.
+		store.EXPECT().GetMessageCreatedAt(gomock.Any(), "msg-parent").Return(parentCreatedAt, true, nil)
 		us.EXPECT().FindUserByID(gomock.Any(), "u-1").Return(user, nil)
 		ts.EXPECT().CreateThreadRoom(gomock.Any(), gomock.Any()).Return(errThreadRoomExists)
 		ts.EXPECT().GetThreadRoomByParentMessageID(gomock.Any(), "msg-parent").
@@ -2252,6 +2271,93 @@ func TestHandler_ProcessMessage_ThreadReplyPublish(t *testing.T) {
 		require.NotNil(t, evt.NewTCount)
 		assert.Equal(t, 3, *evt.NewTCount)
 		assert.Greater(t, evt.Timestamp, int64(0))
+	})
+
+	t.Run("authoritative parent createdAt from Cassandra overrides a wrong client value", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		store := NewMockStore(ctrl)
+		us := NewMockUserStore(ctrl)
+		ts := NewMockThreadStore(ctrl)
+
+		// A wrong parent createdAt on the event must be overridden: message-worker resolves
+		// the authoritative value from messages_by_id for the partition-keyed writes.
+		wrongClient := now.Add(-99 * time.Hour)
+		wrongMsg := threadMsg
+		wrongMsg.ThreadParentMessageCreatedAt = &wrongClient
+		wrongEvt := model.MessageEvent{Message: wrongMsg, SiteID: "site-a", Timestamp: now.UnixMilli()}
+		wrongData, _ := json.Marshal(wrongEvt)
+
+		// Authoritative value returned by the store resolution.
+		store.EXPECT().GetMessageCreatedAt(gomock.Any(), "msg-parent").Return(parentCreatedAt, true, nil)
+
+		us.EXPECT().FindUserByID(gomock.Any(), "u-1").Return(user, nil)
+		ts.EXPECT().CreateThreadRoom(gomock.Any(), gomock.Any()).Return(errThreadRoomExists)
+		ts.EXPECT().GetThreadRoomByParentMessageID(gomock.Any(), "msg-parent").
+			Return(&model.ThreadRoom{ID: "tr-1"}, nil)
+		store.EXPECT().GetMessageSender(gomock.Any(), "msg-parent").
+			Return(&cassParticipant{ID: "u-parent", Account: "parent-user"}, nil)
+		us.EXPECT().FindUserByID(gomock.Any(), "u-parent").
+			Return(&model.User{ID: "u-parent", Account: "parent-user", SiteID: "site-a"}, nil)
+		ts.EXPECT().UpsertThreadSubscription(gomock.Any(), gomock.Any()).Return(nil)
+		ts.EXPECT().UpsertThreadSubscription(gomock.Any(), gomock.Any()).Return(nil)
+		ts.EXPECT().UpdateThreadRoomLastMessage(gomock.Any(), "tr-1", "msg-reply", gomock.Any(), now).Return(nil)
+		ts.EXPECT().AdvanceThreadSubscriptionLastSeen(gomock.Any(), "tr-1", "alice", now).Return(nil)
+		// The stamp must use the AUTHORITATIVE createdAt, not the wrong client value.
+		store.EXPECT().UpdateParentMessageThreadRoomID(
+			gomock.Any(), "msg-parent", "r1", parentCreatedAt, "tr-1",
+		).Return(nil)
+		// The persisted reply must carry the authoritative parent createdAt.
+		newTcount := 1
+		store.EXPECT().SaveThreadMessage(gomock.Any(), &threadMsg, &expectedSender, "site-a", "tr-1").
+			Return(&newTcount, nil)
+
+		h := NewHandler(store, us, ts, "site-a", func(_ context.Context, _ string, _ []byte, _ string) error {
+			return nil
+		})
+
+		require.NoError(t, h.processMessage(context.Background(), wrongData, false))
+	})
+
+	t.Run("NAKs (returns error) when parent createdAt resolution fails — Cassandra down", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		store := NewMockStore(ctrl)
+		us := NewMockUserStore(ctrl)
+		ts := NewMockThreadStore(ctrl)
+
+		us.EXPECT().FindUserByID(gomock.Any(), "u-1").Return(user, nil)
+		// A genuine Cassandra failure (not a clean miss) must surface so the worker NAKs
+		// and replays once Cassandra recovers — nothing is dropped or written downstream.
+		store.EXPECT().GetMessageCreatedAt(gomock.Any(), "msg-parent").
+			Return(time.Time{}, false, errors.New("gocql: no hosts available"))
+
+		h := NewHandler(store, us, ts, "site-a", func(_ context.Context, _ string, _ []byte, _ string) error {
+			return nil
+		})
+
+		err := h.processMessage(context.Background(), threadData, false)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "resolve thread parent createdAt")
+	})
+
+	t.Run("NAKs (returns error) when parent not yet in messages_by_id — no partial writes", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		store := NewMockStore(ctrl)
+		us := NewMockUserStore(ctrl)
+		ts := NewMockThreadStore(ctrl)
+
+		us.EXPECT().FindUserByID(gomock.Any(), "u-1").Return(user, nil)
+		// Clean miss (found=false): the parent's own canonical write hasn't landed yet.
+		// NAK for redelivery rather than persist the reply with a null parent createdAt.
+		// No thread-room or Cassandra write must happen — gomock fails on any unexpected call.
+		store.EXPECT().GetMessageCreatedAt(gomock.Any(), "msg-parent").Return(time.Time{}, false, nil)
+
+		h := NewHandler(store, us, ts, "site-a", func(_ context.Context, _ string, _ []byte, _ string) error {
+			return nil
+		})
+
+		err := h.processMessage(context.Background(), threadData, false)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "not yet persisted")
 	})
 
 	t.Run("publish error propagates for JetStream retry", func(t *testing.T) {
