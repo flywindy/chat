@@ -36,21 +36,23 @@ func followingThreadsPipeline(roomID, account string, accessSince *time.Time) bs
 // from thread_subscriptions (the per-user filter) and joins thread_rooms for the
 // activity/parent fields.
 //
-// $lookup justification: three joins, none avoidable.
+// $lookup justification: two joins, none avoidable.
 //  1. subscriptions (membership) runs FIRST, on the thread_subscription's own
 //     roomId — the room subscription, not the thread subscription, is the source
 //     of truth for whether the user still belongs to the room (purged on leave;
-//     thread_subscriptions rows are not). Filtering here, before $limit, keeps the
-//     page exact; doing it before the thread_rooms join means that join runs only
-//     for accessible threads. Indexed point read on (u.account, roomId).
+//     thread_subscriptions rows are not). For botDM rooms, where unsubscribe is a
+//     soft toggle that retains the row, the same join also gates on isSubscribed so
+//     an unsubscribed app's threads drop out. Filtering here, before $limit, keeps
+//     the page exact; doing it before the thread_rooms join means that join runs
+//     only for accessible threads. Indexed point read on (u.account, roomId). This
+//     join also carries roomName and roomType: the subscription holds the
+//     per-subscriber display name (dm/botDM room docs have none) and the roomType,
+//     so the page needs no rooms lookup.
 //  2. thread_rooms supplies the inbox sort key (lastMsgAt) and parent/activity
 //     fields, which live there rather than on thread_subscriptions, so we must
 //     sort and paginate on the looked-up field. Denormalizing lastMsgAt onto every
 //     subscription was rejected because it would write-amplify across all
 //     subscribers on every reply (see docs/design/user-thread-list.md §5).
-//  3. rooms (name/type) runs AFTER $limit, so it enriches only the ≤limit+1 page
-//     rows with indexed _id point reads — cheaper than a separate round trip, and
-//     it avoids bolting a non-cacheable GetRoomsMeta onto the cached RoomRepository.
 func userThreadSubscriptionsPipeline(account string, cursorLastMsgAt *time.Time, cursorThreadRoomID string, limit int) bson.A {
 	pipeline := bson.A{
 		bson.D{{Key: "$match", Value: bson.M{"userAccount": account}}},
@@ -63,13 +65,29 @@ func userThreadSubscriptionsPipeline(account string, cursorLastMsgAt *time.Time,
 				bson.D{{Key: "$match", Value: bson.M{
 					"u.account": account,
 					"$expr":     bson.M{"$eq": bson.A{"$roomId", "$$rid"}},
+					// botDM unsubscribe is a soft toggle (isSubscribed=false, row
+					// retained), unlike a room leave that purges the row. Gate botDM
+					// rooms on isSubscribed so an unsubscribed app's threads drop out
+					// of the inbox; channel/dm/discussion rooms pass through untouched.
+					"$or": bson.A{
+						bson.M{"roomType": bson.M{"$ne": "botDM"}},
+						bson.M{"isSubscribed": true},
+					},
 				}}},
-				bson.D{{Key: "$project", Value: bson.M{"_id": 1}}},
+				bson.D{{Key: "$project", Value: bson.M{"_id": 1, "name": 1, "roomType": 1}}},
 			},
 			"as": "sub",
 		}}},
 		// {$ne: []} — $lookup sets "sub" to [] when no subscription matched; non-empty means subscribed.
 		bson.D{{Key: "$match", Value: bson.M{"sub": bson.M{"$ne": bson.A{}}}}},
+		// roomName and roomType come from the user's own subscription, not a room doc:
+		// dm/botDM rooms store an empty room name (the display name is per-subscriber),
+		// and the subscription already carries roomType — so no rooms lookup is needed.
+		// Lifted to scalars here so the sub array can be dropped before $sort.
+		bson.D{{Key: "$set", Value: bson.M{
+			"roomName": bson.M{"$arrayElemAt": bson.A{"$sub.name", 0}},
+			"roomType": bson.M{"$arrayElemAt": bson.A{"$sub.roomType", 0}},
+		}}},
 		bson.D{{Key: "$project", Value: bson.M{"sub": 0}}}, // drop before $sort — mirrors unreadThreadsPipeline
 		bson.D{{Key: "$lookup", Value: bson.M{
 			"from":         threadRoomsCollection,
@@ -96,24 +114,14 @@ func userThreadSubscriptionsPipeline(account string, cursorLastMsgAt *time.Time,
 	pipeline = append(pipeline,
 		bson.D{{Key: "$sort", Value: bson.D{{Key: "tr.lastMsgAt", Value: -1}, {Key: "threadRoomId", Value: -1}}}},
 		bson.D{{Key: "$limit", Value: int64(limit + 1)}},
-		// Page-scoped (post-$limit) room name/type enrichment; preserve rows whose
-		// room doc is missing (degrade to empty name/type).
-		bson.D{{Key: "$lookup", Value: bson.M{
-			"from":         roomsCollection,
-			"localField":   "tr.roomId",
-			"foreignField": "_id",
-			"as":           "room",
-			"pipeline": bson.A{
-				bson.D{{Key: "$project", Value: bson.M{"name": 1, "type": 1}}},
-			},
-		}}},
-		bson.D{{Key: "$unwind", Value: bson.M{"path": "$room", "preserveNullAndEmptyArrays": true}}},
+		// roomName/roomType both ride in on the membership subscription (join 1), so
+		// the page needs no rooms lookup.
 		bson.D{{Key: "$project", Value: bson.M{
 			"_id":             "$threadRoomId",
 			"roomId":          "$tr.roomId",
 			"siteId":          "$tr.siteId",
-			"roomName":        "$room.name",
-			"roomType":        "$room.type",
+			"roomName":        1, // sourced from the subscription above, not a room doc
+			"roomType":        1, // sourced from the subscription above, not a room doc
 			"parentMessageId": "$tr.parentMessageId",
 			"lastMsgId":       "$tr.lastMsgId",
 			"lastMsgAt":       "$tr.lastMsgAt",

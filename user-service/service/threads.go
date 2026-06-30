@@ -100,12 +100,15 @@ func (s *UserService) ListUserThreads(c *natsrouter.Context, req model.ThreadLis
 		}
 		return merged[a].ThreadRoomID > merged[b].ThreadRoomID
 	})
-	merged = dedupeThreads(merged)
 
 	hasNext := anyHasMore || len(merged) > limit
 	if len(merged) > limit {
 		merged = merged[:limit]
 	}
+
+	// Enrich only the returned page: DM rows gain the counterpart's HR record, and
+	// botDM rows swap their bot account for the app's display name.
+	s.enrichThreadPage(c, merged)
 
 	resp := &model.ThreadListResponse{Items: merged, HasNext: hasNext, UnavailableSites: unavailable}
 	if hasNext && len(merged) > 0 {
@@ -218,18 +221,87 @@ func (s *UserService) enrichCrossSiteThreads(c *natsrouter.Context, sites []stri
 	wg.Wait()
 }
 
-// dedupeThreads drops repeat threadRoomIds, keeping the first (newest) — guards
-// against the deletion edge where a recomputed lastMsgAt could resurface an
-// already-emitted thread on a later page.
-func dedupeThreads(items []model.ThreadListItem) []model.ThreadListItem {
-	seen := make(map[string]struct{}, len(items))
-	out := items[:0:0]
+// enrichThreadPage resolves the page's per-row display data in a single apply
+// pass: DM rows gain the counterpart's HR record, and botDM rows swap their bot
+// account (the RoomName history-service filled from the subscription Name) for the
+// app's display name. Each lookup is issued once for the page's distinct accounts
+// and degrades independently — a failed/missing lookup leaves that row's base data
+// and never fails the request. Mirrors buildListItems on the subscription path.
+func (s *UserService) enrichThreadPage(c *natsrouter.Context, items []model.ThreadListItem) {
+	dmAccounts, botAccounts := distinctDMAndBotNames(items)
+	hr := s.lookupThreadHRInfo(c, dmAccounts)
+	apps := s.lookupThreadApps(c, botAccounts)
 	for i := range items {
-		if _, dup := seen[items[i].ThreadRoomID]; dup {
+		switch items[i].RoomType {
+		case model.RoomTypeDM:
+			if info, ok := hr[items[i].RoomName]; ok {
+				items[i].HRInfo = info
+			}
+		case model.RoomTypeBotDM:
+			if app, ok := apps[items[i].RoomName]; ok && app != nil && app.Name != "" {
+				items[i].RoomName = app.Name
+			}
+		case model.RoomTypeChannel, model.RoomTypeDiscussion:
+			// No per-row enrichment: roomName/roomType already carry the final values.
+		}
+	}
+}
+
+// lookupThreadHRInfo fetches HR records for the given DM counterpart accounts; a
+// failure or empty set degrades to nil (no hrInfo applied).
+func (s *UserService) lookupThreadHRInfo(c *natsrouter.Context, accounts []string) map[string]*model.SubscriptionHRInfo {
+	if len(accounts) == 0 {
+		return nil
+	}
+	hr, err := s.users.GetHRInfoByAccounts(c, accounts)
+	if err != nil {
+		slog.WarnContext(c, "thread hr info lookup degraded", "account", c.Param("account"), "request_id", natsutil.RequestIDFromContext(c), "error", err)
+		return nil
+	}
+	return hr
+}
+
+// lookupThreadApps fetches app docs for the given botDM bot accounts; a failure or
+// empty set degrades to nil (bot account kept as the display name).
+func (s *UserService) lookupThreadApps(c *natsrouter.Context, bots []string) map[string]*model.App {
+	if len(bots) == 0 {
+		return nil
+	}
+	apps, err := s.apps.GetAppsByAssistants(c, bots)
+	if err != nil {
+		slog.WarnContext(c, "thread app metadata lookup degraded", "account", c.Param("account"), "request_id", natsutil.RequestIDFromContext(c), "error", err)
+		return nil
+	}
+	return apps
+}
+
+// distinctDMAndBotNames collects, in a single pass over the page, the deduped DM
+// counterpart accounts and botDM bot accounts (each is a row's RoomName), skipping
+// blanks. One pass feeds both enrichment lookups.
+func distinctDMAndBotNames(items []model.ThreadListItem) (dmAccounts, botAccounts []string) {
+	dmSeen := map[string]struct{}{}
+	botSeen := map[string]struct{}{}
+	for i := range items {
+		name := items[i].RoomName
+		if name == "" {
 			continue
 		}
-		seen[items[i].ThreadRoomID] = struct{}{}
-		out = append(out, items[i])
+		switch items[i].RoomType {
+		case model.RoomTypeDM:
+			if _, dup := dmSeen[name]; dup {
+				continue
+			}
+			dmSeen[name] = struct{}{}
+			dmAccounts = append(dmAccounts, name)
+		case model.RoomTypeBotDM:
+			if _, dup := botSeen[name]; dup {
+				continue
+			}
+			botSeen[name] = struct{}{}
+			botAccounts = append(botAccounts, name)
+		case model.RoomTypeChannel, model.RoomTypeDiscussion:
+			// Not enriched — no name to collect.
+		}
 	}
-	return out
+	return dmAccounts, botAccounts
 }

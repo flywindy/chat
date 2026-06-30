@@ -4449,7 +4449,7 @@ Returns the user's thread subscriptions across **all sites** as one globally-ord
 |---|---|---|
 | `siteId` | string | The thread's owning site. |
 | `roomId` | string | The room the thread belongs to. |
-| `roomName` | string | The owning room's name (empty if the room doc is unavailable). |
+| `roomName` | string | Per-subscriber display label, sourced from the user's subscription: `channel` → room name; `dm` → counterpart account; `botDM` → app name. |
 | `roomType` | string | The owning room's type (`channel`, `dm`, `botDM`, `discussion`). |
 | `threadRoomId` | string | The thread room ID. |
 | `parentMessageId` | string | The thread's parent (top-level) message ID. |
@@ -4459,6 +4459,7 @@ Returns the user's thread subscriptions across **all sites** as one globally-ord
 | `lastMsgAt` | number | UTC ms of the thread's last activity — the global sort key. |
 | `parentMessage` | [Message](#message-schema) | Optional. The hydrated parent message; reply count rides on its `tcount`. |
 | `lastMessage` | [Message](#message-schema) | Optional. The hydrated last reply. |
+| `hrInfo` | [SubscriptionHRInfo](#subscriptionhrinfo) | Optional. Present **only on `dm` rows** — the counterpart's HR record, resolved from `roomName`. Omitted when the directory lookup degrades. |
 
 ```json
 {
@@ -4486,6 +4487,18 @@ Returns the user's thread subscriptions across **all sites** as one globally-ord
         "sender": { "id": "01970a4f8c2d7c9a01970a4f8c2d7c9b", "account": "bob" },
         "msg": "shipping it"
       }
+    },
+    {
+      "siteId": "site-a",
+      "roomId": "01970a4f8c2d7c9aDM",
+      "roomName": "bob",
+      "roomType": "dm",
+      "threadRoomId": "01970a4f8c2d7c9aTHR2",
+      "parentMessageId": "01970a4f8c2d7c9aPQRS",
+      "hasMention": false,
+      "unread": false,
+      "lastMsgAt": 1746518100000,
+      "hrInfo": { "account": "bob", "name": "鮑伯", "engName": "Bob" }
     }
   ],
   "nextCursor": "eyJsYXN0TXNnQXQiOjE3NDY1MTg0MDAwMDAsInRocmVhZFJvb21JZCI6IjAxOTcwYTRmOGMyZDdjOWFUSFJEIn0=",

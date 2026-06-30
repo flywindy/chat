@@ -29,6 +29,27 @@ func TestThreadListItemJSON(t *testing.T) {
 	roundTrip(t, &src, &model.ThreadListItem{})
 }
 
+// A DM thread row carries the counterpart's HR record, which survives a round trip.
+func TestThreadListItemJSON_WithHRInfo(t *testing.T) {
+	src := model.ThreadListItem{
+		SiteID: "site-a", RoomID: "dm1", RoomName: "bob", RoomType: model.RoomTypeDM,
+		ThreadRoomID: "thr-1", LastMsgAt: 1746518400000,
+		HRInfo: &model.SubscriptionHRInfo{Account: "bob", Name: "鮑勃", EngName: "Bob Chen"},
+	}
+	roundTrip(t, &src, &model.ThreadListItem{})
+}
+
+// hrInfo is omitted for non-DM rows (no counterpart record).
+func TestThreadListItemJSON_OmitsNilHRInfo(t *testing.T) {
+	src := model.ThreadListItem{SiteID: "site-a", RoomID: "room-1", RoomType: model.RoomTypeChannel, ThreadRoomID: "thr-1"}
+	data, err := json.Marshal(&src)
+	require.NoError(t, err)
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(data, &raw))
+	_, hasHR := raw["hrInfo"]
+	assert.False(t, hasHR, "nil hrInfo must be omitted")
+}
+
 // LastSeenAt is omitted when nil (never-seen thread).
 func TestThreadListItemJSON_OmitsNilLastSeenAt(t *testing.T) {
 	src := model.ThreadListItem{SiteID: "site-a", RoomID: "room-1", ThreadRoomID: "thr-1"}

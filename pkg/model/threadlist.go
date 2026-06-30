@@ -25,6 +25,11 @@ type ThreadListItem struct {
 	// Hydrated message bodies, subject to the thread access window.
 	ParentMessage *cassandra.Message `json:"parentMessage,omitempty" bson:"parentMessage,omitempty"`
 	LastMessage   *cassandra.Message `json:"lastMessage,omitempty"   bson:"lastMessage,omitempty"`
+
+	// HRInfo carries the DM counterpart's HR-directory record (native + English
+	// name). The user-service aggregator resolves it from RoomName (which holds the
+	// counterpart account for DM rooms); present on DM rows only.
+	HRInfo *SubscriptionHRInfo `json:"hrInfo,omitempty" bson:"hrInfo,omitempty"`
 }
 
 // ThreadSubscriptionListRequest is the server-to-server leaf request the

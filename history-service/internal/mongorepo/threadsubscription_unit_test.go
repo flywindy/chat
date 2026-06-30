@@ -30,10 +30,11 @@ func TestUserThreadSubscriptionsPipeline_FirstPageHasNoCursorMatch(t *testing.T)
 	p := userThreadSubscriptionsPipeline("alice", nil, "", 20)
 	// First page: userAccount $match + membership $match (sub != []), no value-cursor $match.
 	assert.Equal(t, 2, countStages(t, p, "$match"))
-	// Three joins: thread_rooms (sort/cursor), subscriptions (membership), rooms (name/type).
-	assert.Equal(t, 3, countStages(t, p, "$lookup"))
-	// thread_rooms and rooms are unwound; the membership join uses {$ne: []}, not $unwind.
-	assert.Equal(t, 2, countStages(t, p, "$unwind"))
+	// Two joins: thread_rooms (sort/cursor) and subscriptions (membership). roomName
+	// and roomType both ride in on the membership join, so there is no rooms lookup.
+	assert.Equal(t, 2, countStages(t, p, "$lookup"))
+	// Only thread_rooms is unwound; the membership join uses {$ne: []}, not $unwind.
+	assert.Equal(t, 1, countStages(t, p, "$unwind"))
 	assert.Equal(t, 1, countStages(t, p, "$sort"))
 	// Only the outer page $limit is top-level; the membership join's inner $limit:1
 	// is nested inside the $lookup pipeline and not counted here.
