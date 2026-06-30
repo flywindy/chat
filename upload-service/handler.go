@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -265,7 +266,13 @@ func (h *Handler) HandleUploadFile(c *gin.Context) {
 		return
 	}
 	if len(responses) == 0 || responses[0].Status != driveStatusSuccess {
-		errhttp.Write(ctx, c, errcode.Unavailable("drive upload failed"))
+		var cause error
+		if len(responses) == 0 {
+			cause = errors.New("drive returned no upload response")
+		} else {
+			cause = fmt.Errorf("drive upload status %q: %s", responses[0].Status, responses[0].Error)
+		}
+		errhttp.Write(ctx, c, errcode.Unavailable("drive upload failed", errcode.WithCause(cause)))
 		return
 	}
 	obj := responses[0].File

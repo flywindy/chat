@@ -922,6 +922,22 @@ func TestHandleUploadFile_DriveError(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
 }
 
+func TestHandleUploadFile_DriveStatusFailure(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	store := NewMockStore(ctrl)
+	store.EXPECT().IsMember(gomock.Any(), "room-1", "alice").Return(true, nil)
+	store.EXPECT().GetRoomSiteID(gomock.Any(), "room-1").Return("site-a", nil)
+	fd := &fakeDrive{baseURL: "http://drive", uploadResp: []drive.UploadGroupImageResponse{
+		{Status: "failure", Error: "quota exceeded"},
+	}}
+	h := fileHandler(store, fd)
+	body, ct := multipartTyped(t, "file", "report.pdf", []byte("x"), "application/pdf", nil)
+	c, w := newUploadCtx(t, "room-1", body, ct, okUser())
+	h.HandleUploadFile(c)
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+	assert.Equal(t, "unavailable", decodeErr(t, w).Code)
+}
+
 func TestRoute_UploadRegistered(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
