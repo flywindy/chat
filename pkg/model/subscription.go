@@ -45,27 +45,11 @@ type Subscription struct {
 	Restricted     bool `json:"restricted,omitempty"     bson:"restricted,omitempty"`
 	ExternalAccess bool `json:"externalAccess,omitempty" bson:"externalAccess,omitempty"`
 
-	// Authoritative subscription state maintained by the write path; never recomputed by read enrichment.
-	HasGroupMention bool `json:"hasGroupMention" bson:"hasGroupMention"`
-	HasUnread       bool `json:"hasUnread"       bson:"hasUnread"`
-
-	// Read-time baseline from the rooms $lookup/$addFields — internal only (json:"-"), used to build
-	// sub.Room for LOCAL subs (cross-site subs carry zero values). Writers persisting a full Subscription
-	// doc MUST strip these fields.
-	UserCount        int        `json:"-" bson:"userCount,omitempty"`
-	LastMsgAt        *time.Time `json:"-" bson:"lastMsgAt,omitempty"`
-	LastMsgID        string     `json:"-" bson:"lastMsgId,omitempty"`
-	LastMentionAllAt *time.Time `json:"-" bson:"lastMentionAllAt,omitempty"`
-	AppCount         int        `json:"-" bson:"appCount,omitempty"`
-	RoomName         string     `json:"-" bson:"roomName,omitempty"` // room canonical name (distinct from the sub's display Name)
-	// Read-time room E2E key baseline projected from the room's encKey sub-document
-	// by the rooms $lookup (current-slot priv/ver only). Internal (json:"-"); used to
-	// build sub.Room.PrivateKey/KeyVersion for LOCAL subs without a second key read.
-	// Cross-site subs carry zero values (the key arrives via the GetRoomsInfo RPC).
-	// Writers persisting a full Subscription doc MUST strip these — the room key must
-	// never be written into the subscriptions collection.
-	RoomKeyPriv []byte `json:"-" bson:"encKeyPriv,omitempty"`
-	RoomKeyVer  int    `json:"-" bson:"encKeyVer,omitempty"`
+	// HasUnread and HasGroupMention are NOT persisted (bson:"-"); subscription.list
+	// enrichment computes them at read time from the room's LastMsgAt /
+	// LastMentionAllAt (carried on EnrichedSubscription) vs the subscription's LastSeenAt.
+	HasUnread       bool `json:"hasUnread"       bson:"-"`
+	HasGroupMention bool `json:"hasGroupMention" bson:"-"`
 
 	// Room carries all room-derived fields, populated at read time from room-service's
 	// RoomsInfoBatch RPC (baseline $lookup values when the RPC degrades). Never persisted.
@@ -80,6 +64,32 @@ type Subscription struct {
 	UpdatedAt *time.Time `json:"updatedAt,omitempty" bson:"_updatedAt,omitempty"`
 }
 
+// EnrichedSubscription is the decode target for the subscription-list aggregation:
+// a stored Subscription (inlined) plus the read-time room baseline projected by the
+// rooms $lookup/$addFields. The baseline lives HERE, not on Subscription, so a plain
+// Subscription can never persist stale room data — the INSERT type carries no room
+// fields. All baseline fields are internal (json:"-"): they build sub.Room for LOCAL
+// subs (cross-site subs carry zero values) and are never serialized to the client.
+type EnrichedSubscription struct {
+	Subscription `bson:",inline"`
+
+	// Room metadata copied from the joined room doc by the $addFields stage.
+	UserCount         int        `json:"-" bson:"userCount,omitempty"`
+	LastMsgAt         *time.Time `json:"-" bson:"lastMsgAt,omitempty"`
+	LastMsgID         string     `json:"-" bson:"lastMsgId,omitempty"`
+	LastMentionAllAt  *time.Time `json:"-" bson:"lastMentionAllAt,omitempty"`
+	MinUserLastSeenAt *time.Time `json:"-" bson:"minUserLastSeenAt,omitempty"`
+	AppCount          int        `json:"-" bson:"appCount,omitempty"`
+	RoomName          string     `json:"-" bson:"roomName,omitempty"` // room canonical name (distinct from the sub's display Name)
+	// Room E2E key baseline projected from the room's encKey sub-document by the rooms
+	// $lookup (current-slot priv/ver only); used to build sub.Room.PrivateKey/KeyVersion
+	// for LOCAL subs without a second key read. Cross-site subs carry zero values (the
+	// key arrives via the GetRoomsInfo RPC). The room key is never written into the
+	// subscriptions collection — it lives only on this read-time aggregation result.
+	RoomKeyPriv []byte `json:"-" bson:"encKeyPriv,omitempty"`
+	RoomKeyVer  int    `json:"-" bson:"encKeyVer,omitempty"`
+}
+
 // SubscriptionRoom is the room-derived view nested on an enriched subscription.
 // Name is the room's canonical name — the subscription's own Name (counterpart
 // account for DMs, app display name for botDMs) is never overwritten by it.
@@ -89,10 +99,16 @@ type SubscriptionRoom struct {
 	// UserCount/AppCount/LastMsgID mirror the room-service room document (model.Room).
 	UserCount int `json:"userCount,omitempty" bson:"-"`
 	AppCount  int `json:"appCount,omitempty" bson:"-"`
-	// LastMsgAt/LastMentionAllAt are epoch millis (*int64) — they arrive over the room-service RPC.
-	LastMsgAt        *int64 `json:"lastMsgAt,omitempty" bson:"-"`
-	LastMsgID        string `json:"lastMsgId,omitempty" bson:"-"`
-	LastMentionAllAt *int64 `json:"lastMentionAllAt,omitempty" bson:"-"`
+	// LastMsgAt/LastMentionAllAt/MinUserLastSeenAt are returned to the client as
+	// RFC3339 timestamps (*time.Time). The room-service RPC delivers them as epoch
+	// millis; enrichment converts at the seam (the local $lookup baseline already
+	// carries *time.Time).
+	LastMsgAt        *time.Time `json:"lastMsgAt,omitempty" bson:"-"`
+	LastMsgID        string     `json:"lastMsgId,omitempty" bson:"-"`
+	LastMentionAllAt *time.Time `json:"lastMentionAllAt,omitempty" bson:"-"`
+	// MinUserLastSeenAt is the oldest read position across the room's members (the
+	// room-wide "everyone has read up to here" floor), mirrored from the room doc.
+	MinUserLastSeenAt *time.Time `json:"minUserLastSeenAt,omitempty" bson:"-"`
 	// Room E2E key delivered to authorized members for initial key bootstrap
 	// on subscription.list (same payload as the room.key.get RPC).
 	PrivateKey *string `json:"privateKey,omitempty" bson:"-"`
@@ -131,6 +147,16 @@ type ChannelSubscription struct {
 type DMSubscription struct {
 	*Subscription `bson:",inline"`
 	HRInfo        *SubscriptionHRInfo `json:"hrInfo,omitempty" bson:"hrInfo,omitempty"`
+}
+
+// EnrichedDMSubscription is the decode target for the GetDMSubscription aggregation:
+// an EnrichedSubscription (inlined, carrying the read-time room baseline) plus the
+// counterpart's HRInfo. It is a read-time repo type only — the wire/storage shape
+// returned to clients is DMSubscription (a plain *Subscription + HRInfo), built by
+// the service after enrichment.
+type EnrichedDMSubscription struct {
+	EnrichedSubscription `bson:",inline"`
+	HRInfo               *SubscriptionHRInfo `json:"-" bson:"hrInfo,omitempty"`
 }
 
 // BotDMSubscription is the botDM response row: base Subscription plus a nested app object.

@@ -15,12 +15,12 @@ import (
 
 // SubscriptionRepository is the consumer-defined interface for subscription persistence (botDM app-subscription rows included).
 type SubscriptionRepository interface {
-	AggregateSubscriptions(ctx context.Context, account, listType string, withinDays *int, limit int) ([]model.Subscription, error)
-	FindChannelsByMembers(ctx context.Context, account string, members []string, limit int) ([]model.Subscription, error)
-	GetDMSubscription(ctx context.Context, account, target string) (*model.DMSubscription, error)
-	GetSubscriptionByRoomID(ctx context.Context, account, roomID string) (*model.Subscription, error)
+	AggregateSubscriptions(ctx context.Context, account, listType string, favorite bool, withinDays *int, page mongoutil.OffsetPageRequest) (mongoutil.OffsetPageHasMore[model.EnrichedSubscription], error)
+	FindChannelsByMembers(ctx context.Context, account string, members []string, page mongoutil.OffsetPageRequest) (mongoutil.OffsetPageHasMore[model.EnrichedSubscription], error)
+	GetDMSubscription(ctx context.Context, account, target string) (*model.EnrichedDMSubscription, error)
+	GetSubscriptionByRoomID(ctx context.Context, account, roomID string) (*model.EnrichedSubscription, error)
 	CountActiveSubscriptions(ctx context.Context, account string) (int, error)
-	GetActiveSubscriptions(ctx context.Context, account string, limit int) ([]model.Subscription, error)
+	GetActiveSubscriptions(ctx context.Context, account string, limit int) ([]model.EnrichedSubscription, error)
 	GetAppSubscription(ctx context.Context, account, botName string) (*model.Subscription, error)
 	SetAppSubscribed(ctx context.Context, account, botName string, subscribed, muted bool) error
 }
@@ -35,7 +35,7 @@ type UserRepository interface {
 // AppRepository is the consumer-defined interface for app catalog reads.
 type AppRepository interface {
 	GetApp(ctx context.Context, appID string) (*model.App, error)
-	ListApps(ctx context.Context, account string, page mongoutil.OffsetPageRequest) (mongoutil.OffsetPage[models.AppListItem], error)
+	ListApps(ctx context.Context, account string, page mongoutil.OffsetPageRequest) (mongoutil.OffsetPageHasMore[models.AppListItem], error)
 	GetAppsByAssistants(ctx context.Context, botAccounts []string) (map[string]*model.App, error)
 }
 
@@ -70,6 +70,9 @@ type UserService struct {
 	siteID          string
 	allSiteIDs      []string
 	maxSubs         int
+	defaultLimit    int
+	maxApps         int
+	defaultApps     int
 	maxAccountNames int
 }
 
@@ -85,6 +88,9 @@ func New(subs SubscriptionRepository, users UserRepository, apps AppRepository, 
 		siteID:          cfg.SiteID,
 		allSiteIDs:      cfg.AllSiteIDs,
 		maxSubs:         cfg.MaxSubscriptionLimit,
+		defaultLimit:    cfg.DefaultSubscriptionLimit,
+		maxApps:         cfg.MaxAppsLimit,
+		defaultApps:     cfg.DefaultAppsLimit,
 		maxAccountNames: cfg.MaxAccountNames,
 	}
 }

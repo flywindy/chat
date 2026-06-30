@@ -125,13 +125,14 @@ func TestListApps(t *testing.T) {
 	svc, _, _, apps, _, _ := newSvc(t)
 	// Empty request → defaults: offset 0, limit 20.
 	apps.EXPECT().ListApps(gomock.Any(), "alice", mongoutil.OffsetPageRequest{Offset: 0, Limit: 20}).
-		Return(mongoutil.OffsetPage[models.AppListItem]{Data: []models.AppListItem{
+		Return(mongoutil.OffsetPageHasMore[models.AppListItem]{Data: []models.AppListItem{
 			{App: model.App{ID: "a1"}, IsSubscribed: true},
 			{App: model.App{ID: "a2"}},
-		}, Total: 2}, nil)
+		}}, nil)
 	resp, err := svc.ListApps(ctx("alice", "site-a"), models.AppsListRequest{})
 	require.NoError(t, err)
-	assert.Equal(t, 2, resp.Total)
+	assert.Len(t, resp.Apps, 2)
+	assert.False(t, resp.HasMore)
 	assert.True(t, resp.Apps[0].IsSubscribed)
 }
 
@@ -149,30 +150,30 @@ func TestListApps_PageRequestForwarding(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			svc, _, _, apps, _, _ := newSvc(t)
 			apps.EXPECT().ListApps(gomock.Any(), "alice", tt.want).
-				Return(mongoutil.EmptyPage[models.AppListItem](), nil)
+				Return(mongoutil.OffsetPageHasMore[models.AppListItem]{Data: []models.AppListItem{}}, nil)
 			_, err := svc.ListApps(ctx("alice", "site-a"), tt.req)
 			require.NoError(t, err)
 		})
 	}
 }
 
-func TestListApps_TotalIsCatalogCountNotPageSize(t *testing.T) {
+func TestListApps_HasMoreForwarded(t *testing.T) {
 	svc, _, _, apps, _, _ := newSvc(t)
 	apps.EXPECT().ListApps(gomock.Any(), "alice", mongoutil.OffsetPageRequest{Offset: 0, Limit: 2}).
-		Return(mongoutil.OffsetPage[models.AppListItem]{Data: []models.AppListItem{
+		Return(mongoutil.OffsetPageHasMore[models.AppListItem]{Data: []models.AppListItem{
 			{App: model.App{ID: "a1"}},
 			{App: model.App{ID: "a2"}},
-		}, Total: 7}, nil)
+		}, HasMore: true}, nil)
 	resp, err := svc.ListApps(ctx("alice", "site-a"), models.AppsListRequest{Limit: 2})
 	require.NoError(t, err)
 	assert.Len(t, resp.Apps, 2)
-	assert.Equal(t, 7, resp.Total)
+	assert.True(t, resp.HasMore, "hasMore is forwarded from the repo page")
 }
 
 func TestListApps_StoreError(t *testing.T) {
 	svc, _, _, apps, _, _ := newSvc(t)
 	apps.EXPECT().ListApps(gomock.Any(), "alice", gomock.Any()).
-		Return(mongoutil.OffsetPage[models.AppListItem]{}, errors.New("db down"))
+		Return(mongoutil.OffsetPageHasMore[models.AppListItem]{}, errors.New("db down"))
 	_, err := svc.ListApps(ctx("alice", "site-a"), models.AppsListRequest{})
 	requireCode(t, err, errcode.CodeInternal)
 }
@@ -180,9 +181,9 @@ func TestListApps_StoreError(t *testing.T) {
 func TestListApps_Empty(t *testing.T) {
 	svc, _, _, apps, _, _ := newSvc(t)
 	apps.EXPECT().ListApps(gomock.Any(), "alice", gomock.Any()).
-		Return(mongoutil.EmptyPage[models.AppListItem](), nil)
+		Return(mongoutil.OffsetPageHasMore[models.AppListItem]{Data: []models.AppListItem{}}, nil)
 	resp, err := svc.ListApps(ctx("alice", "site-a"), models.AppsListRequest{})
 	require.NoError(t, err)
-	assert.Equal(t, 0, resp.Total)
+	assert.False(t, resp.HasMore)
 	assert.Empty(t, resp.Apps)
 }

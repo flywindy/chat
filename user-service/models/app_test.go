@@ -76,7 +76,7 @@ func TestAppsListResponse_RoundTrip(t *testing.T) {
 			{App: model.App{ID: "a1", Name: "Helper"}, IsSubscribed: true},
 			{App: model.App{ID: "a2", Name: "Bot"}, IsSubscribed: false},
 		},
-		Total: 2,
+		HasMore: true,
 	}
 	b, err := json.Marshal(in)
 	require.NoError(t, err)

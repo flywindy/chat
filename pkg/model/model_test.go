@@ -1717,20 +1717,37 @@ func TestSubscriptionRoomJSON(t *testing.T) {
 	t.Run("round trip with all fields", func(t *testing.T) {
 		pk := "dGVzdC1wcml2YXRlLWtleS1iYXNlNjQ="
 		kv := 7
-		lastMsg := int64(1735776000000)
-		lastMention := int64(1735862400000)
+		lastMsg := time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC)
+		lastMention := time.Date(2025, 1, 3, 0, 0, 0, 0, time.UTC)
+		minSeen := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
 		r := model.SubscriptionRoom{
-			SiteID:           "site-a",
-			Name:             "general",
-			UserCount:        42,
-			AppCount:         3,
-			LastMsgAt:        &lastMsg,
-			LastMsgID:        "m-100",
-			LastMentionAllAt: &lastMention,
-			PrivateKey:       &pk,
-			KeyVersion:       &kv,
+			SiteID:            "site-a",
+			Name:              "general",
+			UserCount:         42,
+			AppCount:          3,
+			LastMsgAt:         &lastMsg,
+			LastMsgID:         "m-100",
+			LastMentionAllAt:  &lastMention,
+			MinUserLastSeenAt: &minSeen,
+			PrivateKey:        &pk,
+			KeyVersion:        &kv,
 		}
 		roundTrip(t, &r, &model.SubscriptionRoom{})
+	})
+
+	t.Run("timestamps serialize as RFC3339 strings", func(t *testing.T) {
+		lastMsg := time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)
+		lastMention := time.Date(2025, 1, 3, 6, 7, 8, 0, time.UTC)
+		minSeen := time.Date(2025, 1, 4, 9, 10, 11, 0, time.UTC)
+		r := model.SubscriptionRoom{LastMsgAt: &lastMsg, LastMentionAllAt: &lastMention, MinUserLastSeenAt: &minSeen}
+		// #nosec G117 -- test roundtrip on a model whose PrivateKey field is part of the wire schema
+		data, err := json.Marshal(&r)
+		require.NoError(t, err)
+		var raw map[string]any
+		require.NoError(t, json.Unmarshal(data, &raw))
+		assert.Equal(t, "2025-01-02T03:04:05Z", raw["lastMsgAt"], "lastMsgAt must be RFC3339, not epoch millis")
+		assert.Equal(t, "2025-01-03T06:07:08Z", raw["lastMentionAllAt"], "lastMentionAllAt must be RFC3339, not epoch millis")
+		assert.Equal(t, "2025-01-04T09:10:11Z", raw["minUserLastSeenAt"], "minUserLastSeenAt must be RFC3339, not epoch millis")
 	})
 
 	t.Run("zero value omits all fields", func(t *testing.T) {
@@ -1741,25 +1758,59 @@ func TestSubscriptionRoomJSON(t *testing.T) {
 	})
 }
 
+func TestRoomInfo_MinUserLastSeenAt(t *testing.T) {
+	t.Run("set serializes as epoch millis and round-trips", func(t *testing.T) {
+		floor := int64(1735693200000)
+		src := model.RoomInfo{RoomID: "r1", Found: true, MinUserLastSeenAt: &floor}
+		// #nosec G117 -- test roundtrip on a model whose PrivateKey field is part of the wire schema
+		data, err := json.Marshal(&src)
+		require.NoError(t, err)
+		var raw map[string]any
+		require.NoError(t, json.Unmarshal(data, &raw))
+		got, present := raw["minUserLastSeenAt"]
+		require.True(t, present, "non-nil MinUserLastSeenAt must be present")
+		assert.Equal(t, float64(1735693200000), got, "MinUserLastSeenAt must serialize as epoch millis, not RFC3339")
+
+		var dst model.RoomInfo
+		require.NoError(t, json.Unmarshal(data, &dst))
+		require.NotNil(t, dst.MinUserLastSeenAt)
+		assert.Equal(t, floor, *dst.MinUserLastSeenAt)
+	})
+
+	t.Run("nil is omitted", func(t *testing.T) {
+		// #nosec G117 -- test roundtrip on a model whose PrivateKey field is part of the wire schema
+		data, err := json.Marshal(&model.RoomInfo{RoomID: "r1", Found: true})
+		require.NoError(t, err)
+		var raw map[string]any
+		require.NoError(t, json.Unmarshal(data, &raw))
+		_, present := raw["minUserLastSeenAt"]
+		assert.False(t, present, "nil MinUserLastSeenAt must be omitted from JSON")
+	})
+}
+
 func TestSubscriptionJSON_NestedRoom(t *testing.T) {
 	lastMsg := time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
-	s := model.Subscription{
-		ID:        "s1",
-		User:      model.SubscriptionUser{ID: "u1", Account: "alice"},
-		RoomID:    "r1",
-		SiteID:    "site-a",
-		RoomType:  model.RoomTypeChannel,
-		Name:      "general",
-		JoinedAt:  time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+	// The read-time room baseline lives on EnrichedSubscription (all json:"-"); this
+	// pins that those fields never flatten onto the wire while Room nests under "room".
+	s := model.EnrichedSubscription{
+		Subscription: model.Subscription{
+			ID:       "s1",
+			User:     model.SubscriptionUser{ID: "u1", Account: "alice"},
+			RoomID:   "r1",
+			SiteID:   "site-a",
+			RoomType: model.RoomTypeChannel,
+			Name:     "general",
+			JoinedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+			Room: &model.SubscriptionRoom{
+				SiteID:    "site-a",
+				Name:      "general-canonical",
+				UserCount: 42,
+				LastMsgID: "m-100",
+			},
+		},
 		UserCount: 42,
 		LastMsgAt: &lastMsg,
 		LastMsgID: "m-100",
-		Room: &model.SubscriptionRoom{
-			SiteID:    "site-a",
-			Name:      "general-canonical",
-			UserCount: 42,
-			LastMsgID: "m-100",
-		},
 	}
 	data, err := json.Marshal(&s)
 	require.NoError(t, err)
@@ -4008,7 +4059,7 @@ func TestUserStatusUpdated_StatusIsShowOmittedWhenNil(t *testing.T) {
 func TestSubscriptionEnrichmentFields_RoundTrip(t *testing.T) {
 	// The flattened $lookup baseline fields are internal (json:"-"); the wire
 	// carries room-derived data only via the nested Room object.
-	lastMsg := int64(1735819200000)
+	lastMsg := time.Date(2025, 1, 2, 12, 0, 0, 0, time.UTC)
 	src := model.Subscription{
 		ID:       "s1",
 		User:     model.SubscriptionUser{ID: "u1", Account: "alice"},
@@ -4031,27 +4082,25 @@ func TestSubscriptionBaseMetadata_RoundTrip(t *testing.T) {
 	favoritedAt := time.Date(2026, 2, 1, 9, 0, 0, 0, time.UTC)
 	updatedAt := time.Date(2026, 3, 2, 10, 0, 0, 0, time.UTC)
 	src := model.Subscription{
-		ID:              "s1",
-		User:            model.SubscriptionUser{ID: "u1", Account: "alice"},
-		RoomID:          "r1",
-		SiteID:          "site-a",
-		Roles:           []model.Role{model.RoleMember},
-		RoomType:        model.RoomTypeChannel,
-		JoinedAt:        time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
-		HasGroupMention: true,
-		HasUnread:       true,
-		FavoritedAt:     &favoritedAt,
-		UpdatedAt:       &updatedAt,
+		ID:          "s1",
+		User:        model.SubscriptionUser{ID: "u1", Account: "alice"},
+		RoomID:      "r1",
+		SiteID:      "site-a",
+		Roles:       []model.Role{model.RoleMember},
+		RoomType:    model.RoomTypeChannel,
+		JoinedAt:    time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		HasUnread:   true,
+		FavoritedAt: &favoritedAt,
+		UpdatedAt:   &updatedAt,
 	}
 	dst := model.Subscription{}
 	roundTrip(t, &src, &dst)
 
-	// hasGroupMention/hasUnread are always emitted; the nullable metadata is omitted when unset.
+	// hasUnread is always emitted; the nullable metadata is omitted when unset.
 	raw := map[string]any{}
 	b, err := json.Marshal(&src)
 	require.NoError(t, err)
 	require.NoError(t, json.Unmarshal(b, &raw))
-	assert.Equal(t, true, raw["hasGroupMention"])
 	assert.Equal(t, true, raw["hasUnread"])
 
 	zero := map[string]any{}
@@ -4064,6 +4113,36 @@ func TestSubscriptionBaseMetadata_RoundTrip(t *testing.T) {
 	}
 }
 
+func TestSubscription_HasUnreadNotPersisted(t *testing.T) {
+	// hasUnread is computed at read time (room lastMsgAt vs lastSeenAt), never
+	// stored, so it must not be written to Mongo.
+	src := model.Subscription{ID: "s1", RoomID: "r1", SiteID: "site-a", HasUnread: true}
+	data, err := bson.Marshal(&src)
+	require.NoError(t, err)
+	var raw bson.M
+	require.NoError(t, bson.Unmarshal(data, &raw))
+	_, hasUnread := raw["hasUnread"]
+	assert.False(t, hasUnread, `hasUnread must not be persisted (bson:"-")`)
+}
+
+func TestSubscription_HasGroupMentionNotPersisted(t *testing.T) {
+	// hasGroupMention is computed at read time (room lastMentionAllAt vs lastSeenAt),
+	// so it rides the client wire but must never be persisted to Mongo.
+	src := model.Subscription{ID: "s1", RoomID: "r1", SiteID: "site-a", HasGroupMention: true}
+	bdata, err := bson.Marshal(&src)
+	require.NoError(t, err)
+	var braw bson.M
+	require.NoError(t, bson.Unmarshal(bdata, &braw))
+	_, persisted := braw["hasGroupMention"]
+	assert.False(t, persisted, `hasGroupMention must not be persisted (bson:"-")`)
+
+	jdata, err := json.Marshal(&model.Subscription{ID: "s1", JoinedAt: time.Now().UTC()})
+	require.NoError(t, err)
+	var jraw map[string]any
+	require.NoError(t, json.Unmarshal(jdata, &jraw))
+	_, onWire := jraw["hasGroupMention"]
+	assert.True(t, onWire, "hasGroupMention is part of the client wire schema")
+}
 func TestSubscriptionUpdateEvent_RoomNameRoundTrips(t *testing.T) {
 	evt := model.SubscriptionUpdateEvent{
 		UserID:       "u1",

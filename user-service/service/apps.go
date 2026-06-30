@@ -5,7 +5,6 @@ import (
 
 	"github.com/hmchangw/chat/pkg/errcode"
 	"github.com/hmchangw/chat/pkg/model"
-	"github.com/hmchangw/chat/pkg/mongoutil"
 	"github.com/hmchangw/chat/pkg/natsrouter"
 	"github.com/hmchangw/chat/user-service/models"
 )
@@ -53,9 +52,9 @@ func (s *UserService) SetAppSubscription(c *natsrouter.Context, req models.SetAp
 func (s *UserService) ListApps(c *natsrouter.Context, req models.AppsListRequest) (*models.AppsListResponse, error) {
 	account := c.Param("account")
 	c.WithLogValues("account", account)
-	page, err := s.apps.ListApps(c, account, mongoutil.NewOffsetPageRequest(req.Offset, req.Limit))
+	page, err := s.apps.ListApps(c, account, normalizePage(req.Offset, req.Limit, s.defaultApps, s.maxApps))
 	if err != nil {
 		return nil, fmt.Errorf("list apps: %w", err)
 	}
-	return &models.AppsListResponse{Apps: page.Data, Total: int(page.Total)}, nil
+	return &models.AppsListResponse{Apps: page.Data, HasMore: page.HasMore}, nil
 }

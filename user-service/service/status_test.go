@@ -107,13 +107,19 @@ func TestSetStatus_UnknownAccount_NotFound_NoPublish(t *testing.T) {
 	requireCode(t, err, errcode.CodeNotFound)
 }
 
-func TestGetStatusByName_EmptyName(t *testing.T) {
-	// Empty name has no handler-level guard; it passes through to the store,
-	// which finds no user, so the handler returns NotFound.
-	svc, _, users, _, _, _ := newSvc(t)
-	users.EXPECT().GetUserStatus(gomock.Any(), "").Return(nil, nil)
+func TestGetStatusByName_EmptyName_BadRequest_NoLookup(t *testing.T) {
+	// An empty name is rejected by a handler-level guard BEFORE any store lookup:
+	// users has no GetUserStatus expectation, so gomock fails if it is called.
+	svc, _, _, _, _, _ := newSvc(t)
 	_, err := svc.GetStatusByName(ctx("alice", "site-a"), models.StatusGetByNameRequest{Name: ""})
-	requireCode(t, err, errcode.CodeNotFound)
+	requireCode(t, err, errcode.CodeBadRequest)
+}
+
+func TestGetProfileByName_EmptyName_BadRequest_NoLookup(t *testing.T) {
+	// profile.getByName shares the guard: empty name ⇒ bad_request, no store lookup.
+	svc, _, _, _, _, _ := newSvc(t)
+	_, err := svc.GetProfileByName(ctx("alice", "site-a"), models.StatusGetByNameRequest{Name: ""})
+	requireCode(t, err, errcode.CodeBadRequest)
 }
 
 func TestSetStatus_NilIsShow_TextOnly(t *testing.T) {

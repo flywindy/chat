@@ -95,7 +95,7 @@ func TestListApps_Integration(t *testing.T) {
 	page, err := r.ListApps(ctx, "alice", mongoutil.NewOffsetPageRequest(0, 0))
 	require.NoError(t, err)
 	require.Len(t, page.Data, 2)
-	assert.Equal(t, int64(2), page.Total)
+	assert.False(t, page.HasMore, "both apps fit on one page")
 	// Sorted by name: Helper, Other.
 	assert.Equal(t, "Helper", page.Data[0].Name)
 	assert.True(t, page.Data[0].IsSubscribed, "helper.bot is subscribed")
@@ -117,11 +117,11 @@ func TestListApps_Pagination_Integration(t *testing.T) {
 		})
 	}
 
-	t.Run("slice keeps full catalog total", func(t *testing.T) {
+	t.Run("middle page signals more", func(t *testing.T) {
 		page, err := r.ListApps(ctx, "alice", mongoutil.NewOffsetPageRequest(1, 2))
 		require.NoError(t, err)
 		require.Len(t, page.Data, 2)
-		assert.Equal(t, int64(5), page.Total, "total is the full catalog count, not the page size")
+		assert.True(t, page.HasMore, "more apps remain after this page")
 		assert.Equal(t, "Other", page.Data[0].Name)
 		assert.Equal(t, "Zeta1", page.Data[1].Name)
 	})
@@ -131,7 +131,7 @@ func TestListApps_Pagination_Integration(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, page.Data, 1)
 		assert.Equal(t, "Zeta3", page.Data[0].Name)
-		assert.Equal(t, int64(5), page.Total)
+		assert.False(t, page.HasMore, "final page")
 	})
 
 	t.Run("offset beyond catalog", func(t *testing.T) {
@@ -139,7 +139,7 @@ func TestListApps_Pagination_Integration(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, page.Data, "Data must be non-nil so JSON marshals to []")
 		assert.Empty(t, page.Data)
-		assert.Equal(t, int64(5), page.Total)
+		assert.False(t, page.HasMore)
 	})
 }
 

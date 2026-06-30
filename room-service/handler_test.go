@@ -2138,6 +2138,23 @@ func TestHandler_handleRoomsInfoBatch(t *testing.T) {
 			},
 		},
 		{
+			name: "MinUserLastSeenAt set → correct millis",
+			req:  model.RoomsInfoBatchRequest{RoomIDs: []string{"r1"}},
+			setupStore: func(s *MockRoomStore) {
+				s.EXPECT().ListRoomsByIDs(gomock.Any(), []string{"r1"}).Return([]model.Room{
+					{ID: "r1", Name: "general", SiteID: "site-a", MinUserLastSeenAt: &now},
+				}, nil)
+			},
+			setupKeys: func(k *MockRoomKeyStore) {
+				k.EXPECT().GetMany(gomock.Any(), []string{"r1"}).Return(map[string]*roomkeystore.VersionedKeyPair{}, nil)
+			},
+			assertResp: func(t *testing.T, resp model.RoomsInfoBatchResponse) {
+				require.Len(t, resp.Rooms, 1)
+				require.NotNil(t, resp.Rooms[0].MinUserLastSeenAt)
+				assert.Equal(t, now.UTC().UnixMilli(), *resp.Rooms[0].MinUserLastSeenAt)
+			},
+		},
+		{
 			name: "LastMsgAt zero-time in Mongo → nil in response",
 			req:  model.RoomsInfoBatchRequest{RoomIDs: []string{"r-zero"}},
 			setupStore: func(s *MockRoomStore) {
@@ -2145,7 +2162,7 @@ func TestHandler_handleRoomsInfoBatch(t *testing.T) {
 				s.EXPECT().ListRoomsByIDs(gomock.Any(), []string{"r-zero"}).Return([]model.Room{
 					{
 						ID: "r-zero", Name: "quiet", SiteID: "site-a",
-						LastMsgAt: &zero, LastMentionAllAt: &zero,
+						LastMsgAt: &zero, LastMentionAllAt: &zero, MinUserLastSeenAt: &zero,
 					},
 				}, nil)
 			},
@@ -2158,6 +2175,7 @@ func TestHandler_handleRoomsInfoBatch(t *testing.T) {
 				assert.True(t, resp.Rooms[0].Found)
 				assert.Nil(t, resp.Rooms[0].LastMsgAt, "non-nil zero-time Room.LastMsgAt must produce nil RoomInfo.LastMsgAt")
 				assert.Nil(t, resp.Rooms[0].LastMentionAllAt, "non-nil zero-time Room.LastMentionAllAt must produce nil RoomInfo.LastMentionAllAt")
+				assert.Nil(t, resp.Rooms[0].MinUserLastSeenAt, "non-nil zero-time Room.MinUserLastSeenAt must produce nil RoomInfo.MinUserLastSeenAt")
 			},
 		},
 	}

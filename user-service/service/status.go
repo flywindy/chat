@@ -18,6 +18,9 @@ const maxStatusBytes = 512
 
 func (s *UserService) GetStatusByName(c *natsrouter.Context, req models.StatusGetByNameRequest) (*models.StatusView, error) {
 	c.WithLogValues("account", c.Param("account"), "target", req.Name)
+	if req.Name == "" {
+		return nil, errcode.BadRequest("name required")
+	}
 	u, err := s.users.GetUserStatus(c, req.Name)
 	if err != nil {
 		return nil, fmt.Errorf("get status: %w", err)
@@ -40,6 +43,9 @@ func (s *UserService) GetStatusByName(c *natsrouter.Context, req models.StatusGe
 // without touching status.
 func (s *UserService) GetProfileByName(c *natsrouter.Context, req models.StatusGetByNameRequest) (*models.StatusView, error) {
 	c.WithLogValues("account", c.Param("account"), "target", req.Name)
+	if req.Name == "" {
+		return nil, errcode.BadRequest("name required")
+	}
 	u, err := s.users.GetUserStatus(c, req.Name)
 	if err != nil {
 		return nil, fmt.Errorf("get profile: %w", err)

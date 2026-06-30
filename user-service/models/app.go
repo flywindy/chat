@@ -21,10 +21,11 @@ type AppsListRequest struct {
 	Offset int `json:"offset"`
 }
 
-// AppsListResponse is returned by apps.list. Total is the full catalog count, not the page size.
+// AppsListResponse is returned by apps.list. hasMore is true when the next page
+// would return at least one more app (the server over-fetches by one).
 type AppsListResponse struct {
-	Apps  []AppListItem `json:"apps"`
-	Total int           `json:"total"`
+	Apps    []AppListItem `json:"apps"`
+	HasMore bool          `json:"hasMore"`
 }
 
 // OKResponse is the generic success body (subscription.setAppSubscription).

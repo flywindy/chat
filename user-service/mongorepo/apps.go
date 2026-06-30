@@ -51,8 +51,9 @@ func (r *AppRepo) GetApp(ctx context.Context, appID string) (*model.App, error) 
 	return r.apps.FindByID(ctx, appID)
 }
 
-// ListApps returns a name-sorted page of apps with isSubscribed per user; Total is the full catalog count.
-func (r *AppRepo) ListApps(ctx context.Context, account string, page mongoutil.OffsetPageRequest) (mongoutil.OffsetPage[models.AppListItem], error) {
+// ListApps returns a name-sorted page of apps with isSubscribed per user, plus a
+// hasMore flag (the query over-fetches by one).
+func (r *AppRepo) ListApps(ctx context.Context, account string, page mongoutil.OffsetPageRequest) (mongoutil.OffsetPageHasMore[models.AppListItem], error) {
 	pipeline := bson.A{
 		bson.M{"$lookup": bson.M{
 			"from": subscriptionsCollection,
@@ -70,9 +71,9 @@ func (r *AppRepo) ListApps(ctx context.Context, account string, page mongoutil.O
 		bson.M{"$project": bson.M{"sub": 0}},
 		bson.M{"$sort": bson.M{"name": 1}},
 	}
-	out, err := r.items.AggregatePaged(ctx, pipeline, page)
+	out, err := r.items.AggregatePagedHasMore(ctx, pipeline, page)
 	if err != nil {
-		return mongoutil.OffsetPage[models.AppListItem]{}, fmt.Errorf("aggregate apps page: %w", err)
+		return mongoutil.OffsetPageHasMore[models.AppListItem]{}, fmt.Errorf("aggregate apps page: %w", err)
 	}
 	return out, nil
 }
