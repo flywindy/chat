@@ -93,7 +93,8 @@ type RoomStore interface {
 	// account so an org-expanded requester is not double-counted against the
 	// cap (the requester is added separately as the owner).
 	// Used by addMembers and handleCreateRoomChannel for capacity validation.
-	// Delegates to pkg/pipelines.GetNewMembersPipeline + a $count terminal stage.
+	// Resolves candidates via pkg/pipelines.MatchCandidatesFilter, then (for a
+	// non-empty roomID) subtracts already-subscribed accounts via an indexed read.
 	CountNewMembers(ctx context.Context, orgIDs, directAccounts []string, roomID, excludeAccount string) (int, error)
 	// ListRoomMembers returns the members of roomID. When enrich=true, the
 	// returned RoomMember.Member entries carry display fields populated via

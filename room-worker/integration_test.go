@@ -128,6 +128,43 @@ func TestMongoStore_Integration(t *testing.T) {
 	}
 }
 
+// TestMongoStore_ApplyMemberCountDelta covers the add-member hot path: the $inc
+// applies the delta atomically, and reconcileDue follows the per-room TTL —
+// true when never reconciled or once the TTL has elapsed, false within it.
+func TestMongoStore_ApplyMemberCountDelta(t *testing.T) {
+	db := setupMongo(t)
+	store := NewMongoStore(db)
+	ctx := context.Background()
+
+	_, err := db.Collection("rooms").InsertOne(ctx, model.Room{ID: "rd", Name: "delta", UserCount: 5, AppCount: 1})
+	require.NoError(t, err)
+
+	// Never reconciled → due; $inc applies userDelta/appDelta.
+	due, err := store.ApplyMemberCountDelta(ctx, "rd", 3, 2, time.Minute)
+	require.NoError(t, err)
+	assert.True(t, due, "a room never reconciled should be due")
+	room, err := store.GetRoom(ctx, "rd")
+	require.NoError(t, err)
+	assert.Equal(t, 8, room.UserCount, "userCount incremented by 3")
+	assert.Equal(t, 3, room.AppCount, "appCount incremented by 2")
+
+	// ReconcileMemberCounts stamps countsReconciledAt → not due within the TTL.
+	require.NoError(t, store.ReconcileMemberCounts(ctx, "rd"))
+	due, err = store.ApplyMemberCountDelta(ctx, "rd", 0, 0, time.Minute)
+	require.NoError(t, err)
+	assert.False(t, due, "within TTL the recompute should not be due")
+
+	// ttl=0 forces a recompute every time (legacy behaviour).
+	due, err = store.ApplyMemberCountDelta(ctx, "rd", 0, 0, 0)
+	require.NoError(t, err)
+	assert.True(t, due, "ttl=0 is always due")
+
+	// Missing room: no-op, not due, no error (matches ReconcileMemberCounts).
+	due, err = store.ApplyMemberCountDelta(ctx, "missing", 1, 0, time.Minute)
+	require.NoError(t, err)
+	assert.False(t, due)
+}
+
 func TestMongoStore_GetSubscription_Integration(t *testing.T) {
 	db := setupMongo(t)
 	store := NewMongoStore(db)
@@ -472,6 +509,115 @@ func mustInsertUser(t *testing.T, db *mongo.Database, u *model.User) {
 	t.Helper()
 	_, err := db.Collection("users").InsertOne(context.Background(), u)
 	require.NoError(t, err)
+}
+
+// TestMongoStore_UserCache covers the cached user-read path: EnableUserCache
+// wraps the reader without breaking reads, and a missing account still maps to
+// the store's ErrUserNotFound sentinel that handlers branch on.
+func TestMongoStore_UserCache(t *testing.T) {
+	db := setupMongo(t)
+	store := NewMongoStore(db)
+	require.NoError(t, store.EnableUserCache(100, time.Minute))
+	ctx := context.Background()
+
+	_, err := db.Collection("users").InsertOne(ctx, model.User{ID: "u1", Account: "alice", SiteID: "site-a", EngName: "Alice"})
+	require.NoError(t, err)
+
+	// Read through the cache twice; both return the seeded user.
+	for range 2 {
+		u, err := store.GetUser(ctx, "alice")
+		require.NoError(t, err)
+		assert.Equal(t, "u1", u.ID)
+		assert.Equal(t, "alice", u.Account)
+	}
+
+	// Missing account maps to the store's ErrUserNotFound (not userstore's).
+	_, err = store.GetUser(ctx, "ghost")
+	assert.ErrorIs(t, err, ErrUserNotFound)
+
+	// Batch lookup returns only existing users (negative results not cached).
+	users, err := store.FindUsersByAccounts(ctx, []string{"alice", "ghost"})
+	require.NoError(t, err)
+	require.Len(t, users, 1)
+	assert.Equal(t, "alice", users[0].Account)
+}
+
+// TestMongoStore_RoomMetaCache covers the cached GetRoomMeta path: it serves the
+// room's stable fields from the in-process cache and still errors on a miss.
+func TestMongoStore_RoomMetaCache(t *testing.T) {
+	db := setupMongo(t)
+	store := NewMongoStore(db)
+	require.NoError(t, store.EnableRoomMetaCache(100, time.Minute))
+	ctx := context.Background()
+
+	_, err := db.Collection("rooms").InsertOne(ctx, model.Room{
+		ID: "rm", Name: "general", Type: model.RoomTypeChannel, SiteID: "site-a", UserCount: 7,
+	})
+	require.NoError(t, err)
+
+	// Two reads (miss then hit) both return the stable fields.
+	for range 2 {
+		room, err := store.GetRoomMeta(ctx, "rm")
+		require.NoError(t, err)
+		assert.Equal(t, "rm", room.ID)
+		assert.Equal(t, "general", room.Name)
+		assert.Equal(t, model.RoomTypeChannel, room.Type)
+		assert.Equal(t, "site-a", room.SiteID)
+	}
+
+	_, err = store.GetRoomMeta(ctx, "nope")
+	require.Error(t, err)
+}
+
+// TestMongoStore_GetRoom_FullDocumentWithCacheEnabled guards the regression
+// where enabling the meta cache made GetRoom serve a partial (Meta-only) room
+// with a zero CreatedAt. GetRoom must always return the full document — the DM
+// idempotency path (serverCreateDM) depends on existing.CreatedAt — regardless
+// of whether the add-path meta cache is enabled.
+func TestMongoStore_GetRoom_FullDocumentWithCacheEnabled(t *testing.T) {
+	db := setupMongo(t)
+	store := NewMongoStore(db)
+	require.NoError(t, store.EnableRoomMetaCache(100, time.Minute))
+	ctx := context.Background()
+
+	createdAt := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	_, err := db.Collection("rooms").InsertOne(ctx, model.Room{
+		ID: "rfull", Name: "general", Type: model.RoomTypeDM, SiteID: "site-a",
+		UserCount: 2, CreatedAt: createdAt, UpdatedAt: createdAt,
+	})
+	require.NoError(t, err)
+
+	room, err := store.GetRoom(ctx, "rfull")
+	require.NoError(t, err)
+	assert.Equal(t, "rfull", room.ID)
+	assert.Equal(t, model.RoomTypeDM, room.Type)
+	assert.Equal(t, createdAt, room.CreatedAt, "GetRoom must return the persisted CreatedAt, not a zero value")
+}
+
+// TestMongoStore_ListAddMemberCandidates_SkipsIRMForDirectAdds asserts the
+// no-org optimization: the room_members read is skipped, so
+// HasIndividualRoomMember is false even when an individual row exists.
+func TestMongoStore_ListAddMemberCandidates_SkipsIRMForDirectAdds(t *testing.T) {
+	db := setupMongo(t)
+	store := NewMongoStore(db)
+	ctx := context.Background()
+
+	_, err := db.Collection("users").InsertOne(ctx, model.User{ID: "u9", Account: "dave", SiteID: "site-a"})
+	require.NoError(t, err)
+	// An individual room_members row exists for dave in room rx.
+	_, err = db.Collection("room_members").InsertOne(ctx, model.RoomMember{
+		ID: idgen.GenerateUUIDv7(), RoomID: "rx",
+		Member: model.RoomMemberEntry{ID: "u9", Type: model.RoomMemberIndividual, Account: "dave"},
+	})
+	require.NoError(t, err)
+
+	// Direct (no-org) add: the IRM read is skipped, so the flag is false despite
+	// the existing row (the handler never reads it on the no-org path).
+	cands, err := store.ListAddMemberCandidates(ctx, nil, []string{"dave"}, "rx")
+	require.NoError(t, err)
+	require.Len(t, cands, 1)
+	assert.Equal(t, "dave", cands[0].Account)
+	assert.False(t, cands[0].HasIndividualRoomMember, "no-org add skips the room_members read")
 }
 
 func TestMongoStore_ListAddMemberCandidates_Integration(t *testing.T) {

@@ -461,23 +461,44 @@ func (s *MongoStore) CountNewMembers(ctx context.Context, orgIDs, directAccounts
 	if len(orgIDs) == 0 && len(directAccounts) == 0 {
 		return 0, nil
 	}
-	pipeline := pipelines.GetNewMembersPipeline(orgIDs, directAccounts, roomID, excludeAccount)
-	pipeline = append(pipeline, bson.M{"$count": "n"})
-
-	cursor, err := s.users.Aggregate(ctx, pipeline)
+	filter := pipelines.MatchCandidatesFilter(orgIDs, directAccounts, excludeAccount)
+	// Create path (no room yet): every resolved candidate is a new member, so a
+	// plain indexed count suffices — there are no subscriptions to subtract.
+	if roomID == "" {
+		n, err := s.users.CountDocuments(ctx, filter)
+		if err != nil {
+			return 0, fmt.Errorf("count new members: %w", err)
+		}
+		return int(n), nil
+	}
+	// Add path: resolve candidate accounts, then subtract those already
+	// subscribed via one indexed read scoped to the candidate set — instead of
+	// a correlated-$lookup aggregation.
+	cursor, err := s.users.Find(ctx, filter, options.Find().SetProjection(bson.M{"account": 1, "_id": 0}))
 	if err != nil {
-		return 0, fmt.Errorf("count new members: %w", err)
+		return 0, fmt.Errorf("find candidate accounts: %w", err)
 	}
-	var results []struct {
-		Count int `bson:"n"`
+	var rows []struct {
+		Account string `bson:"account"`
 	}
-	if err := cursor.All(ctx, &results); err != nil {
-		return 0, fmt.Errorf("decode count new members: %w", err)
+	if err := cursor.All(ctx, &rows); err != nil {
+		return 0, fmt.Errorf("decode candidate accounts: %w", err)
 	}
-	if len(results) == 0 {
+	if len(rows) == 0 {
 		return 0, nil
 	}
-	return results[0].Count, nil
+	// account is unique in the users collection, so rows carry no duplicates.
+	accounts := make([]string, len(rows))
+	for i, r := range rows {
+		accounts[i] = r.Account
+	}
+	subbed, err := pipelines.SubscribedAccounts(ctx, s.subscriptions, roomID, accounts)
+	if err != nil {
+		return 0, fmt.Errorf("resolve subscribed accounts: %w", err)
+	}
+	// subbed is a subset of the candidate accounts (the $in query bounds it), so
+	// the new-member count is just the candidates minus those already subscribed.
+	return len(accounts) - len(subbed), nil
 }
 
 // ListRoomMembers returns the members of a room. It prefers the room_members

@@ -67,9 +67,21 @@ type SubscriptionStore interface {
 	// ReconcileMemberCounts recomputes Room.UserCount (non-bot subs) and
 	// Room.AppCount (bot subs) via index-backed counts on the denormalized
 	// u.isBot flag, then writes both back to the rooms collection in a single
-	// update.
+	// update. It also stamps countsReconciledAt, resetting the per-room TTL
+	// clock that ApplyMemberCountDelta consults.
 	ReconcileMemberCounts(ctx context.Context, roomID string) error
+	// ApplyMemberCountDelta atomically applies userDelta/appDelta to the room's
+	// counters ($inc, O(1)) and reports whether a full ReconcileMemberCounts is
+	// now due — i.e. the room has never been reconciled or its countsReconciledAt
+	// is older than ttl. This keeps the add-member hot path O(1) while a bounded
+	// periodic recompute (the drift safety net) restores convergence.
+	ApplyMemberCountDelta(ctx context.Context, roomID string, userDelta, appDelta int, ttl time.Duration) (reconcileDue bool, err error)
 	GetRoom(ctx context.Context, roomID string) (*model.Room, error)
+	// GetRoomMeta returns a room populated with only its stable fields
+	// (ID/Type/Name/SiteID/UserCount); CreatedAt/UpdatedAt are zero. It is the
+	// add-member hot path's read and is served from the meta cache when enabled.
+	// Callers needing time-sensitive fields (e.g. CreatedAt) must use GetRoom.
+	GetRoomMeta(ctx context.Context, roomID string) (*model.Room, error)
 	GetSubscription(ctx context.Context, account, roomID string) (*model.Subscription, error)
 	GetUser(ctx context.Context, account string) (*model.User, error)
 	// GetApp returns the app whose Assistant.Name == botAccount, or ErrAppNotFound.
