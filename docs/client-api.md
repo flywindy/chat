@@ -5077,7 +5077,7 @@ Resolves a user or bot avatar. The frontend also routes DM/botDM room avatars he
 
 | Status | Condition | Notes |
 |---|---|---|
-| `307 Temporary Redirect` | User with a known `employeeId` | `Location: {EMPLOYEE_PHOTO_BASE_URL}/xxxPhoto/po/{employeeId}_120.JPG` |
+| `307 Temporary Redirect` | User with a known `employeeId` | `Location: {EMPLOYEE_PHOTO_BASE_URL}/{employeeId}_120.JPG` |
 | `304 Not Modified` | `If-None-Match` matches the stored `ETag` | Empty body. |
 | `200 OK` | Bot with a custom image (local) | Streams the MinIO object. `Content-Type` as stored. `ETag` + `Cache-Control: public, max-age=<cfg>`. |
 | `200 OK` | No custom image or user with no `employeeId` | Returns the generated default SVG (`Content-Type: image/svg+xml`). `ETag` + `Cache-Control: public, max-age=<cfg>`. |

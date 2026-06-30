@@ -194,6 +194,5 @@ func (h *handler) HandleAccountAvatar(c *gin.Context) {
 	}
 	c.Set("avatar_kind", "user")
 	c.Set("avatar_outcome", "redirect")
-	c.Redirect(http.StatusTemporaryRedirect,
-		fmt.Sprintf("%s/xxxPhoto/po/%s_120.JPG", h.cfg.EmployeePhotoBaseURL, url.PathEscape(eid)))
+	c.Redirect(http.StatusTemporaryRedirect, employeePhotoURL(h.cfg.EmployeePhotoBaseURL, eid))
 }

@@ -93,7 +93,7 @@ label — instrumented at one seam, not scattered across the decision tree.
 | `LOG_LEVEL` | slog level | `info` |
 | `SITE_ID` | this cluster's site id | required |
 | `CLUSTER_DOMAINS` | JSON array of `{siteID, domain}` for cross-cluster redirects | required |
-| `EMPLOYEE_PHOTO_BASE_URL` | external employee-photo host (the `xxx_domain`) | required |
+| `EMPLOYEE_PHOTO_BASE_URL` | external employee-photo base (host + path); the service appends `/{eid}_120.JPG` | required |
 | `MONGO_URI` / `MONGO_DB` | operational DB | required / `chat` |
 | `MINIO_ENDPOINT` / `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` | object storage (custom uploads) | required |
 | `AVATAR_BUCKET` | MinIO bucket for avatars | `avatars` |
@@ -294,7 +294,7 @@ else:                                        # ── user (synced everywhere �
     if !found: eid, found = store.EmployeeID(ctx, account)   # MISS MUST hit DB
     if found:
         cache.put(account, eid)
-        307 → {EMPLOYEE_PHOTO_BASE_URL}/xxxPhoto/po/{eid}_120.JPG
+        307 → {EMPLOYEE_PHOTO_BASE_URL}/{eid}_120.JPG
     else:
         serveDefault(account, account)
 ```

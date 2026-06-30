@@ -55,3 +55,19 @@ func TestDefaultETag_StableAndQuoted(t *testing.T) {
 func TestBotObjectKey(t *testing.T) {
 	assert.Equal(t, "bot/helper.bot", botObjectKey("helper.bot"))
 }
+
+func TestEmployeePhotoURL(t *testing.T) {
+	cases := []struct {
+		name, base, eid, want string
+	}{
+		{"bare base", "https://photos.example.com", "E123", "https://photos.example.com/E123_120.JPG"},
+		{"base carries the path", "https://host/realPhoto/dir", "E123", "https://host/realPhoto/dir/E123_120.JPG"},
+		{"trailing slash trimmed", "https://host/p/", "E123", "https://host/p/E123_120.JPG"},
+		{"eid escaped", "https://host", "a/b", "https://host/a%2Fb_120.JPG"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, employeePhotoURL(tc.base, tc.eid))
+		})
+	}
+}

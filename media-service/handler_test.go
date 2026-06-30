@@ -89,7 +89,7 @@ func TestEndpoint1_UserRedirectToEmployeePhoto(t *testing.T) {
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/avatar/v1/alice", nil))
 	assert.Equal(t, http.StatusTemporaryRedirect, w.Code)
-	assert.Equal(t, "https://photos.example.com/xxxPhoto/po/E123_120.JPG", w.Header().Get("Location"))
+	assert.Equal(t, "https://photos.example.com/E123_120.JPG", w.Header().Get("Location"))
 }
 
 func TestEndpoint1_UserNoEmployeeID_ServesDefault(t *testing.T) {

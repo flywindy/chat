@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"hash/fnv"
 	"html"
+	"net/url"
 	"regexp"
+	"strings"
 	"unicode"
 	"unicode/utf8"
 )
@@ -66,3 +68,10 @@ func renderDefaultSVG(seed, name string) []byte {
 // botObjectKey is the MinIO key chosen for a new bot upload; stored verbatim in
 // the avatars doc and used as-is on reads.
 func botObjectKey(account string) string { return "bot/" + account }
+
+// employeePhotoURL builds the external employee-photo redirect target.
+// base (EMPLOYEE_PHOTO_BASE_URL) owns the host and path — a trailing slash is
+// tolerated — and this only appends the "{eid}_120.JPG" filename.
+func employeePhotoURL(base, eid string) string {
+	return fmt.Sprintf("%s/%s_120.JPG", strings.TrimRight(base, "/"), url.PathEscape(eid))
+}
