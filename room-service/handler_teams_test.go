@@ -46,6 +46,11 @@ func (f *fakeGraphClient) CreateOnlineMeeting(_ context.Context, req msgraph.Cre
 	return f.meeting, nil
 }
 
+// GetUserByPrincipalName satisfies msgraph.Client; room-service never calls it.
+func (f *fakeGraphClient) GetUserByPrincipalName(_ context.Context, _ string) (*msgraph.GraphUser, error) {
+	return nil, nil
+}
+
 // stubTeamsMeetingStore is a hand-rolled TeamsMeetingStore double backed by an
 // in-memory map keyed on (roomId, siteId). It enforces the (roomId, siteId)
 // unique constraint just like the real Mongo unique index, so InsertTeamsMeeting
@@ -143,6 +148,11 @@ func (g *createOrGetGraphStub) CreateOnlineMeeting(_ context.Context, req msgrap
 	m := &msgraph.OnlineMeeting{ID: "mtg-" + req.ExternalID, JoinURL: "https://teams.example/join/" + req.ExternalID}
 	g.byExtID[req.ExternalID] = m
 	return m, nil
+}
+
+// GetUserByPrincipalName satisfies msgraph.Client; room-service never calls it.
+func (g *createOrGetGraphStub) GetUserByPrincipalName(_ context.Context, _ string) (*msgraph.GraphUser, error) {
+	return nil, nil
 }
 
 func (g *createOrGetGraphStub) distinctMeetings() int {

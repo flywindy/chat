@@ -5196,8 +5196,10 @@ On success, the custom image takes effect immediately: subsequent `GET /avatar/v
 ## 8. Presence
 
 Served by **user-presence-service**. Tracks each user's effective presence —
-`online`, `away`, `busy`, `offline` — derived from live connections plus an
-optional manual override. Each site owns the presence of its local users; a
+`online`, `away`, `busy`, `offline`, `in-call` — derived from live connections,
+an optional manual override, and an external Teams "in a call" signal
+(`in-call`, set by the presence sync; suppresses notifications, never settable
+as a manual status). Each site owns the presence of its local users; a
 user's home site is the site they connect to. Cross-site is transparent: for
 **live state** (§8.7) a watcher subscribes to the global per-user subject and
 the NATS gateway routes it; for **batch queries** (§8.6) the watcher sends a
@@ -5222,8 +5224,8 @@ keeps a fully-disconnected user "present"):
 
 1. **No live connections → `offline`** — beats any manual override.
 2. Manual `appear_offline` → `offline`; manual `away` → `away`.
-3. Manual `online` → `online`; manual `busy` → `busy`.
-4. Any other manual override → that status.
+3. External Teams `in-call` → `in-call`.
+4. Manual `online` → `online`; manual `busy` → `busy`.
 5. All live connections inactive → `away`.
 6. Otherwise → `online`.
 
@@ -5368,7 +5370,7 @@ in the `siteId` payload field.
 |-------|------|-------|
 | `account` | string | The user. |
 | `siteId` | string | The user's home site. |
-| `status` | string | Effective status: `online` / `away` / `busy` / `offline`. |
+| `status` | string | Effective status: `online` / `away` / `busy` / `offline` / `in-call`. |
 | `timestamp` | number | Millis since Unix epoch (UTC) of the change. |
 
 **Subscribe before you snapshot.** To avoid missing a transition between the

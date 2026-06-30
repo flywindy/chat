@@ -184,3 +184,59 @@ func TestNew_TLSInsecureSkipVerify(t *testing.T) {
 	require.NotNil(t, tr.TLSClientConfig)
 	assert.True(t, tr.TLSClientConfig.InsecureSkipVerify)
 }
+
+func TestGetUserByPrincipalName_Found(t *testing.T) {
+	tokenSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(tokenResponse{AccessToken: "tok", ExpiresIn: 3600}) // #nosec G117 -- test mock OAuth token
+	}))
+	defer tokenSrv.Close()
+
+	graphSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "Bearer tok", r.Header.Get("Authorization"))
+		// Targeted single-user path lookup (escaped @), not a tenant-wide list.
+		assert.True(t, strings.Contains(r.URL.Path, "/users/alice%40corp.com") ||
+			strings.Contains(r.URL.Path, "/users/alice@corp.com"), "path %s", r.URL.Path)
+		_ = json.NewEncoder(w).Encode(GraphUser{ID: "ida", Mail: "alice@corp.com", UserPrincipalName: "alice@corp.com"})
+	}))
+	defer graphSrv.Close()
+
+	c := newTestClient(tokenSrv.URL, graphSrv.URL)
+	u, err := c.GetUserByPrincipalName(context.Background(), "alice@corp.com")
+	require.NoError(t, err)
+	require.NotNil(t, u)
+	assert.Equal(t, "ida", u.ID)
+}
+
+func TestGetUserByPrincipalName_NotFound(t *testing.T) {
+	tokenSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(tokenResponse{AccessToken: "tok", ExpiresIn: 3600}) // #nosec G117 -- test mock OAuth token
+	}))
+	defer tokenSrv.Close()
+
+	graphSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer graphSrv.Close()
+
+	c := newTestClient(tokenSrv.URL, graphSrv.URL)
+	u, err := c.GetUserByPrincipalName(context.Background(), "ghost@corp.com")
+	require.NoError(t, err)
+	assert.Nil(t, u, "404 -> (nil, nil) so the account is skipped")
+}
+
+func TestGetUserByPrincipalName_Error(t *testing.T) {
+	tokenSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(tokenResponse{AccessToken: "tok", ExpiresIn: 3600}) // #nosec G117 -- test mock OAuth token
+	}))
+	defer tokenSrv.Close()
+
+	graphSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer graphSrv.Close()
+
+	c := newTestClient(tokenSrv.URL, graphSrv.URL)
+	_, err := c.GetUserByPrincipalName(context.Background(), "alice@corp.com")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "403")
+}

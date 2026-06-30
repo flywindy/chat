@@ -16,6 +16,7 @@ import (
 	"github.com/hmchangw/chat/pkg/shutdown"
 	"github.com/hmchangw/chat/pkg/subject"
 	"github.com/hmchangw/chat/pkg/userstore"
+	"github.com/hmchangw/chat/user-presence-service/presencestore"
 )
 
 type NATSConfig struct {
@@ -54,6 +55,10 @@ type Config struct {
 	Presence      PresenceConfig `envPrefix:"PRESENCE_"`
 }
 
+// Compile-time guarantee that the extracted store satisfies the daemon's
+// consumer interface (including SetExternal).
+var _ PresenceStore = (*presencestore.Store)(nil)
+
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 
@@ -89,8 +94,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	store, err := NewValkeyStore(
-		ClusterConfig{Addrs: cfg.Valkey.Addrs, Password: cfg.Valkey.Password},
+	store, err := presencestore.NewValkeyStore(
+		presencestore.ClusterConfig{Addrs: cfg.Valkey.Addrs, Password: cfg.Valkey.Password},
 		cfg.Presence.StaleThreshold, cfg.Presence.ConnsTTL,
 	)
 	if err != nil {

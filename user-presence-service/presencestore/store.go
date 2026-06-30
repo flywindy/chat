@@ -1,4 +1,4 @@
-package main
+package presencestore
 
 import (
 	"context"
@@ -10,6 +10,8 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/hmchangw/chat/pkg/model"
+	"github.com/hmchangw/chat/pkg/natsutil"
+	"github.com/hmchangw/chat/pkg/subject"
 )
 
 const keyPrefix = "presence:"
@@ -18,12 +20,36 @@ const sweepKey = keyPrefix + "sweep"
 func connsKey(account string) string  { return keyPrefix + "{" + account + "}:conns" }
 func manualKey(account string) string { return keyPrefix + "{" + account + "}:manual" }
 func statusKey(account string) string { return keyPrefix + "{" + account + "}:status" }
+func azureKey(account string) string  { return keyPrefix + "{" + account + "}:azure" }
+
+// StatusChange is an account whose effective status was (re)computed.
+type StatusChange struct {
+	Account   string
+	Effective model.PresenceStatus
+}
+
+// PublishFunc publishes data to a subject (core NATS).
+type PublishFunc func(ctx context.Context, subj string, data []byte) error
+
+// PublishState marshals + publishes a PresenceState to the account's state
+// subject. Failures are logged (best-effort fan-out, no caller to surface to).
+func PublishState(ctx context.Context, publish PublishFunc, siteID, account string, status model.PresenceStatus, now time.Time) {
+	st := model.PresenceState{Account: account, SiteID: siteID, Status: status, Timestamp: now.UTC().UnixMilli()}
+	data, err := natsutil.MarshalResponse(st)
+	if err != nil {
+		slog.Error("publish presence state failed: marshal", "error", err, "account", account)
+		return
+	}
+	if err := publish(ctx, subject.PresenceState(account), data); err != nil {
+		slog.Error("publish presence state failed", "error", err, "account", account)
+	}
+}
 
 // Each connection is stored in the conns hash as field=connID,
 // value="<away01>:<lastSeenMs>" where away01 is "0" (active) or "1" (inactive).
 // The scripts are split per operation (per review): ping is a cheap liveness
 // refresh that skips recompute for known connections, while activity/bye/manual/
-// sweep recompute the aggregate via the shared computeLua tail.
+// sweep/external recompute the aggregate via the shared computeLua tail.
 
 // luaHeader binds now/stale from ARGV[1]/ARGV[2] for every script.
 const luaHeader = `
@@ -33,10 +59,12 @@ local stale = tonumber(ARGV[2])
 
 // computeLua prunes stale connections, derives availability (online if any
 // active connection, away if all inactive, offline if none), overlays the
-// manual override (appear_offline -> offline always; other overrides apply only
-// while live, else offline), CAS-writes the materialized status, and returns
+// manual override and external (Teams) status per the precedence in the project
+// spec, CAS-writes the materialized status, and returns
 // {changed(0/1), effective, nextDeadlineMs(-1 if none)}.
-// KEYS[1]=conns hash  KEYS[2]=manual  KEYS[3]=status
+// Precedence (only while live): appear_offline -> offline; away -> away;
+// azure in-call -> in-call; manual online/busy -> manual; else connection-derived.
+// KEYS[1]=conns hash  KEYS[2]=manual  KEYS[3]=status  KEYS[4]=azure
 const computeLua = `
 local conns = redis.call('HGETALL', KEYS[1])
 local anyLive, anyActive = false, false
@@ -56,20 +84,28 @@ for i = 1, #conns, 2 do
   end
 end
 
-local effective
-if not anyLive then effective = 'offline'
-elseif anyActive then effective = 'online'
-else effective = 'away' end
-
 local manual = redis.call('GET', KEYS[2])
-if type(manual) == 'string' and manual ~= '' then
-  if manual == 'appear_offline' then
-    effective = 'offline'
-  elseif anyLive then
-    effective = manual
-  else
-    effective = 'offline'
-  end
+local azure  = redis.call('GET', KEYS[4])
+local m = ''
+if type(manual) == 'string' then m = manual end
+local a = ''
+if type(azure) == 'string' then a = azure end
+
+local effective
+if not anyLive then
+  effective = 'offline'
+elseif m == 'appear_offline' then
+  effective = 'offline'
+elseif m == 'away' then
+  effective = 'away'
+elseif a == 'in-call' then
+  effective = 'in-call'
+elseif m == 'online' or m == 'busy' then
+  effective = m
+elseif anyActive then
+  effective = 'online'
+else
+  effective = 'away'
 end
 
 local prev = redis.call('GET', KEYS[3])
@@ -124,10 +160,23 @@ else
 end
 ` + computeLua)
 
+// externalScript sets the external (Teams) status key with a TTL safety-net, or
+// clears it when ARGV[3] is the empty string, then recomputes.
+// ARGV[3]=status  ARGV[4]=external_ttl_ms
+var externalScript = redis.NewScript(luaHeader + `
+if ARGV[3] == '' then
+  redis.call('DEL', KEYS[4])
+else
+  redis.call('SET', KEYS[4], ARGV[3])
+  redis.call('PEXPIRE', KEYS[4], tonumber(ARGV[4]))
+end
+` + computeLua)
+
 // sweepScript only prunes stale connections and recomputes (no mutation).
 var sweepScript = redis.NewScript(luaHeader + computeLua)
 
-type valkeyStore struct {
+// Store is the Valkey-backed presence state.
+type Store struct {
 	c        *redis.ClusterClient
 	staleMs  int64
 	connsTTL int64 // ms
@@ -139,8 +188,8 @@ type ClusterConfig struct {
 	Password string
 }
 
-// NewValkeyStore dials the cluster, pings it, and returns a PresenceStore.
-func NewValkeyStore(cfg ClusterConfig, staleThreshold, connsTTL time.Duration) (PresenceStore, error) {
+// NewValkeyStore dials the cluster, pings it, and returns a Store.
+func NewValkeyStore(cfg ClusterConfig, staleThreshold, connsTTL time.Duration) (*Store, error) {
 	c := redis.NewClusterClient(&redis.ClusterOptions{Addrs: cfg.Addrs, Password: cfg.Password})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -150,22 +199,22 @@ func NewValkeyStore(cfg ClusterConfig, staleThreshold, connsTTL time.Duration) (
 		}
 		return nil, fmt.Errorf("valkey cluster connect: %w", err)
 	}
-	return newValkeyStoreFromClient(c, staleThreshold, connsTTL), nil
+	return NewValkeyStoreFromClient(c, staleThreshold, connsTTL), nil
 }
 
-// newValkeyStoreFromClient wraps a pre-built client (tests inject a
+// NewValkeyStoreFromClient wraps a pre-built client (tests inject a
 // ClusterSlots-override client).
-func newValkeyStoreFromClient(c *redis.ClusterClient, staleThreshold, connsTTL time.Duration) *valkeyStore {
-	return &valkeyStore{c: c, staleMs: staleThreshold.Milliseconds(), connsTTL: connsTTL.Milliseconds()}
+func NewValkeyStoreFromClient(c *redis.ClusterClient, staleThreshold, connsTTL time.Duration) *Store {
+	return &Store{c: c, staleMs: staleThreshold.Milliseconds(), connsTTL: connsTTL.Milliseconds()}
 }
 
 // run executes one presence script and parses its {changed, effective,
 // nextDeadline} reply. now/stale are prepended as ARGV[1]/ARGV[2]; callers pass
 // any op-specific args after.
-func (s *valkeyStore) run(ctx context.Context, script *redis.Script, account string, now int64, args ...any) (bool, model.PresenceStatus, int64, error) {
+func (s *Store) run(ctx context.Context, script *redis.Script, account string, now int64, args ...any) (bool, model.PresenceStatus, int64, error) {
 	argv := append([]any{strconv.FormatInt(now, 10), strconv.FormatInt(s.staleMs, 10)}, args...)
 	res, err := script.Run(ctx, s.c,
-		[]string{connsKey(account), manualKey(account), statusKey(account)}, argv...,
+		[]string{connsKey(account), manualKey(account), statusKey(account), azureKey(account)}, argv...,
 	).Slice()
 	if err != nil {
 		return false, "", 0, fmt.Errorf("presence script %q: %w", account, err)
@@ -180,7 +229,7 @@ func (s *valkeyStore) run(ctx context.Context, script *redis.Script, account str
 }
 
 // reschedule updates the sweep ZSET for an account based on its next deadline.
-func (s *valkeyStore) reschedule(ctx context.Context, account string, nextDeadline int64) error {
+func (s *Store) reschedule(ctx context.Context, account string, nextDeadline int64) error {
 	if nextDeadline < 0 {
 		if err := s.c.ZRem(ctx, sweepKey, account).Err(); err != nil {
 			return fmt.Errorf("sweep zrem %q: %w", account, err)
@@ -194,7 +243,7 @@ func (s *valkeyStore) reschedule(ctx context.Context, account string, nextDeadli
 }
 
 // mutate runs a mutating script and reschedules the account's sweep deadline.
-func (s *valkeyStore) mutate(ctx context.Context, account string, script *redis.Script, args ...any) (bool, model.PresenceStatus, error) {
+func (s *Store) mutate(ctx context.Context, account string, script *redis.Script, args ...any) (bool, model.PresenceStatus, error) {
 	now := time.Now().UTC().UnixMilli()
 	changed, eff, next, err := s.run(ctx, script, account, now, args...)
 	if err != nil {
@@ -206,11 +255,11 @@ func (s *valkeyStore) mutate(ctx context.Context, account string, script *redis.
 	return changed, eff, nil
 }
 
-func (s *valkeyStore) Ping(ctx context.Context, account, connID string) (bool, model.PresenceStatus, error) {
+func (s *Store) Ping(ctx context.Context, account, connID string) (bool, model.PresenceStatus, error) {
 	return s.mutate(ctx, account, pingScript, connID, strconv.FormatInt(s.connsTTL, 10))
 }
 
-func (s *valkeyStore) SetActivity(ctx context.Context, account, connID string, away bool) (bool, model.PresenceStatus, error) {
+func (s *Store) SetActivity(ctx context.Context, account, connID string, away bool) (bool, model.PresenceStatus, error) {
 	flag := "0"
 	if away {
 		flag = "1"
@@ -218,17 +267,40 @@ func (s *valkeyStore) SetActivity(ctx context.Context, account, connID string, a
 	return s.mutate(ctx, account, activityScript, connID, flag, strconv.FormatInt(s.connsTTL, 10))
 }
 
-func (s *valkeyStore) RemoveConnection(ctx context.Context, account, connID string) (bool, model.PresenceStatus, error) {
+func (s *Store) RemoveConnection(ctx context.Context, account, connID string) (bool, model.PresenceStatus, error) {
 	return s.mutate(ctx, account, byeScript, connID)
 }
 
-func (s *valkeyStore) SetManual(ctx context.Context, account string, status model.PresenceStatus) (bool, model.PresenceStatus, error) {
+func (s *Store) SetManual(ctx context.Context, account string, status model.PresenceStatus) (bool, model.PresenceStatus, error) {
 	// Stored as the plain status string (per review) — the script only needs the
 	// status, so there is no JSON to decode in Lua.
 	return s.mutate(ctx, account, manualScript, string(status))
 }
 
-func (s *valkeyStore) BatchGet(ctx context.Context, accounts []string) (map[string]model.PresenceStatus, error) {
+// SetExternal sets (status == StatusInCall) or clears (status == StatusNone)
+// the external Teams override and recomputes. ttl bounds the external key's
+// lifetime so a dead sync self-heals.
+func (s *Store) SetExternal(ctx context.Context, account string, status model.PresenceStatus, ttl time.Duration) (bool, model.PresenceStatus, error) {
+	statusArg := string(status)
+	if status == model.StatusNone {
+		statusArg = ""
+	}
+	return s.mutate(ctx, account, externalScript, statusArg, strconv.FormatInt(ttl.Milliseconds(), 10))
+}
+
+// ActiveAccounts returns every account with at least one live connection — the
+// members of the sweep index (an account is ZREM'd once it fully disconnects).
+// The Teams sync uses this to scope reconciliation to users who can actually be
+// shown in-call (a disconnected user is offline regardless of Teams state).
+func (s *Store) ActiveAccounts(ctx context.Context) ([]string, error) {
+	accounts, err := s.c.ZRange(ctx, sweepKey, 0, -1).Result()
+	if err != nil {
+		return nil, fmt.Errorf("active accounts zrange: %w", err)
+	}
+	return accounts, nil
+}
+
+func (s *Store) BatchGet(ctx context.Context, accounts []string) (map[string]model.PresenceStatus, error) {
 	out := make(map[string]model.PresenceStatus, len(accounts))
 	if len(accounts) == 0 {
 		return out, nil
@@ -258,7 +330,7 @@ func (s *valkeyStore) BatchGet(ctx context.Context, accounts []string) (map[stri
 	return out, nil
 }
 
-func (s *valkeyStore) Sweep(ctx context.Context, now time.Time) ([]StatusChange, error) {
+func (s *Store) Sweep(ctx context.Context, now time.Time) ([]StatusChange, error) {
 	nowMs := now.UTC().UnixMilli()
 	accounts, err := s.c.ZRangeArgs(ctx, redis.ZRangeArgs{
 		Key: sweepKey, ByScore: true, Start: "-inf", Stop: strconv.FormatInt(nowMs, 10), Offset: 0, Count: 500,
@@ -282,4 +354,4 @@ func (s *valkeyStore) Sweep(ctx context.Context, now time.Time) ([]StatusChange,
 	return changes, nil
 }
 
-func (s *valkeyStore) Close() error { return s.c.Close() }
+func (s *Store) Close() error { return s.c.Close() }

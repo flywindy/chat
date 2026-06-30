@@ -28,6 +28,18 @@ type Client interface {
 	// concurrent or repeated calls with the same ExternalID return the same
 	// meeting — Graph itself is the idempotency source of truth.
 	CreateOnlineMeeting(ctx context.Context, req CreateOnlineMeetingRequest) (*OnlineMeeting, error)
+
+	// GetUserByPrincipalName looks up a single user by userPrincipalName
+	// (account@domain). Returns (nil, nil) when no such user exists. App-only
+	// (User.Read.All).
+	GetUserByPrincipalName(ctx context.Context, upn string) (*GraphUser, error)
+}
+
+// GraphUser is the subset of a Graph user resource the presence sync needs.
+type GraphUser struct {
+	ID                string `json:"id"`
+	Mail              string `json:"mail"`
+	UserPrincipalName string `json:"userPrincipalName"`
 }
 
 // CreateOnlineMeetingRequest carries the attributes used to create a meeting.
@@ -184,6 +196,43 @@ func (g *graphClient) accessToken(ctx context.Context) (string, error) {
 	}
 	g.tokenAt = time.Now().Add(lifetime - tokenExpirySkew)
 	return g.token, nil
+}
+
+// GetUserByPrincipalName resolves a single user by userPrincipalName. The
+// /users/{upn} path lookup resolves case-insensitively in Azure AD, so the
+// caller need not try multiple casings. Returns (nil, nil) on 404 so a
+// non-Teams account is simply skipped.
+func (g *graphClient) GetUserByPrincipalName(ctx context.Context, upn string) (*GraphUser, error) {
+	token, err := g.accessToken(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("acquire graph token: %w", err)
+	}
+	endpoint := g.baseURL + "/users/" + url.PathEscape(upn) + "?$select=id,mail,userPrincipalName"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build get-user request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := g.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("get user: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, fmt.Errorf("read get-user response: %w", err)
+	}
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("get user: graph returned status %d", resp.StatusCode)
+	}
+	var u GraphUser
+	if err := json.Unmarshal(body, &u); err != nil {
+		return nil, fmt.Errorf("decode get-user response: %w", err)
+	}
+	return &u, nil
 }
 
 // onlineMeetingPayload is the Graph createOrGet-onlineMeeting request body.
