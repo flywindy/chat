@@ -285,6 +285,77 @@ most reads.
   `no-thread-parents` counter is informational (thread requests that
   landed on a room with no seeded parents and fell back to history).
 
+## Thread-read workload (GetThreadMessages benchmark)
+
+Finds the maximum sustainable RPS for **loading thread messages** —
+`history-service.GetThreadMessages`, the single-partition slice read on the
+Cassandra `thread_messages_by_thread` table. This isolates the thread-read
+ceiling that the `history` workload only measures blended with `LoadHistory`
+(via its `--mix`); read the focused number here and compare it against the
+blended `history` run on the same box.
+
+**First-page opens only.** Each request opens a thread cold — pick a seeded
+parent and fetch the first page of replies (no cursor). Models the dominant
+real case (a user clicking into a thread).
+
+**Reuses the history fixtures and seed.** Like `read-receipt`, this workload
+reads the history presets' rooms/subscriptions and the seeded thread parents +
+replies; there is no dedicated seed. Requires `CASSANDRA_HOSTS` and the same
+`MESSAGE_BUCKET_HOURS` as the running services.
+
+### Quick start
+
+```bash
+make -C tools/loadgen/deploy up
+
+# Seed rooms/subs/keys (Mongo) + parents/replies/thread_rooms (Cassandra+Mongo).
+# Use a preset that seeds threads: history-medium or history-large
+# (history-small has ThreadRate 0 and seeds no threads).
+loadgen seed --workload=thread-read --preset=history-medium
+
+# Ramp the thread-read path.
+loadgen max-rps --workload=thread-read --preset=history-medium
+
+# Clean up.
+loadgen teardown --workload=thread-read --preset=history-medium
+```
+
+Via the deploy Makefile:
+
+```bash
+make -C tools/loadgen/deploy run-max-rps WORKLOAD=thread-read PRESET=history-medium
+```
+
+### Presets
+
+Reuses the **history** presets. `history-medium` / `history-large` seed thread
+parents in every room; `history-small` seeds none, so a thread-read ramp on it
+issues no real reads (every request is counted as `no-thread-parents` and the
+step reports no samples).
+
+### Subcommands
+
+- `loadgen seed --workload=thread-read --preset=<name> [--seed=42]` — delegates
+  to the history seed (Mongo users/rooms/subscriptions/thread\_rooms + room keys;
+  Cassandra `messages_by_room` / `messages_by_id` / `thread_messages_by_thread`).
+- `loadgen max-rps --workload=thread-read --preset=<name> [flags]` — ramp the
+  GetThreadMessages read path. Honors `--page-limit` (default 20),
+  `--request-timeout` (default 5s), and the shared ramp flags (`--steps`
+  defaults to `200,500,1000,2000,5000`, `--warmup`, `--hold`, `--cooldown`,
+  `--slo-*`, `--csv`).
+- `loadgen teardown --workload=thread-read --preset=<name>` — delegates to the
+  history teardown.
+
+### Reading the summary
+
+Synchronous request/reply: gated on the single `thread-read` latency series'
+p95/p99 and the error rate only (no consumer-pending signal, so
+`--slo-pending-growth` is ignored). A non-zero error rate at low RPS usually
+means a seeding/config problem — a `MESSAGE_BUCKET_HOURS` mismatch making the
+seeded parents unreadable, or pointing the run at `history-small`. The verdict,
+INCONCLUSIVE load-box guard, and CSV output behave exactly as for the other
+read workloads.
+
 ## Thread-reply workload (thread-send benchmark)
 
 Finds the maximum sustainable RPS for sending **thread replies**, directly
@@ -362,7 +433,7 @@ list of steps, holds at each step for a measurement window, evaluates SLO
 signals, and reports the largest step at which every signal passed.
 
 ```bash
-loadgen max-rps --workload=messages|history|read-receipt --preset=<name> [flags]
+loadgen max-rps --workload=messages|history|read-receipt|room-read|thread-read --preset=<name> [flags]
 ```
 
 ### Quick start
@@ -390,10 +461,10 @@ make -C tools/loadgen/deploy run-max-rps WORKLOAD=history PRESET=history-medium 
 
 | Flag | Default | Notes |
 |------|---------|-------|
-| `--workload` | `messages` | `messages`, `history`, or `read-receipt` |
+| `--workload` | `messages` | `messages`, `history`, `read-receipt`, `room-read`, or `thread-read` |
 | `--preset` | (required) | an existing preset for the chosen workload (`read-receipt` reuses the history presets) |
 | `--steps` | messages `500,1k,2k,5k,10k` / history+read-receipt `200,500,1k,2k,5k` | explicit ordered RPS list; `k` suffix = ×1000 |
-| `--request-timeout` | `5s` | **history / read-receipt**: per-request reply timeout |
+| `--request-timeout` | `5s` | **history / read-receipt / room-read / thread-read**: per-request reply timeout |
 | `--warmup` | `10s` | per-step warmup (samples discarded) |
 | `--hold` | `30s` | per-step measurement window |
 | `--cooldown` | `5s` | per-step settle gap before next step |

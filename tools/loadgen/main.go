@@ -130,7 +130,7 @@ func dispatch(ctx context.Context, cfg *config) int {
 
 func runSeed(ctx context.Context, cfg *config, args []string) int {
 	fs := flag.NewFlagSet("seed", flag.ExitOnError)
-	workload := fs.String("workload", "messages", "messages|thread|members|history|read-receipt|room-read|botroom")
+	workload := fs.String("workload", "messages", "messages|thread|members|history|read-receipt|room-read|thread-read|botroom")
 	preset := fs.String("preset", "", "preset name")
 	seed := fs.Int64("seed", 42, "RNG seed")
 	readRatio := fs.Float64("read-ratio", 0.7, "read-receipt only: fraction of each room's subscribers to mark as readers")
@@ -159,6 +159,8 @@ func runSeed(ctx context.Context, cfg *config, args []string) int {
 		return runSeedReadReceipt(ctx, cfg, *preset, *seed, *readRatio)
 	case "room-read":
 		return runSeedRoomRead(ctx, cfg, *preset, *seed)
+	case "thread-read":
+		return runSeedHistory(ctx, cfg, *preset, *seed)
 	case "botroom":
 		return runSeedBotRoom(ctx, cfg, *preset, *seed)
 	default:
@@ -286,7 +288,7 @@ func runTeardownBotRoom(ctx context.Context, cfg *config, preset string, seed in
 
 func runTeardown(ctx context.Context, cfg *config, args []string) int {
 	fs := flag.NewFlagSet("teardown", flag.ExitOnError)
-	workload := fs.String("workload", "messages", "messages|thread|members|history|room-read|botroom")
+	workload := fs.String("workload", "messages", "messages|thread|members|history|room-read|thread-read|botroom")
 	preset := fs.String("preset", "", "preset name (required to identify which room keys to delete)")
 	seed := fs.Int64("seed", 42, "RNG seed (must match the seed used at seed time)")
 	_ = fs.Parse(args)
@@ -305,6 +307,8 @@ func runTeardown(ctx context.Context, cfg *config, args []string) int {
 		return runTeardownHistory(ctx, cfg, *preset, *seed)
 	case "room-read":
 		return runTeardownRoomRead(ctx, cfg, *preset, *seed)
+	case "thread-read":
+		return runTeardownHistory(ctx, cfg, *preset, *seed)
 	case "botroom":
 		return runTeardownBotRoom(ctx, cfg, *preset, *seed)
 	default:
