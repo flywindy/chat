@@ -1146,3 +1146,10 @@ func MigrationOplog(siteID, collection, op string) string {
 func MigrationOplogWildcard(siteID string) string {
 	return fmt.Sprintf("chat.oplog.%s.>", siteID)
 }
+
+// OrgSyncEmployeesUpsert is the subject search-sync-worker's spotlight-org
+// collection consumes from; hr-syncer publishes on the same subject at the
+// central site.
+func OrgSyncEmployeesUpsert(centralSiteID string) string {
+	return fmt.Sprintf("chat.hr.%s.employees.upsert", centralSiteID)
+}

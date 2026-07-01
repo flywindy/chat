@@ -157,8 +157,8 @@ func TestSpotlightSync_Integration(t *testing.T) {
 	require.NoError(t, err)
 	waitForClusterGreen(t, esURL, 120*time.Second)
 
-	coll := newSpotlightCollection(indexName)
-	require.NoError(t, engine.UpsertTemplate(ctx, coll.TemplateName(), overrideIndexSettings(spotlightTemplateBody(indexName))))
+	coll := newSpotlightCollection(indexName, true)
+	require.NoError(t, engine.UpsertTemplate(ctx, coll.TemplateName(), overrideIndexSettings(coll.TemplateBody())))
 	preCreateIndex(t, esURL, indexName)
 	waitForClusterGreen(t, esURL, 120*time.Second)
 
@@ -249,8 +249,8 @@ func TestSpotlightSync_BulkInvite(t *testing.T) {
 	require.NoError(t, err)
 	waitForClusterGreen(t, esURL, 120*time.Second)
 
-	coll := newSpotlightCollection(indexName)
-	require.NoError(t, engine.UpsertTemplate(ctx, coll.TemplateName(), overrideIndexSettings(spotlightTemplateBody(indexName))))
+	coll := newSpotlightCollection(indexName, true)
+	require.NoError(t, engine.UpsertTemplate(ctx, coll.TemplateName(), overrideIndexSettings(coll.TemplateBody())))
 	preCreateIndex(t, esURL, indexName)
 	waitForClusterGreen(t, esURL, 120*time.Second)
 

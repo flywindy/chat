@@ -80,3 +80,13 @@ func MigrationOplog(siteID string) Config {
 		Subjects: []string{subject.MigrationOplogWildcard(siteID)},
 	}
 }
+
+// OrgSyncStream is the HR_{centralSiteID} stream populated by hr-syncer's
+// daily publishes on chat.hr.{centralSiteID}.>. hr-syncer runs at one
+// central site; every fab site's search-sync-worker consumes from it.
+func OrgSyncStream(centralSiteID string) Config {
+	return Config{
+		Name:     fmt.Sprintf("HR_%s", centralSiteID),
+		Subjects: []string{fmt.Sprintf("chat.hr.%s.>", centralSiteID)},
+	}
+}

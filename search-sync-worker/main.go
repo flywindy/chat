@@ -53,7 +53,10 @@ type config struct {
 	SearchTLSSkipVerify bool   `env:"SEARCH_TLS_SKIP_VERIFY" envDefault:"false"`
 	MsgIndexPrefix      string `env:"MSG_INDEX_PREFIX,required"`
 	SpotlightIndex      string `env:"SPOTLIGHT_INDEX,required"`
+	SpotlightOrgIndex   string `env:"SPOTLIGHT_ORG_INDEX,required"`
+	HRCentralSiteID     string `env:"HR_CENTRAL_SITE_ID,required"`
 	UserRoomIndex       string `env:"USER_ROOM_INDEX,required"`
+	DevMode             bool   `env:"DEV_MODE" envDefault:"false"`
 	HealthAddr          string `env:"HEALTH_ADDR" envDefault:":8081"`
 	PProfEnabled        bool   `env:"PPROF_ENABLED" envDefault:"false"`
 
@@ -128,6 +131,10 @@ func main() {
 		slog.Error("invalid config", "name", "SPOTLIGHT_INDEX", "value", cfg.SpotlightIndex, "reason", "must end with -v<N>, e.g. spotlight-site-a-v1")
 		os.Exit(1)
 	}
+	if _, _, ok := searchindex.StripVersion(cfg.SpotlightOrgIndex); !ok {
+		slog.Error("invalid config", "name", "SPOTLIGHT_ORG_INDEX", "value", cfg.SpotlightOrgIndex, "reason", "must end with -v<N>, e.g. spotlightorg-site-a-v1")
+		os.Exit(1)
+	}
 	syncMessagesFrom, err := parseSyncMessagesFrom(cfg.SyncMessagesFrom)
 	if err != nil {
 		slog.Error("invalid config", "name", "SYNC_MESSAGES_FROM", "value", cfg.SyncMessagesFrom, "error", err)
@@ -164,14 +171,15 @@ func main() {
 		os.Exit(1)
 	}
 
-	msgColl := newMessageCollection(cfg.MsgIndexPrefix, syncMessagesFrom)
+	msgColl := newMessageCollection(cfg.MsgIndexPrefix, syncMessagesFrom, cfg.DevMode)
 	// search-service filters restricted-room access by threadParentMessageCreatedAt,
 	// so re-resolve it from the parent's indexed createdAt (the event omits it).
 	msgColl.parentResolver = newESParentResolver(engine, cfg.MsgIndexPrefix)
 
 	collections := []Collection{
 		msgColl,
-		newSpotlightCollection(cfg.SpotlightIndex),
+		newSpotlightCollection(cfg.SpotlightIndex, cfg.DevMode),
+		newSpotlightOrgCollection(cfg.SpotlightOrgIndex, cfg.SiteID, cfg.HRCentralSiteID, cfg.DevMode),
 		newUserRoomCollection(cfg.UserRoomIndex),
 	}
 
@@ -221,15 +229,18 @@ func main() {
 	// we don't redundantly call CreateOrUpdateStream per collection.
 	createdStreams := make(map[string]struct{}, len(collections))
 
-	// INBOX is owned by inbox-worker — see the skip in the loop below.
+	// INBOX is owned by inbox-worker; HR is owned by hr-syncer.
+	// search-sync-worker is a pure consumer of both and must not create
+	// their schemas.
 	inboxName := stream.Inbox(cfg.SiteID).Name
+	hrName := stream.OrgSyncStream(cfg.HRCentralSiteID).Name
 
 	for _, coll := range collections {
 		streamCfg := coll.StreamConfig(cfg.SiteID)
-		// Skip INBOX bootstrap — inbox-worker owns its schema, ops/IaC
-		// owns its federation. Consumer creation still runs for
-		// INBOX-based collections (spotlight, user-room).
-		if cfg.Bootstrap.Enabled && streamCfg.Name != inboxName {
+		// Skip INBOX and HR bootstrap — those streams are owned by other
+		// services (inbox-worker / hr-syncer). Consumer creation still
+		// runs for collections that read from them.
+		if cfg.Bootstrap.Enabled && streamCfg.Name != inboxName && streamCfg.Name != hrName {
 			if _, alreadyCreated := createdStreams[streamCfg.Name]; !alreadyCreated {
 				if _, err := js.CreateOrUpdateStream(ctx, streamCfg); err != nil {
 					slog.Error("create stream failed", "stream", streamCfg.Name, "error", err)

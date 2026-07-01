@@ -18,10 +18,11 @@ import (
 type spotlightCollection struct {
 	inboxMemberCollection
 	indexName string
+	devMode   bool
 }
 
-func newSpotlightCollection(indexName string) *spotlightCollection {
-	return &spotlightCollection{indexName: indexName}
+func newSpotlightCollection(indexName string, devMode bool) *spotlightCollection {
+	return &spotlightCollection{indexName: indexName, devMode: devMode}
 }
 
 func (c *spotlightCollection) ConsumerName() string {
@@ -33,7 +34,7 @@ func (c *spotlightCollection) TemplateName() string {
 }
 
 func (c *spotlightCollection) TemplateBody() json.RawMessage {
-	return spotlightTemplateBody(c.indexName)
+	return spotlightTemplateBody(c.indexName, c.devMode)
 }
 
 // BuildAction fans a member_added / member_removed event out into one ES
@@ -127,14 +128,20 @@ func newSpotlightSearchIndex(account string, evt *model.InboxMemberEvent) Spotli
 // spotlightTemplateBody builds the ES index template. The wildcard
 // index_patterns lets a single template cover the current versioned
 // index and any future reindex targets.
-func spotlightTemplateBody(indexName string) json.RawMessage {
+func spotlightTemplateBody(indexName string, devMode bool) json.RawMessage {
+	shards := 3
+	replicas := 1
+	if devMode {
+		shards = 1
+		replicas = 0
+	}
 	tmpl := map[string]any{
 		"index_patterns": []string{fmt.Sprintf("%s-*", searchindex.StripVersionBase(indexName))},
 		"template": map[string]any{
 			"settings": map[string]any{
 				"index": map[string]any{
-					"number_of_shards":   3,
-					"number_of_replicas": 1,
+					"number_of_shards":   shards,
+					"number_of_replicas": replicas,
 				},
 				"analysis": map[string]any{
 					"analyzer": map[string]any{

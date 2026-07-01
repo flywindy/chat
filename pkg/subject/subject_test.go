@@ -914,3 +914,8 @@ func TestTeamsSubjectBuilders(t *testing.T) {
 		assert.Equal(t, "chat.user.{account}.request.teams.site-a.call.user", subject.TeamsUserCallPattern("site-a"))
 	})
 }
+
+func TestOrgSyncEmployeesUpsert(t *testing.T) {
+	got := subject.OrgSyncEmployeesUpsert("site-a")
+	assert.Equal(t, "chat.hr.site-a.employees.upsert", got)
+}

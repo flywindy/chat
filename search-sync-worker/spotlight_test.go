@@ -46,7 +46,7 @@ func baseInboxMemberEvent() *model.InboxMemberEvent {
 }
 
 func TestSpotlightCollection_Metadata(t *testing.T) {
-	coll := newSpotlightCollection("spotlight-site-a-v1-chat")
+	coll := newSpotlightCollection("spotlight-site-a-v1-chat", false)
 
 	assert.Equal(t, "spotlight-sync", coll.ConsumerName())
 
@@ -68,17 +68,17 @@ func TestSpotlightCollection_Metadata(t *testing.T) {
 }
 
 func TestSpotlightCollection_StoredScripts(t *testing.T) {
-	coll := newSpotlightCollection("spotlight-site-a-v1")
+	coll := newSpotlightCollection("spotlight-site-a-v1", false)
 	assert.Empty(t, coll.StoredScripts(), "spotlight collection uses no stored scripts")
 }
 
 func TestSpotlightCollection_TemplateName_StripsVersion(t *testing.T) {
-	c := newSpotlightCollection("spotlight-site-a-v1")
+	c := newSpotlightCollection("spotlight-site-a-v1", false)
 	assert.Equal(t, "spotlight-site-a_template", c.TemplateName())
 }
 
 func TestSpotlightCollection_TemplateBody_PatternStripsVersion(t *testing.T) {
-	c := newSpotlightCollection("spotlight-site-a-v1")
+	c := newSpotlightCollection("spotlight-site-a-v1", false)
 	body := c.TemplateBody()
 	require.NotNil(t, body)
 
@@ -124,7 +124,7 @@ func TestSpotlightTemplateProperties_MatchesStruct(t *testing.T) {
 }
 
 func TestSpotlightCollection_BuildAction_MemberAdded(t *testing.T) {
-	coll := newSpotlightCollection("spotlight-site-a-v1-chat")
+	coll := newSpotlightCollection("spotlight-site-a-v1-chat", false)
 	payload := baseInboxMemberEvent()
 	data := makeInboxMemberEvent(t, model.InboxMemberAdded, payload, 1000)
 
@@ -151,7 +151,7 @@ func TestSpotlightCollection_BuildAction_MemberAdded(t *testing.T) {
 }
 
 func TestSpotlightCollection_BuildAction_MemberRemoved(t *testing.T) {
-	coll := newSpotlightCollection("spotlight-site-a-v1-chat")
+	coll := newSpotlightCollection("spotlight-site-a-v1-chat", false)
 	payload := baseInboxMemberEvent()
 	data := makeInboxMemberEvent(t, model.InboxMemberRemoved, payload, 2000)
 
@@ -170,7 +170,7 @@ func TestSpotlightCollection_BuildAction_MemberRemoved(t *testing.T) {
 func TestSpotlightCollection_BuildAction_RestrictedRoomIndexedLikeAnyOther(t *testing.T) {
 	// See spotlightCollection.BuildAction docstring for the room-name
 	// vs message-content access boundary.
-	coll := newSpotlightCollection("spotlight-site-a-v1-chat")
+	coll := newSpotlightCollection("spotlight-site-a-v1-chat", false)
 	payload := baseInboxMemberEvent()
 	payload.Accounts = []string{"alice", "bob"}
 	hss := int64(1735689500000)
@@ -205,7 +205,7 @@ func TestSpotlightCollection_BuildAction_RestrictedRoomIndexedLikeAnyOther(t *te
 }
 
 func TestSpotlightCollection_BuildAction_Errors(t *testing.T) {
-	coll := newSpotlightCollection("spotlight-site-a-v1-chat")
+	coll := newSpotlightCollection("spotlight-site-a-v1-chat", false)
 
 	t.Run("malformed inbox event", func(t *testing.T) {
 		_, err := coll.BuildAction([]byte("{invalid"))
@@ -264,7 +264,7 @@ func TestSpotlightCollection_BuildAction_Errors(t *testing.T) {
 // event carrying N accounts produces N index actions, all sharing the same
 // external Version (event timestamp).
 func TestSpotlightCollection_BuildAction_BulkInvite(t *testing.T) {
-	coll := newSpotlightCollection("spotlight-site-a-v1-chat")
+	coll := newSpotlightCollection("spotlight-site-a-v1-chat", false)
 	payload := baseInboxMemberEvent()
 	payload.Accounts = []string{"alice", "bob", "carol"}
 	data := makeInboxMemberEvent(t, model.InboxMemberAdded, payload, 12345)
@@ -291,7 +291,7 @@ func TestSpotlightCollection_BuildAction_BulkInvite(t *testing.T) {
 // TestSpotlightCollection_BuildAction_BulkRemove verifies fan-out on remove:
 // N accounts → N delete actions.
 func TestSpotlightCollection_BuildAction_BulkRemove(t *testing.T) {
-	coll := newSpotlightCollection("spotlight-site-a-v1-chat")
+	coll := newSpotlightCollection("spotlight-site-a-v1-chat", false)
 	payload := baseInboxMemberEvent()
 	payload.Accounts = []string{"alice", "bob"}
 	data := makeInboxMemberEvent(t, model.InboxMemberRemoved, payload, 67890)

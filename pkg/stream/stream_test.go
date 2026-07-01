@@ -25,6 +25,7 @@ func TestStreamConfigs(t *testing.T) {
 		{"MessagesCanonical", stream.MessagesCanonical(siteID), "MESSAGES_CANONICAL_site-a", "chat.msg.canonical.site-a.>"},
 		{"Rooms", stream.Rooms(siteID), "ROOMS_site-a", "chat.room.canonical.site-a.>"},
 		{"PushNotification", stream.PushNotification(siteID), "PUSH_NOTIFICATION_site-a", "chat.server.notification.push.site-a.>"},
+		{"OrgSyncStream", stream.OrgSyncStream(siteID), "HR_site-a", "chat.hr.site-a.>"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

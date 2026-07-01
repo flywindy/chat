@@ -58,7 +58,7 @@ func TestMessageCollection_BuildAction_ReresolvesThreadParent(t *testing.T) {
 
 	t.Run("overwrites client value when resolved", func(t *testing.T) {
 		resolver := &fakeParentResolver{val: authoritative, ok: true}
-		coll := newMessageCollection("msgs-v1", time.Time{})
+		coll := newMessageCollection("msgs-v1", time.Time{}, false)
 		coll.parentResolver = resolver
 
 		actions, err := coll.BuildAction(threadReplyData(t, model.EventCreated, clientVal))
@@ -72,7 +72,7 @@ func TestMessageCollection_BuildAction_ReresolvesThreadParent(t *testing.T) {
 
 	t.Run("keeps client value when resolver returns ok=false", func(t *testing.T) {
 		resolver := &fakeParentResolver{ok: false}
-		coll := newMessageCollection("msgs-v1", time.Time{})
+		coll := newMessageCollection("msgs-v1", time.Time{}, false)
 		coll.parentResolver = resolver
 
 		actions, err := coll.BuildAction(threadReplyData(t, model.EventCreated, clientVal))
@@ -84,7 +84,7 @@ func TestMessageCollection_BuildAction_ReresolvesThreadParent(t *testing.T) {
 
 	t.Run("does not resolve a non-thread message", func(t *testing.T) {
 		resolver := &fakeParentResolver{val: authoritative, ok: true}
-		coll := newMessageCollection("msgs-v1", time.Time{})
+		coll := newMessageCollection("msgs-v1", time.Time{}, false)
 		coll.parentResolver = resolver
 
 		evt := model.MessageEvent{
@@ -101,7 +101,7 @@ func TestMessageCollection_BuildAction_ReresolvesThreadParent(t *testing.T) {
 
 	t.Run("does not resolve a delete", func(t *testing.T) {
 		resolver := &fakeParentResolver{val: authoritative, ok: true}
-		coll := newMessageCollection("msgs-v1", time.Time{})
+		coll := newMessageCollection("msgs-v1", time.Time{}, false)
 		coll.parentResolver = resolver
 
 		_, err := coll.BuildAction(threadReplyData(t, model.EventDeleted, clientVal))
@@ -110,7 +110,7 @@ func TestMessageCollection_BuildAction_ReresolvesThreadParent(t *testing.T) {
 	})
 
 	t.Run("nil resolver keeps client value (feature off)", func(t *testing.T) {
-		coll := newMessageCollection("msgs-v1", time.Time{})
+		coll := newMessageCollection("msgs-v1", time.Time{}, false)
 		actions, err := coll.BuildAction(threadReplyData(t, model.EventCreated, clientVal))
 		require.NoError(t, err)
 		got := indexedThreadParentCreatedAt(t, actions[0].Doc)

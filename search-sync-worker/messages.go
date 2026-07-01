@@ -33,13 +33,14 @@ type parentCreatedAtResolver interface {
 type messageCollection struct {
 	indexPrefix string
 	syncFrom    time.Time
+	devMode     bool
 	// parentResolver re-resolves the thread parent's createdAt from ES before
 	// indexing (search-service needs it for restricted-room access); nil disables it.
 	parentResolver parentCreatedAtResolver
 }
 
-func newMessageCollection(indexPrefix string, syncFrom time.Time) *messageCollection {
-	return &messageCollection{indexPrefix: indexPrefix, syncFrom: syncFrom}
+func newMessageCollection(indexPrefix string, syncFrom time.Time, devMode bool) *messageCollection {
+	return &messageCollection{indexPrefix: indexPrefix, syncFrom: syncFrom, devMode: devMode}
 }
 
 func (c *messageCollection) StreamConfig(siteID string) jetstream.StreamConfig {
@@ -64,7 +65,7 @@ func (c *messageCollection) TemplateName() string {
 }
 
 func (c *messageCollection) TemplateBody() json.RawMessage {
-	return messageTemplateBody(c.indexPrefix)
+	return messageTemplateBody(c.indexPrefix, c.devMode)
 }
 
 // StoredScripts returns nil — message indexing uses plain index/delete bulk
@@ -193,14 +194,20 @@ func messageTemplateProperties() map[string]any {
 	return esPropertiesFromStruct[MessageSearchIndex]()
 }
 
-func messageTemplateBody(prefix string) json.RawMessage {
+func messageTemplateBody(prefix string, devMode bool) json.RawMessage {
+	shards := 4
+	replicas := 2
+	if devMode {
+		shards = 1
+		replicas = 0
+	}
 	tmpl := map[string]any{
 		"index_patterns": []string{fmt.Sprintf("%s-*", searchindex.StripVersionBase(prefix))},
 		"template": map[string]any{
 			"settings": map[string]any{
 				"index": map[string]any{
-					"number_of_shards":   4,
-					"number_of_replicas": 2,
+					"number_of_shards":   shards,
+					"number_of_replicas": replicas,
 					"refresh_interval":   "30s",
 				},
 				"analysis": map[string]any{
