@@ -804,6 +804,7 @@ The room **type is inferred server-side** from the payload shape — the client 
 
 - `name` set → `channel`
 - `name` empty + exactly one entry in `users` → `dm` (or `botDM` if that user is a bot)
+- `name` empty + `users` is just the caller (e.g. `[caller]` or empty) → **self-DM** (note-to-self): a single-member `dm` room, created through the same async path as any other room. The subscription is **favorited**, and it is **one-per-user** — a repeat create returns the existing room with `status: "exists"`.
 
 The creator's account and the site come from the subject (`chat.user.{account}.request.room.{siteID}.create`); the client does not pass them in the body.
 
@@ -812,7 +813,7 @@ The creator's account and the site come from the subject (`chat.user.{account}.r
 | Field | Type | Required | Notes |
 |---|---|---|---|
 | `name` | string | channels | Channel name (≤ 100 chars). Required to create a channel; leave empty for a DM/botDM. |
-| `users` | string[] | no | Internal user IDs (or accounts) to enroll. For a DM, exactly one entry (the other user). Channel creates reject a bot account here with `"bots cannot be added to a channel"`, and any account with no matching user document with `user "<account>": user not found`. |
+| `users` | string[] | no | Internal user IDs (or accounts) to enroll. For a DM, exactly one entry (the other user); for a **self-DM**, the caller themselves (it must be present — an otherwise-empty request is rejected as empty). Channel creates reject a bot account here with `"bots cannot be added to a channel"`, and any account with no matching user document with `user "<account>": user not found`. |
 | `orgs` | string[] | no | `channel` only. Org IDs to enroll (expanded server-side to all org members). Any entry matching zero users is rejected with `org "<orgId>": invalid org`. |
 | `channels` | array<ChannelRef> | no | `channel` only. Other channels whose members are copied in. Each entry is `{ "roomId": string, "siteId": string }`. |
 
@@ -832,14 +833,14 @@ The creator's account and the site come from the subject (`chat.user.{account}.r
 | Field | Type | Notes |
 |---|---|---|
 | `status` | string | Always `"accepted"`. |
-| `roomId` | string | The new room's ID. Channel: 17-char base62. DM/botDM: sorted concat of the two account IDs. |
+| `roomId` | string | The new room's ID. Channel: 17-char base62. DM/botDM: sorted concat of the two internal user IDs. Self-DM: the requester's own user ID concatenated with itself (deterministic). |
 | `roomType` | string | `channel`, `dm`, or `botDM`. |
 
 ```json
 { "status": "accepted", "roomId": "01970a4f8c2d7c9aQ", "roomType": "channel" }
 ```
 
-**DM already exists.** When the client asks to create a DM/botDM that already exists, the reply is a SUCCESS reply carrying the existing room ID (open-or-create contract — the client opens the existing room):
+**DM already exists.** When the client asks to create a DM/botDM that already exists — or repeats a **self-DM** create (one self-DM per user) — the reply is a SUCCESS reply carrying the existing room ID (open-or-create contract — the client opens the existing room):
 
 ```json
 { "status": "exists", "roomId": "<existing room id>" }
@@ -855,7 +856,6 @@ See [Error envelope](#6-error-envelope-reference). Returned synchronously on val
 - `"X-Request-ID header is required …"` (`bad_request`, reason `request_id_required`) — the `X-Request-ID` header is absent or not a valid hyphenated UUID
 - `"request must include at least one of users, orgs, channels, or name"`
 - `"channel name is required"` / `"channel name must be at most 100 characters"`
-- `"cannot create a DM with yourself"`
 - `"bots cannot be added to a channel"` / `"bot not available"` (botDM target whose assistant is disabled)
 - `user "<account>": user not found` / `org "<orgId>": invalid org` (each wrapped with the offending account/org ID)
 - `"user is missing required name fields"`

@@ -1227,6 +1227,56 @@ func buildSelfDMSub(user *model.User, room *model.Room, joinedAt time.Time) *mod
 	return sub
 }
 
+// createSelfDM builds the caller's single-member self-DM (note-to-self): one
+// favorited subscription in a single-member dm room, no inbox. Reached only from
+// processCreateRoom (the async room.create path) when the counterpart is the
+// requester. The room id is the deterministic id room-service supplied, so a
+// JetStream redelivery hits the same room and the upserts are idempotent.
+// createSelfDM builds the caller's single-member self-DM room + favorited
+// subscription, provisions its at-rest DEK, and publishes the subscription
+// update; it returns the persisted subscription. Shared by both create paths:
+// the async room.create worker (which ignores the returned sub) and the
+// server-server RPC (which returns it in the reply). roomID is the deterministic
+// self-DM id (BuildDMRoomID(uid, uid)), so a JetStream redelivery hits the same
+// room and the upserts stay idempotent.
+func (h *Handler) createSelfDM(ctx context.Context, roomID string, requester *model.User, requestID string, acceptedAt time.Time) (*model.Subscription, error) {
+	room := &model.Room{
+		ID:        roomID,
+		Type:      model.RoomTypeDM,
+		SiteID:    h.siteID,
+		UserCount: 1,
+		UIDs:      []string{requester.ID},
+		Accounts:  []string{requester.Account},
+		CreatedAt: acceptedAt,
+		UpdatedAt: acceptedAt,
+	}
+	// Provision the room's at-rest DEK before persisting it (same as the 2-party DM
+	// path): self-DM messages are stored encrypted in Cassandra, so a Vault outage
+	// must fail creation rather than persist a room whose DEK is absent. Idempotent
+	// on JetStream redelivery.
+	if h.dekProvisioner != nil {
+		if err := h.dekProvisioner.EnsureDEK(ctx, room.ID); err != nil {
+			return nil, fmt.Errorf("provision at-rest DEK for self-DM room %s: %w", room.ID, err)
+		}
+	}
+	// Self-DM rooms fan out to a per-user subject only, so they are never encrypted
+	// and carry no room key (nil).
+	if _, err := h.store.CreateRoom(ctx, room, nil); err != nil {
+		return nil, fmt.Errorf("create self-DM room: %w", err)
+	}
+	if err := h.store.BulkCreateSubscriptions(ctx, []*model.Subscription{buildSelfDMSub(requester, room, acceptedAt)}); err != nil {
+		return nil, fmt.Errorf("create self-DM subscription: %w", err)
+	}
+	// Re-read the canonical sub: the deterministic id lets a redelivery hit the same
+	// room, so the upserted sub's _id/JoinedAt may differ from the in-memory one.
+	sub, err := h.store.GetSubscription(ctx, requester.Account, room.ID)
+	if err != nil {
+		return nil, fmt.Errorf("re-read self-DM sub after write: %w", err)
+	}
+	h.publishSubscriptionUpdates(ctx, []*model.Subscription{sub}, []*model.User{requester}, requestID)
+	return sub, nil
+}
+
 // newSub constructs a Subscription from its constituent parts.
 func newSub(id string, user *model.User, room *model.Room, roles []model.Role,
 	name string, isSubscribed bool, joinedAt time.Time) *model.Subscription {
@@ -1281,6 +1331,18 @@ func (h *Handler) processCreateRoom(ctx context.Context, data []byte) (err error
 	// debug: the classified room type that drives the create path below.
 	slog.DebugContext(ctx, "room-worker create room",
 		"request_id", requestID, "room_id", req.RoomID, "type", roomType)
+
+	// Validate the DM/botDM payload shape before indexing req.Users below — this is
+	// a deserialization boundary, so don't rely on the classify invariant alone.
+	if (roomType == model.RoomTypeDM || roomType == model.RoomTypeBotDM) && len(req.Users) != 1 {
+		return permanent(errcode.BadRequest("invalid create-room DM payload"))
+	}
+
+	// Self-DM (counterpart is the requester): its own single-member build path.
+	if roomType == model.RoomTypeDM && req.Users[0] == req.RequesterAccount {
+		_, err := h.createSelfDM(ctx, req.RoomID, requester, requestID, acceptedAt)
+		return err
+	}
 
 	room := &model.Room{
 		ID:        req.RoomID,
@@ -1720,9 +1782,11 @@ func (h *Handler) serverCreateDM(c *natsrouter.Context, req model.SyncCreateDMRe
 		return nil, errCrossSiteRequester
 	}
 
-	// Self-DM (requester == counterpart): a single-member room.
+	// Self-DM (requester == counterpart): a single-member room. Server-server is a
+	// distinct create path from the client room.create flow, so it builds the
+	// self-DM room here rather than routing through the async worker.
 	if req.RequesterAccount == req.OtherAccount {
-		return h.createSelfDM(ctx, requester, requestID)
+		return h.serverCreateSelfDM(ctx, requester, requestID)
 	}
 
 	other, ok := byAccount[req.OtherAccount]
@@ -1823,39 +1887,18 @@ func (h *Handler) serverCreateDM(c *natsrouter.Context, req model.SyncCreateDMRe
 	return &model.SyncCreateDMReply{Success: true, Subscription: *requesterSub}, nil
 }
 
-// createSelfDM creates a single-member self-DM: one favorited subscription in a
-// channel-id dm room, no inbox. "One per user" is enforced by the caller.
-func (h *Handler) createSelfDM(ctx context.Context, requester *model.User, requestID string) (*model.SyncCreateDMReply, error) {
-	now := time.Now().UTC() // one stamp for room + sub; random id means no retry-idempotency concern.
-	room := &model.Room{
-		ID:        idgen.GenerateID(),
-		Type:      model.RoomTypeDM,
-		SiteID:    h.siteID,
-		UserCount: 1,
-		UIDs:      []string{requester.ID},
-		Accounts:  []string{requester.Account},
-		CreatedAt: now,
-		UpdatedAt: now,
+// serverCreateSelfDM creates a single-member self-DM (note-to-self) for the
+// server-server path: one favorited subscription in a single-member dm room, no
+// inbox. "One per user" is enforced by the caller. Mirrors serverCreateDM's
+// at-rest DEK provisioning so a Vault outage fails creation rather than leaving a
+// DEK-less room.
+func (h *Handler) serverCreateSelfDM(ctx context.Context, requester *model.User, requestID string) (*model.SyncCreateDMReply, error) {
+	// Same deterministic self-DM id and build path as the async room.create flow.
+	roomID := idgen.BuildDMRoomID(requester.ID, requester.ID)
+	sub, err := h.createSelfDM(ctx, roomID, requester, requestID, time.Now().UTC())
+	if err != nil {
+		return nil, err
 	}
-	// Provision the at-rest DEK before persisting the room (see serverCreateDM).
-	if h.dekProvisioner != nil {
-		if err := h.dekProvisioner.EnsureDEK(ctx, room.ID); err != nil {
-			return nil, fmt.Errorf("provision at-rest DEK for self-DM room %s: %w", room.ID, err)
-		}
-	}
-	// Self-DM rooms fan out to a per-user subject only, so they are never
-	// encrypted and carry no room key (nil). Fresh random id means a pure insert.
-	if _, err := h.store.CreateRoom(ctx, room, nil); err != nil {
-		return nil, fmt.Errorf("create self-DM room %s for %s: %w", room.ID, requester.Account, err)
-	}
-
-	sub := buildSelfDMSub(requester, room, now)
-	if err := h.store.BulkCreateSubscriptions(ctx, []*model.Subscription{sub}); err != nil {
-		return nil, fmt.Errorf("create self-DM subscription: %w", err)
-	}
-
-	// No read-back: a fresh room id means a pure insert, so sub is what persisted.
-	h.publishSubscriptionUpdates(ctx, []*model.Subscription{sub}, []*model.User{requester}, requestID)
 	return &model.SyncCreateDMReply{Success: true, Subscription: *sub}, nil
 }
 

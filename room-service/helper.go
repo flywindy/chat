@@ -45,7 +45,6 @@ var (
 
 	// Sentinels for create-room validation.
 	errEmptyCreateRequest  = errcode.BadRequest("request must include at least one of users, orgs, channels, or name")
-	errSelfDM              = errcode.BadRequest("cannot create a DM with yourself", errcode.WithReason(errcode.RoomSelfDM))
 	errBotInChannel        = errcode.BadRequest("bots cannot be added to a channel", errcode.WithReason(errcode.RoomBotInChannel))
 	errBotNotAvailable     = errcode.NotFound("bot not available", errcode.WithReason(errcode.RoomBotNotAvailable))
 	errInvalidUserData     = errcode.BadRequest("user is missing required name fields")

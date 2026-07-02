@@ -2335,17 +2335,52 @@ func TestHandleCreateRoom_RequesterMissingNameFields(t *testing.T) {
 	assert.True(t, errors.Is(err, errInvalidUserData))
 }
 
-func TestHandleCreateRoom_SelfDMRejected(t *testing.T) {
-	// Self-DM is caught by classifyAndValidate before any DB lookup, so no GetUser
-	// expectation is set — the gomock controller would flag the unexpected call
-	// if validation regressed.
+func TestHandleCreateRoom_SelfDM_Creates(t *testing.T) {
+	// A self-DM intent ([requester] only) publishes a canonical create event with
+	// the deterministic self-DM room id, same async path as a 2-party DM.
 	ctrl := gomock.NewController(t)
 	store := NewMockRoomStore(ctrl)
-	h := &Handler{store: store, siteID: "site-a", maxRoomSize: 1000}
+	store.EXPECT().GetUser(gomock.Any(), "alice").Return(aliceUser(), nil)
+	store.EXPECT().FindDMSubscription(gomock.Any(), "alice", "alice").Return(nil, model.ErrSubscriptionNotFound)
 
-	_, err := h.createRoom(ctxParams(map[string]string{"account": "alice"}), model.CreateRoomRequest{Users: []string{"alice"}})
-	require.Error(t, err)
-	assert.True(t, errors.Is(err, errSelfDM))
+	var published model.CreateRoomRequest
+	h := &Handler{store: store, siteID: "site-a", maxRoomSize: 1000,
+		publishToStream: func(_ context.Context, _ string, data []byte, _ string) error {
+			return json.Unmarshal(data, &published)
+		},
+	}
+
+	reply, err := h.createRoom(ctxParams(map[string]string{"account": "alice"}), model.CreateRoomRequest{Users: []string{"alice"}})
+	require.NoError(t, err)
+	wantID := idgen.BuildDMRoomID("u-alice", "u-alice")
+	assert.Equal(t, wantID, reply.RoomID)
+	assert.Equal(t, model.CreateRoomReplyAccepted, reply.Status)
+	assert.Equal(t, string(model.RoomTypeDM), reply.RoomType)
+	// The published event carries the self id + the requester as the lone user.
+	assert.Equal(t, wantID, published.RoomID)
+	assert.Equal(t, []string{"alice"}, published.Users)
+}
+
+func TestHandleCreateRoom_SelfDM_Idempotent(t *testing.T) {
+	// Repeat create with an existing self-DM returns the same room and never
+	// publishes (one-per-user).
+	ctrl := gomock.NewController(t)
+	store := NewMockRoomStore(ctrl)
+	store.EXPECT().GetUser(gomock.Any(), "alice").Return(aliceUser(), nil)
+	store.EXPECT().FindDMSubscription(gomock.Any(), "alice", "alice").
+		Return(&model.Subscription{RoomID: "room-self"}, nil)
+
+	h := &Handler{store: store, siteID: "site-a", maxRoomSize: 1000,
+		publishToStream: func(_ context.Context, _ string, _ []byte, _ string) error {
+			t.Fatal("publish must not be called when the self-DM already exists")
+			return nil
+		},
+	}
+
+	reply, err := h.createRoom(ctxParams(map[string]string{"account": "alice"}), model.CreateRoomRequest{Users: []string{"alice"}})
+	require.NoError(t, err)
+	assert.Equal(t, "room-self", reply.RoomID)
+	assert.Equal(t, model.CreateRoomStatusExists, reply.Status)
 }
 
 func TestHandleCreateRoom_DM_HappyPath(t *testing.T) {

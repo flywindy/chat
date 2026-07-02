@@ -81,7 +81,6 @@ func TestSentinelCodesAndReasons(t *testing.T) {
 		{"thread sub not found", errThreadSubNotFound, errcode.CodeNotFound, ""},
 		{"promote requires individual", errPromoteRequiresIndividual, errcode.CodeBadRequest, errcode.RoomPromoteRequiresIndividual},
 		{"empty create request", errEmptyCreateRequest, errcode.CodeBadRequest, ""},
-		{"self dm", errSelfDM, errcode.CodeBadRequest, errcode.RoomSelfDM},
 		{"bot in channel", errBotInChannel, errcode.CodeBadRequest, errcode.RoomBotInChannel},
 		{"bot not available", errBotNotAvailable, errcode.CodeNotFound, errcode.RoomBotNotAvailable},
 		{"invalid user data", errInvalidUserData, errcode.CodeBadRequest, ""},
@@ -111,7 +110,6 @@ func TestSentinelCodesAndReasons(t *testing.T) {
 
 func TestNewSentinelErrorsExist(t *testing.T) {
 	assert.Equal(t, "request must include at least one of users, orgs, channels, or name", errEmptyCreateRequest.Error())
-	assert.Equal(t, "cannot create a DM with yourself", errSelfDM.Error())
 	assert.Equal(t, "bots cannot be added to a channel", errBotInChannel.Error())
 	assert.Equal(t, "bot not available", errBotNotAvailable.Error())
 	assert.Equal(t, "user is missing required name fields", errInvalidUserData.Error())

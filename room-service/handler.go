@@ -141,6 +141,13 @@ func (h *Handler) createRoom(c *natsrouter.Context, req model.CreateRoomRequest)
 		return nil, errInvalidUserData
 	}
 
+	// A DM with no post-strip counterpart is a self-DM (classifyAndValidate only
+	// emits RoomTypeDM with empty Users for that case). Handle it before the switch
+	// so each switch case stays single-purpose.
+	if roomType == model.RoomTypeDM && len(req.Users) == 0 {
+		return h.handleCreateSelfDM(ctx, &req, requester)
+	}
+
 	switch roomType {
 	case model.RoomTypeChannel:
 		return h.handleCreateRoomChannel(ctx, &req, requester, requesterAccount, roomType)
@@ -172,9 +179,10 @@ func classifyAndValidate(req *model.CreateRoomRequest, requesterAccount string) 
 
 	if req.Name == "" && len(req.Orgs) == 0 && len(req.Channels) == 0 {
 		if len(deduped) == 1 && len(req.Users) == 0 {
-			// Pre-strip set was [requester] and post-strip is empty →
-			// self-DM.
-			return "", errSelfDM
+			// Pre-strip set was [requester] and post-strip is empty → self-DM
+			// (note-to-self). A DM with zero post-strip users is unambiguously
+			// the self case; createRoom routes it to handleCreateSelfDM.
+			return model.RoomTypeDM, nil
 		}
 	}
 
@@ -199,6 +207,30 @@ func classifyAndValidate(req *model.CreateRoomRequest, requesterAccount string) 
 
 // maxChannelNameRunes caps the rune length of a client-supplied channel name.
 const maxChannelNameRunes = 100
+
+// handleCreateSelfDM opens-or-creates the caller's one self-DM (note-to-self)
+// through the same async create path as a 2-party DM: dedup, then publish the
+// canonical create event with the deterministic self-DM room id. room-worker's
+// processCreateRoom builds the single-member room. One-per-user is the same
+// FindDMSubscription dedup the 2-party path uses (and the deterministic id makes
+// a redelivery idempotent on the worker side).
+func (h *Handler) handleCreateSelfDM(ctx context.Context, req *model.CreateRoomRequest, requester *model.User) (*model.CreateRoomReply, error) {
+	existing, err := h.store.FindDMSubscription(ctx, requester.Account, requester.Account)
+	if err == nil && existing != nil {
+		return &model.CreateRoomReply{Status: model.CreateRoomStatusExists, RoomID: existing.RoomID}, nil
+	}
+	if err != nil && !errors.Is(err, model.ErrSubscriptionNotFound) {
+		return nil, fmt.Errorf("self-dm dedup check: %w", err)
+	}
+
+	// Deterministic id (BuildDMRoomID with the requester on both sides); the
+	// requester is its own counterpart, so the worker types this as a DM and
+	// builds a single-member room.
+	req.RoomID = idgen.BuildDMRoomID(requester.ID, requester.ID)
+	req.Users = []string{requester.Account}
+	req.ResolvedUsers = []string{requester.Account}
+	return h.publishCreateRoom(ctx, req, requester, model.RoomTypeDM)
+}
 
 func (h *Handler) handleCreateRoomDMOrBotDM(ctx context.Context, req *model.CreateRoomRequest, requester *model.User, roomType model.RoomType) (*model.CreateRoomReply, error) {
 	otherAccount := req.Users[0]

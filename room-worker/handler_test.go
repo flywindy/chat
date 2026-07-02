@@ -2022,6 +2022,96 @@ func TestProcessCreateRoom_DM_BuildsTwoSubs(t *testing.T) {
 	assert.Empty(t, messagesCanonical(getPublished(), "site-A"))
 }
 
+func TestProcessCreateRoom_SelfDM_BuildsSingleFavoritedSub(t *testing.T) {
+	h, mockStore, getPublished := newCreateRoomTestHandler(t)
+	ctx := natsutil.WithRequestID(context.Background(), testRequestID)
+
+	requester := &model.User{ID: "u_alice", Account: "alice", EngName: "Alice A", ChineseName: "艾麗斯", SiteID: "site-A"}
+	// Self-DM delegates before the counterpart fetch, so the requester is looked up once.
+	mockStore.EXPECT().GetUser(gomock.Any(), "alice").Return(requester, nil)
+
+	var insertedRoom *model.Room
+	mockStore.EXPECT().CreateRoom(gomock.Any(), gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, r *model.Room, _ *roomkeystore.RoomKeyPair) (bool, error) {
+			insertedRoom = r
+			return true, nil
+		})
+
+	var capturedSubs []*model.Subscription
+	mockStore.EXPECT().BulkCreateSubscriptions(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, subs []*model.Subscription) error {
+			capturedSubs = subs
+			return nil
+		})
+	mockStore.EXPECT().GetSubscription(gomock.Any(), "alice", "room-self").
+		DoAndReturn(func(_ context.Context, _, _ string) (*model.Subscription, error) {
+			return capturedSubs[0], nil
+		})
+
+	body := makeCreateRoomBody(t, &model.CreateRoomRequest{
+		RoomID:           "room-self",
+		RequesterAccount: "alice",
+		Users:            []string{"alice"}, // self → single-member DM
+		Timestamp:        time.Now().UnixMilli(),
+	})
+	require.NoError(t, h.processCreateRoom(ctx, body))
+
+	// Single-member room.
+	require.NotNil(t, insertedRoom)
+	assert.Equal(t, model.RoomTypeDM, insertedRoom.Type)
+	assert.Equal(t, []string{"u_alice"}, insertedRoom.UIDs)
+	assert.Equal(t, []string{"alice"}, insertedRoom.Accounts)
+
+	// Exactly one favorited, self-named subscription.
+	require.Len(t, capturedSubs, 1)
+	assert.Equal(t, "u_alice", capturedSubs[0].User.ID)
+	assert.Equal(t, "alice", capturedSubs[0].Name)
+	assert.Equal(t, model.RoomTypeDM, capturedSubs[0].RoomType)
+	assert.True(t, capturedSubs[0].Favorite)
+
+	// No sys messages for a DM.
+	assert.Empty(t, messagesCanonical(getPublished(), "site-A"))
+}
+
+func TestProcessCreateRoom_SelfDM_ProvisionsDEK(t *testing.T) {
+	h, mockStore, _ := newCreateRoomTestHandler(t)
+	prov := &fakeDEKProvisioner{}
+	h.dekProvisioner = prov
+	ctx := natsutil.WithRequestID(context.Background(), testRequestID)
+
+	requester := &model.User{ID: "u_alice", Account: "alice", SiteID: "site-A"}
+	mockStore.EXPECT().GetUser(gomock.Any(), "alice").Return(requester, nil)
+
+	var createdRoomID string
+	mockStore.EXPECT().CreateRoom(gomock.Any(), gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, r *model.Room, _ *roomkeystore.RoomKeyPair) (bool, error) {
+			createdRoomID = r.ID
+			return true, nil
+		})
+	var capturedSubs []*model.Subscription
+	mockStore.EXPECT().BulkCreateSubscriptions(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, subs []*model.Subscription) error {
+			capturedSubs = subs
+			return nil
+		})
+	mockStore.EXPECT().GetSubscription(gomock.Any(), "alice", "room-self").
+		DoAndReturn(func(_ context.Context, _, _ string) (*model.Subscription, error) {
+			return capturedSubs[0], nil
+		})
+
+	body := makeCreateRoomBody(t, &model.CreateRoomRequest{
+		RoomID:           "room-self",
+		RequesterAccount: "alice",
+		Users:            []string{"alice"},
+		Timestamp:        time.Now().UnixMilli(),
+	})
+	require.NoError(t, h.processCreateRoom(ctx, body))
+
+	// EnsureDEK is provisioned with the self-DM room id before the room insert.
+	require.Len(t, prov.calls, 1)
+	assert.Equal(t, createdRoomID, prov.calls[0])
+}
+
 func TestProcessCreateRoom_DM_EmitsNoSysMessages(t *testing.T) {
 	h, mockStore, getPublished := newCreateRoomTestHandler(t)
 	ctx := natsutil.WithRequestID(context.Background(), testRequestID)
@@ -2670,6 +2760,11 @@ func TestHandleSyncCreateDM_SelfDM(t *testing.T) {
 			captured = subs
 			return nil
 		})
+	// Deterministic self-DM id → the sub is re-read after write (shared createSelfDM).
+	store.EXPECT().GetSubscription(gomock.Any(), "alice", gomock.Any()).
+		DoAndReturn(func(_ context.Context, _, _ string) (*model.Subscription, error) {
+			return captured[0], nil
+		})
 
 	req := model.SyncCreateDMRequest{RoomType: model.RoomTypeDM, RequesterAccount: "alice", OtherAccount: "alice"}
 	reply, err := h.serverCreateDM(dmCtx(), req)
@@ -2678,10 +2773,9 @@ func TestHandleSyncCreateDM_SelfDM(t *testing.T) {
 	assert.True(t, reply.Success)
 	assert.True(t, reply.Subscription.Favorite)
 
-	// Single-member room, channel-style id, type dm. No read-back:
-	// GetSubscription / FindDMSubscriptionPair are never called.
+	// Single-member room, deterministic self-DM id (BuildDMRoomID(uid, uid)), type dm.
 	require.NotNil(t, insertedRoom)
-	assert.Len(t, insertedRoom.ID, 17, "channel-style room id")
+	assert.Equal(t, idgen.BuildDMRoomID("u-alice", "u-alice"), insertedRoom.ID)
 	assert.Equal(t, model.RoomTypeDM, insertedRoom.Type)
 	assert.Equal(t, "site-a", insertedRoom.SiteID)
 	assert.Equal(t, 1, insertedRoom.UserCount)
@@ -2698,23 +2792,12 @@ func TestHandleSyncCreateDM_SelfDM(t *testing.T) {
 	assert.True(t, captured[0].IsSubscribed)
 	assert.True(t, captured[0].Favorite)
 
-	// Reply returns the in-memory sub directly (no read-back round-trip).
+	// Reply carries the re-read canonical sub.
 	assert.Equal(t, *captured[0], reply.Subscription)
 
 	// One subscription.update; no inbox (same-site by definition).
 	require.Len(t, capture.captured, 1)
 	assert.Equal(t, subject.SubscriptionUpdate("alice"), capture.captured[0].subject)
-}
-
-func TestHandleSyncCreateDM_SelfBotDMRejected(t *testing.T) {
-	h := &Handler{siteID: "site-a"}
-	req := model.SyncCreateDMRequest{
-		RoomType:         model.RoomTypeBotDM,
-		RequesterAccount: "alice",
-		OtherAccount:     "alice",
-	}
-	_, err := h.serverCreateDM(dmCtx(), req)
-	assert.ErrorIs(t, err, errInvalidSyncDMRequest)
 }
 
 func TestHandleSyncCreateDM_SelfDM_StoreErrors(t *testing.T) {
@@ -2753,6 +2836,50 @@ func TestHandleSyncCreateDM_SelfDM_StoreErrors(t *testing.T) {
 			assert.Empty(t, capture.captured, "no publish on store error")
 		})
 	}
+}
+
+func TestHandleSyncCreateDM_SelfDM_ProvisionsDEK(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	mockStore := NewMockSubscriptionStore(ctrl)
+	mockStore.EXPECT().FindUsersByAccounts(gomock.Any(), gomock.Any()).Return([]model.User{
+		{ID: "u_alice", Account: "alice", SiteID: "site-a"},
+	}, nil)
+	var createdRoomID string
+	mockStore.EXPECT().CreateRoom(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, room *model.Room, _ *roomkeystore.RoomKeyPair) (bool, error) {
+			createdRoomID = room.ID
+			return true, nil
+		})
+	mockStore.EXPECT().BulkCreateSubscriptions(gomock.Any(), gomock.Any()).Return(nil)
+	mockStore.EXPECT().GetSubscription(gomock.Any(), "alice", gomock.Any()).
+		Return(&model.Subscription{RoomID: idgen.BuildDMRoomID("u_alice", "u_alice")}, nil)
+
+	prov := &fakeDEKProvisioner{}
+	h := &Handler{
+		store:          mockStore,
+		siteID:         "site-a",
+		dekProvisioner: prov,
+		publish:        func(context.Context, string, []byte, string) error { return nil },
+	}
+
+	req := model.SyncCreateDMRequest{RequesterAccount: "alice", OtherAccount: "alice", RoomType: model.RoomTypeDM}
+
+	reply, err := h.serverCreateDM(dmCtxWithID("0193abcd-0193-7abc-89ab-0193abcd0011"), req)
+	require.NoError(t, err)
+	require.True(t, reply.Success)
+	require.Len(t, prov.calls, 1)
+	assert.Equal(t, createdRoomID, prov.calls[0], "EnsureDEK must be called with the self-DM room ID")
+}
+
+func TestHandleSyncCreateDM_SelfBotDMRejected(t *testing.T) {
+	h := &Handler{siteID: "site-a"}
+	req := model.SyncCreateDMRequest{
+		RoomType:         model.RoomTypeBotDM,
+		RequesterAccount: "alice",
+		OtherAccount:     "alice",
+	}
+	_, err := h.serverCreateDM(dmCtx(), req)
+	assert.ErrorIs(t, err, errInvalidSyncDMRequest)
 }
 
 func TestHandleSyncCreateDM_RequesterNotFound(t *testing.T) {
@@ -4663,37 +4790,6 @@ type fakeDEKProvisioner struct {
 func (f *fakeDEKProvisioner) EnsureDEK(_ context.Context, roomID string) error {
 	f.calls = append(f.calls, roomID)
 	return f.err
-}
-
-func TestHandleSyncCreateDM_SelfDM_ProvisionsDEK(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	mockStore := NewMockSubscriptionStore(ctrl)
-	mockStore.EXPECT().FindUsersByAccounts(gomock.Any(), gomock.Any()).Return([]model.User{
-		{ID: "u_alice", Account: "alice", SiteID: "site-a"},
-	}, nil)
-	var createdRoomID string
-	mockStore.EXPECT().CreateRoom(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
-		func(_ context.Context, room *model.Room, _ *roomkeystore.RoomKeyPair) (bool, error) {
-			createdRoomID = room.ID
-			return true, nil
-		})
-	mockStore.EXPECT().BulkCreateSubscriptions(gomock.Any(), gomock.Any()).Return(nil)
-
-	prov := &fakeDEKProvisioner{}
-	h := &Handler{
-		store:          mockStore,
-		siteID:         "site-a",
-		dekProvisioner: prov,
-		publish:        func(context.Context, string, []byte, string) error { return nil },
-	}
-
-	req := model.SyncCreateDMRequest{RequesterAccount: "alice", OtherAccount: "alice", RoomType: model.RoomTypeDM}
-
-	reply, err := h.serverCreateDM(dmCtxWithID("0193abcd-0193-7abc-89ab-0193abcd0011"), req)
-	require.NoError(t, err)
-	require.True(t, reply.Success)
-	require.Len(t, prov.calls, 1)
-	assert.Equal(t, createdRoomID, prov.calls[0], "EnsureDEK must be called with the self-DM room ID")
 }
 
 func TestHandleSyncCreateDM_DEKFailure_AbortsBeforeCreate(t *testing.T) {

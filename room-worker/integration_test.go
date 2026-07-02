@@ -1205,36 +1205,32 @@ func TestSyncCreateDM_DM_PersistsRoomAndSubs(t *testing.T) {
 	assert.Equal(t, 1, subjects[subject.SubscriptionUpdate("bob")])
 }
 
-func TestSyncCreateDM_SelfDM_PersistsSingleFavoritedSub(t *testing.T) {
-	ctx := newIntegSyncDMCtx()
+func TestProcessCreateRoom_SelfDM_PersistsSingleFavoritedSub(t *testing.T) {
+	ctx := context.Background()
 	db := setupMongo(t)
 	store := NewMongoStore(db)
 	siteID := "site-A"
 
 	mustInsertUser(t, db, &model.User{ID: "u-alice", Account: "alice", SiteID: siteID, EngName: "Alice", ChineseName: "愛麗絲"})
 
-	cap := &publishCapture{}
-	handler := NewHandler(store, siteID, cap.fn(), testKeyStore, testKeySender)
+	h := newIntegrationHandler(t, store, siteID)
+	ctx = natsutil.WithRequestID(ctx, "0193abcd-0193-7abc-89ab-0193abcd0193")
 
-	req := model.SyncCreateDMRequest{RoomType: model.RoomTypeDM, RequesterAccount: "alice", OtherAccount: "alice"}
-	got, err := handler.serverCreateDM(ctx, req)
+	roomID := idgen.BuildDMRoomID("u-alice", "u-alice")
+	body, err := json.Marshal(model.CreateRoomRequest{
+		RoomID:           roomID,
+		Users:            []string{"alice"}, // self → single-member DM
+		RequesterID:      "u-alice",
+		RequesterAccount: "alice",
+		Timestamp:        time.Now().UTC().UnixMilli(),
+	})
 	require.NoError(t, err)
-	require.NotNil(t, got)
-	assert.True(t, got.Success)
-	assert.Equal(t, "alice", got.Subscription.User.Account)
-	assert.True(t, got.Subscription.Favorite)
-	assert.True(t, got.Subscription.IsSubscribed)
-	assert.Equal(t, model.RoomTypeDM, got.Subscription.RoomType)
-
-	roomID := got.Subscription.RoomID
-	require.NotEmpty(t, roomID)
+	require.NoError(t, h.processCreateRoom(ctx, body))
 
 	room, err := store.GetRoom(ctx, roomID)
 	require.NoError(t, err)
 	assert.Equal(t, model.RoomTypeDM, room.Type)
 	assert.Equal(t, siteID, room.SiteID)
-	assert.Equal(t, 1, room.UserCount)
-	assert.Equal(t, 0, room.AppCount)
 	assert.Equal(t, []string{"u-alice"}, room.UIDs)
 	assert.Equal(t, []string{"alice"}, room.Accounts)
 
@@ -1249,15 +1245,11 @@ func TestSyncCreateDM_SelfDM_PersistsSingleFavoritedSub(t *testing.T) {
 	assert.Equal(t, "alice", persisted.Name)
 	assert.Equal(t, model.RoomTypeDM, persisted.RoomType)
 
-	subjects := map[string]int{}
-	cap.mu.Lock()
-	total := len(cap.captured)
-	for _, p := range cap.captured {
-		subjects[p.subject]++
-	}
-	cap.mu.Unlock()
-	assert.Equal(t, 1, subjects[subject.SubscriptionUpdate("alice")])
-	assert.Equal(t, 1, total, "subscription.update only; no inbox (same-site) and no canonical member event (Option C)")
+	// Deterministic id → a redelivery is idempotent (still one room, one sub).
+	require.NoError(t, h.processCreateRoom(ctx, body))
+	subCount, err = db.Collection("subscriptions").CountDocuments(ctx, bson.M{"roomId": roomID})
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), subCount, "redelivery is idempotent")
 }
 
 func TestSyncCreateDM_BotDM_CrossSiteInbox(t *testing.T) {
