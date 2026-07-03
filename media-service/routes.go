@@ -4,7 +4,7 @@ import "github.com/gin-gonic/gin"
 
 func registerRoutes(r *gin.Engine, h *handler) {
 	r.GET("/healthz", h.HandleHealth)
-	r.GET("/avatar/v1/room/:roomID", h.HandleRoomAvatar)
-	r.GET("/avatar/v1/:accountName", h.HandleAccountAvatar)
-	r.PUT("/avatar/v1/bot/:botName", h.HandleBotUpload) // v1: no auth (§7a.4)
+	r.GET("/api/v1/avatar/room/:roomID", h.HandleRoomAvatar)
+	r.GET("/api/v1/avatar/:accountName", h.HandleAccountAvatar)
+	r.PUT("/api/v1/avatar/bot/:botName", h.HandleBotUpload) // no auth (§7a.4)
 }

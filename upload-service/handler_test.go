@@ -97,7 +97,7 @@ func newUploadCtx(t *testing.T, roomID string, body *bytes.Buffer, contentType s
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/rooms/"+roomID+"/upload/images", body)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/file/rooms/"+roomID+"/upload/images", body)
 	req.Header.Set("Content-Type", contentType)
 	c.Request = req
 	if roomID != "" {
@@ -282,7 +282,7 @@ func TestUpload_MixedSuccessAndFailure_Merges(t *testing.T) {
 		}
 	}
 	assert.Equal(t, "a.png", success.Name)
-	assert.Equal(t, "api/v1/rooms/r1/file/img-xyz?drive_host=https://drive.example.com", success.RelativePath)
+	assert.Equal(t, "api/v1/file/rooms/r1/file/img-xyz?drive_host=https://drive.example.com", success.RelativePath)
 	assert.Equal(t, "big.exe", failure.Name)
 	assert.Equal(t, "file has an invalid file type", failure.Error)
 }
@@ -355,7 +355,7 @@ func TestHandleUploadImages_SendsUniqueNames_ReturnsOriginals(t *testing.T) {
 	require.Len(t, got.Results, 1)
 	assert.Equal(t, "success", got.Results[0].Status)
 	assert.Equal(t, "a.png", got.Results[0].Name, "response shows the original name")
-	assert.Equal(t, "api/v1/rooms/r1/file/img-1?drive_host=https://drive.example.com", got.Results[0].RelativePath)
+	assert.Equal(t, "api/v1/file/rooms/r1/file/img-1?drive_host=https://drive.example.com", got.Results[0].RelativePath)
 }
 
 // Two files with the SAME name in one batch must get distinct indexed names so
@@ -456,7 +456,7 @@ func TestHandleUploadFile_SendsUniqueName_ReturnsOriginal(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/rooms/r1/upload", body)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/file/rooms/r1/upload", body)
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 	c.Request = req
 	c.Params = gin.Params{{Key: "roomId", Value: "r1"}}
@@ -511,7 +511,7 @@ func TestRegisterRoutes_HealthAndAuthGuard(t *testing.T) {
 
 	// the api group rejects a request with no ssoToken header (401).
 	w = httptest.NewRecorder()
-	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/rooms/r1/file/f1?drive_host=h", nil))
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/file/rooms/r1/file/f1?drive_host=h", nil))
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
 }
 
@@ -525,12 +525,12 @@ func TestRegisterRoutes_UploadFilePath(t *testing.T) {
 	// New path is registered: with no ssoToken the auth middleware returns 401
 	// (NOT 404 — 404 would mean the route does not exist).
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/v1/rooms/r1/upload/file", nil))
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/v1/file/rooms/r1/upload/file", nil))
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
 
 	// Old bare path no longer exists.
 	w = httptest.NewRecorder()
-	r.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/v1/rooms/r1/upload", nil))
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/v1/file/rooms/r1/upload", nil))
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }
 
@@ -556,7 +556,7 @@ func newDownloadCtx(t *testing.T, roomID, fileID, driveHost string, user *Authen
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
-	url := "/api/v1/rooms/" + roomID + "/file/" + fileID
+	url := "/api/v1/file/rooms/" + roomID + "/file/" + fileID
 	if driveHost != "" {
 		url += "?drive_host=" + driveHost
 	}
@@ -944,7 +944,7 @@ func TestRoute_UploadRegistered(t *testing.T) {
 	registerRoutes(r, &Handler{}, nil, true)
 	found := false
 	for _, ri := range r.Routes() {
-		if ri.Method == http.MethodPost && ri.Path == "/api/v1/rooms/:roomId/upload/file" {
+		if ri.Method == http.MethodPost && ri.Path == "/api/v1/file/rooms/:roomId/upload/file" {
 			found = true
 		}
 	}

@@ -26,9 +26,9 @@ Public read endpoints + authenticated write endpoints:
 
 | Endpoint | Purpose | Auth |
 |----------|---------|------|
-| `GET /avatar/v1/:accountName` | User **and** bot avatar (frontend routes dm/botDM room avatars here too) | public |
-| `GET /avatar/v1/room/:roomID` | Room avatar — **channel / discussion only** | public |
-| `PUT /avatar/v1/bot/:botName` | Upload a custom bot avatar | **🔴 none (v1)** |
+| `GET /api/v1/avatar/:accountName` | User **and** bot avatar (frontend routes dm/botDM room avatars here too) | public |
+| `GET /api/v1/avatar/room/:roomID` | Room avatar — **channel / discussion only** | public |
+| `PUT /api/v1/avatar/bot/:botName` | Upload a custom bot avatar | **🔴 none (v1)** |
 
 **v1 write scope = bot uploads only.** Room and user avatars are never uploaded
 through this service: users resolve to the external employee-photo service, and
@@ -272,7 +272,7 @@ bots end in `.bot` or begin with `p_`; everything else is a user.
 `CLUSTER_DOMAINS` (siteID→base URL) maps the resolved `siteID` to a redirect
 target. Users never need this (always local).
 
-## 6. Endpoint 1 — `GET /avatar/v1/:accountName`
+## 6. Endpoint 1 — `GET /api/v1/avatar/:accountName`
 
 ```text
 account := stripDomain(accountName)          # bare account; tolerate stray @…
@@ -283,7 +283,7 @@ if isBot(account):                           # ── bot (avatar data is cluste
         if !found: serveDefault(account, account); return
     if owning != cfg.SiteID && !fwd:
         if base := clusterBaseURL(owning); base != "":
-            307 → {base}/avatar/v1/{account}?fwd=1   # value incl. scheme
+            307 → {base}/api/v1/avatar/{account}?fwd=1   # value incl. scheme
         # else unknown site → fall through to default
     if av, found := store.Avatar(ctx, "bot", account); found:
         serveStored(av)                                # 304 / stream (§4.1)
@@ -322,13 +322,13 @@ else:                                        # ── user (synced everywhere �
   failure (`<img onerror>`); our server-side default only covers bots, rooms, and
   users with no `employeeID` (§9, accepted).
 
-## 7. Endpoint 2 — `GET /avatar/v1/room/:roomID`
+## 7. Endpoint 2 — `GET /api/v1/avatar/room/:roomID`
 
 ```text
 if hint := c.Query("siteid"); hint != "":   # fast path: trust hint, skip the subscription query
     if hint != cfg.SiteID && !fwd:
         if base := clusterBaseURL(hint); base != "":
-            307 → {base}/avatar/v1/room/{roomID}?fwd=1; return
+            307 → {base}/api/v1/avatar/room/{roomID}?fwd=1; return
         # else unknown site → fall through to default
     # local (or unknown site): no RoomType/Name available → seed+initial = roomID
     if av, found := store.Avatar(ctx, "room", roomID); found: serveStored(av); return
@@ -339,7 +339,7 @@ room, found := store.RoomSite(ctx, roomID)
 if !found:                          serveDefault(roomID, roomID)     # unknown here → can't forward
 if room.RoomType in {dm, botDM}:    serveDefault(roomID, room.Name)  # frontend should use Endpoint 1
 if room.SiteID != cfg.SiteID && !fwd:
-    307 → {clusterBaseURL(room.SiteID)}/avatar/v1/room/{roomID}?fwd=1   # value incl. scheme
+    307 → {clusterBaseURL(room.SiteID)}/api/v1/avatar/room/{roomID}?fwd=1   # value incl. scheme
 if av, found := store.Avatar(ctx, "room", roomID); found:
     serveStored(av)                                      # 304 / stream (§4.1)
 else:
@@ -376,7 +376,7 @@ else:
 
 ## 7a. Upload API (custom bot/room avatars)
 
-`PUT /avatar/v1/bot/:botName` accepts a custom bot image (request body = raw
+`PUT /api/v1/avatar/bot/:botName` accepts a custom bot image (request body = raw
 image bytes; `Content-Type` declares the format). **Bots are the only uploadable
 kind in v1** — users and rooms never upload (§1). On success the custom image
 takes priority over the dynamic default on the bot's GET path.

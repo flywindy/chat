@@ -96,7 +96,7 @@ func TestHandleAuth_ValidToken(t *testing.T) {
 
 	body := `{"ssoToken":"valid-token","natsPublicKey":"` + userPub + `"}`
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/auth", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w, req)
 
@@ -150,7 +150,7 @@ func TestHandleAuth_ExpiredToken(t *testing.T) {
 	userPub := mustUserNKey(t)
 	body := `{"ssoToken":"expired-token","natsPublicKey":"` + userPub + `"}`
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/auth", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w, req)
 
@@ -168,7 +168,7 @@ func TestHandleAuth_InvalidToken(t *testing.T) {
 	userPub := mustUserNKey(t)
 	body := `{"ssoToken":"bad-token","natsPublicKey":"` + userPub + `"}`
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/auth", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w, req)
 
@@ -185,7 +185,7 @@ func TestHandleAuth_InvalidNKey(t *testing.T) {
 
 	body := `{"ssoToken":"valid-token","natsPublicKey":"NOT-A-VALID-NKEY"}`
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/auth", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w, req)
 
@@ -211,7 +211,7 @@ func TestHandleAuth_MissingFields(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			w := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodPost, "/auth", strings.NewReader(tt.body))
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/auth", strings.NewReader(tt.body))
 			req.Header.Set("Content-Type", "application/json")
 			router.ServeHTTP(w, req)
 			assert.Equal(t, http.StatusBadRequest, w.Code)
@@ -233,7 +233,7 @@ func TestHandleAuth_PermissionsPerUser(t *testing.T) {
 			userPub := mustUserNKey(t)
 			body := `{"ssoToken":"token-` + account + `","natsPublicKey":"` + userPub + `"}`
 			w := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodPost, "/auth", strings.NewReader(body))
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/auth", strings.NewReader(body))
 			req.Header.Set("Content-Type", "application/json")
 			router.ServeHTTP(w, req)
 
@@ -263,7 +263,7 @@ func TestHandleAuth_DevMode_ValidRequest(t *testing.T) {
 
 	body := `{"account":"alice","natsPublicKey":"` + userPub + `"}`
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/auth", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w, req)
 
@@ -293,7 +293,7 @@ func TestHandleAuth_DevMode_MissingAccount(t *testing.T) {
 
 	body := `{"natsPublicKey":"` + userPub + `"}`
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/auth", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w, req)
 
@@ -309,7 +309,7 @@ func TestHandleAuth_DevMode_InvalidNKey(t *testing.T) {
 
 	body := `{"account":"alice","natsPublicKey":"NOT-VALID"}`
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/auth", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w, req)
 
@@ -331,7 +331,7 @@ func TestHandleAuth_DevMode_TokenGenerationFailure(t *testing.T) {
 	userPub := mustUserNKey(t)
 	body := `{"account":"alice","natsPublicKey":"` + userPub + `"}`
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/auth", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w, req)
 
@@ -401,7 +401,7 @@ func TestSignNATSJWT_LifetimeJitter(t *testing.T) {
 			userPub := mustUserNKey(t)
 			body := `{"ssoToken":"valid","natsPublicKey":"` + userPub + `"}`
 			w := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodPost, "/auth", strings.NewReader(body))
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/auth", strings.NewReader(body))
 			req.Header.Set("Content-Type", "application/json")
 
 			before := time.Now()
@@ -428,7 +428,7 @@ func TestHandleAuth_MissingAccountClaim(t *testing.T) {
 
 	body := `{"ssoToken":"valid-token","natsPublicKey":"` + mustUserNKey(t) + `"}`
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/auth", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w, req)
 
@@ -454,7 +454,7 @@ func TestHandleAuth_InvalidAccountFormat(t *testing.T) {
 
 			body := `{"ssoToken":"valid-token","natsPublicKey":"` + mustUserNKey(t) + `"}`
 			w := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodPost, "/auth", strings.NewReader(body))
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/auth", strings.NewReader(body))
 			req.Header.Set("Content-Type", "application/json")
 			router.ServeHTTP(w, req)
 
@@ -468,7 +468,7 @@ func TestHandleAuth_InvalidAccountFormat(t *testing.T) {
 			payload, err := json.Marshal(map[string]string{"account": tt.account, "natsPublicKey": mustUserNKey(t)})
 			require.NoError(t, err)
 			w := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodPost, "/auth", strings.NewReader(string(payload)))
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/auth", strings.NewReader(string(payload)))
 			req.Header.Set("Content-Type", "application/json")
 			router.ServeHTTP(w, req)
 
@@ -487,7 +487,7 @@ func TestHandleAuth_InvalidAccountFormat(t *testing.T) {
 			payload, err := json.Marshal(map[string]string{"account": account, "natsPublicKey": mustUserNKey(t)})
 			require.NoError(t, err)
 			w := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodPost, "/auth", strings.NewReader(string(payload)))
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/auth", strings.NewReader(string(payload)))
 			req.Header.Set("Content-Type", "application/json")
 			router.ServeHTTP(w, req)
 
@@ -508,7 +508,7 @@ func TestHandleAuth_TokenGenerationFailure(t *testing.T) {
 	userPub := mustUserNKey(t)
 	body := `{"ssoToken":"valid-token","natsPublicKey":"` + userPub + `"}`
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/auth", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w, req)
 

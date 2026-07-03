@@ -8,7 +8,7 @@
 > drives HTTP status (see §6); `reason` is the optional domain code the client
 > branches on (`reason ?? code`). Three notable behavior changes:
 >
-> 1. **`POST /auth` 500** now returns `{ "code": "internal", "error": "internal error" }` —
+> 1. **`POST /api/v1/auth` 500** now returns `{ "code": "internal", "error": "internal error" }` —
 >    the real signing-failure cause is logged server-side and never sent to the client.
 > 2. **room-service DM-exists** flipped from the legacy error-shaped envelope
 >    `{ "error": "dm already exists", "roomId": … }` to a SUCCESS reply
@@ -21,7 +21,7 @@
 This document is the integrator-facing reference for the chat backend.
 It covers every API a client (web, mobile, third-party) can call:
 
-- **HTTP** — the single `POST /auth` endpoint that exchanges an SSO token
+- **HTTP** — the single `POST /api/v1/auth` endpoint that exchanges an SSO token
   for a NATS user JWT.
 - **NATS request/reply** — RPC-style methods exposed by `room-service`,
   `history-service`, and `search-service`.
@@ -40,7 +40,7 @@ paths.
 1. [Overview](#1-overview)
 2. [Connection & Auth](#2-connection--auth)
    - [2.1 NATS connection](#21-nats-connection)
-   - [2.2 HTTP — POST /auth](#22-http--post-auth)
+   - [2.2 HTTP — POST /api/v1/auth](#22-http--post-apiv1auth)
    - [2.3 HTTP — GET /api/userInfo (portal-service)](#23-http--get-apiuserinfo-portal-service)
    - [2.4 HTTP — Protected image upload/download](#24-http--protected-image-uploaddownload)
 3. [Request/Reply Methods](#3-requestreply-methods)
@@ -63,9 +63,9 @@ paths.
 5. [Room Encryption](#5-room-encryption)
 6. [Error envelope reference](#6-error-envelope-reference)
 7. [Media Service](#7-media-service)
-   - [GET /avatar/v1/:accountName](#get-avatarv1accountname)
-   - [GET /avatar/v1/room/:roomID](#get-avatarv1roomroomid)
-   - [PUT /avatar/v1/bot/:botName](#put-avatarv1botbotname)
+   - [GET /api/v1/avatar/:accountName](#get-apiv1avataraccountname)
+   - [GET /api/v1/avatar/room/:roomID](#get-apiv1avatarroomroomid)
+   - [PUT /api/v1/avatar/bot/:botName](#put-apiv1avatarbotbotname)
 8. [Presence](#8-presence)
 
 ---
@@ -157,9 +157,9 @@ Login is a three-step sequence: portal userInfo lookup (§2.3) resolves the user
 
 The exact event subjects a client may receive as a result of an RPC are listed under each method's "Triggered events" sections in §2.2, §3, and §4.
 
-### 2.2 HTTP — POST /auth
+### 2.2 HTTP — POST /api/v1/auth
 
-**Endpoint:** `POST /auth`
+**Endpoint:** `POST /api/v1/auth`
 **Reply:** synchronous HTTP response
 
 Exchanges an SSO token for a signed NATS user JWT. The returned JWT is what the client uses to connect to NATS (see §2.1).
@@ -221,9 +221,9 @@ See [Error envelope](#6-error-envelope-reference). HTTP statuses:
 | 401 | `unauthenticated` | `invalid_sso_token` | `{ "code": "unauthenticated", "reason": "invalid_sso_token", "error": "invalid SSO token" }` |
 | 500 | `internal` | — | `{ "code": "internal", "error": "internal error" }` — the real cause is logged server-side and never sent to the client. |
 
-The returned `natsJwt` has a server-configured lifetime (default 2h). Clients should re-call `POST /auth` to refresh before it expires.
+The returned `natsJwt` has a server-configured lifetime (default 2h). Clients should re-call `POST /api/v1/auth` to refresh before it expires.
 
-> **Background renewal.** The web client also calls `POST /auth` periodically to
+> **Background renewal.** The web client also calls `POST /api/v1/auth` periodically to
 > renew the NATS user JWT before it expires (at ~80% of the token's lifetime,
 > jittered). It obtains a fresh SSO access token in the background via the OIDC
 > refresh token (silent renew) and re-mints with the **same** `natsPublicKey`,
@@ -244,7 +244,7 @@ The returned `natsJwt` has a server-configured lifetime (default 2h). Clients sh
 **Endpoint:** `GET /api/userInfo?account={account}`
 **Reply:** synchronous HTTP response
 
-Site discovery — called once per login, **before** §2.2. Looks the account up in the portal's in-memory directory (loaded from the HR employee feed at startup and refreshed daily), confirms the account is provisioned in the `users` collection (the canonical user record), and returns the home site's connection coordinates. The client then calls `POST {authServiceUrl}/auth` (§2.2) and connects to `natsUrl` (§2.1). JWT renewal does **not** re-query the portal — site assignment is stable within a session.
+Site discovery — called once per login, **before** §2.2. Looks the account up in the portal's in-memory directory (loaded from the HR employee feed at startup and refreshed daily), confirms the account is provisioned in the `users` collection (the canonical user record), and returns the home site's connection coordinates. The client then calls `POST {authServiceUrl}/api/v1/auth` (§2.2) and connects to `natsUrl` (§2.1). JWT renewal does **not** re-query the portal — site assignment is stable within a session.
 
 **Discovery only — no token is validated here.** The endpoint serves non-secret directory data keyed by `account`. The client supplies the account directly: derived from the SSO token's `preferred_username` claim in production, or the dev login form in dev mode. The authoritative check is auth-service (§2.2), which validates the SSO token before minting a JWT — an account that resolves here still cannot obtain a NATS JWT or connect without a valid token at that step.
 
@@ -266,7 +266,7 @@ GET /api/userInfo?account=alice
 |---|---|---|
 | `account` | string | The `{account}` used in every NATS subject. |
 | `employeeId` | string | From the portal directory; informational. |
-| `authServiceUrl` | string | Base URL of the home site's auth-service — call `POST {authServiceUrl}/auth` next. |
+| `authServiceUrl` | string | Base URL of the home site's auth-service — call `POST {authServiceUrl}/api/v1/auth` next. |
 | `baseUrl` | string | Base URL of the user's home site itself (site-scoped HTTP origin) — a distinct URL, not the auth-service URL. |
 | `natsUrl` | string | WebSocket URL of the home site's NATS. |
 | `siteId` | string | The user's home site; scopes site-suffixed NATS subjects. |
@@ -310,9 +310,9 @@ proxied to/from an internal Drive. All require the `ssoToken` header (validated
 via OIDC) and that the caller is a member (has a subscription) of `:roomId`. Errors
 use the standard [§6](#6-error-envelope-reference) envelope `{ code, reason?, error }`.
 
-#### POST /api/v1/rooms/:roomId/upload/images
+#### POST /api/v1/file/rooms/:roomId/upload/images
 
-**Endpoint:** `POST /api/v1/rooms/:roomId/upload/images`
+**Endpoint:** `POST /api/v1/file/rooms/:roomId/upload/images`
 **Reply:** synchronous HTTP response
 
 Uploads one or more images for a room on behalf of the authenticated user. Each
@@ -349,7 +349,7 @@ success/failure in a single `200` (partial success).
 ```json
 {
   "results": [
-    { "name": "pic1.png", "status": "success", "relativePath": "api/v1/rooms/abc123/file/img-xyz?drive_host=https://drive.example.com" },
+    { "name": "pic1.png", "status": "success", "relativePath": "api/v1/file/rooms/abc123/file/img-xyz?drive_host=https://drive.example.com" },
     { "name": "big.exe", "status": "failure", "error": "file has an invalid file type" }
   ]
 }
@@ -378,9 +378,9 @@ A whole-request failure (not a per-file rejection) uses the
 
 ---
 
-#### POST /api/v1/rooms/:roomId/upload/file
+#### POST /api/v1/file/rooms/:roomId/upload/file
 
-**Endpoint:** `POST /api/v1/rooms/:roomId/upload/file`
+**Endpoint:** `POST /api/v1/file/rooms/:roomId/upload/file`
 **Reply:** synchronous HTTP response
 
 Uploads a single file (image/audio/video/document) for a room on behalf of the
@@ -417,7 +417,7 @@ pure-HTTP endpoint — it does **not** publish a message.
       "title": "report.pdf",
       "type": "file",
       "description": "Q2 report",
-      "titleLink": "api/v1/rooms/abc123/file/drive-file-1?drive_host=https://drive.example.com",
+      "titleLink": "api/v1/file/rooms/abc123/file/drive-file-1?drive_host=https://drive.example.com",
       "titleLinkDownload": true
     }
   ]
@@ -447,9 +447,9 @@ Uses the [§6](#6-error-envelope-reference) envelope. HTTP statuses:
 
 ---
 
-#### GET /api/v1/rooms/:roomId/file/:fileId
+#### GET /api/v1/file/rooms/:roomId/file/:fileId
 
-**Endpoint:** `GET /api/v1/rooms/:roomId/file/:fileId`
+**Endpoint:** `GET /api/v1/file/rooms/:roomId/file/:fileId`
 **Reply:** synchronous HTTP response (raw file bytes, not JSON)
 
 Downloads a protected file (any type — image/audio/video/document). The service
@@ -5091,8 +5091,8 @@ Every error response — NATS reply subjects, JetStream async results, and HTTP 
 | `pin_disabled` | forbidden | history-service pin/unpin/list (kill-switch `PIN_ENABLED=false`) |
 | `pin_limit_reached` | forbidden | history-service pin (room at `MAX_PINNED_PER_ROOM` hard cap) |
 | `pin_room_too_large` | forbidden | history-service pin/unpin (non-owner/admin/bot in a room above `LARGE_ROOM_THRESHOLD`) |
-| `sso_token_expired` | unauthenticated | auth-service `POST /auth` |
-| `invalid_sso_token` | unauthenticated | auth-service `POST /auth` |
+| `sso_token_expired` | unauthenticated | auth-service `POST /api/v1/auth` |
+| `invalid_sso_token` | unauthenticated | auth-service `POST /api/v1/auth` |
 | `invalid_request` | bad_request | auth-service (body parse / required field missing) |
 | `invalid_nkey` | bad_request | auth-service (natsPublicKey format) |
 | `missing_fields` | bad_request | auth-service (ssoToken/account/natsPublicKey missing); portal-service `GET /api/userInfo` (account missing) |
@@ -5107,7 +5107,7 @@ Every error response — NATS reply subjects, JetStream async results, and HTTP 
 
 - **NATS sync replies** — on the reply subject for §3/§4 RPCs.
 - **JetStream async results** — `model.AsyncJobResult` carries the same `code` + `reason` fields when `status == "error"`, so a failed async job is surfaced the same way as a sync error.
-- **HTTP** — auth-service `POST /auth` (§2.2), portal-service `GET /api/userInfo` (§2.3), and upload-service's image endpoints (§2.4) write the envelope as the response body with the matching HTTP status from the table above.
+- **HTTP** — auth-service `POST /api/v1/auth` (§2.2), portal-service `GET /api/userInfo` (§2.3), and upload-service's image endpoints (§2.4) write the envelope as the response body with the matching HTTP status from the table above.
 
 ### Client branching guidance
 
@@ -5125,7 +5125,7 @@ Public HTTP endpoints served by `media-service`. GET image responses (streamed c
 
 **Frontend-default contract for user avatars:** after a `307` to the employee-photo host, a user who has an `employeeId` but no actual photo on that host receives a `404` from the external service. The client MUST render its own fallback on image-load failure (`<img onerror>`). The server-side default (initials SVG) only covers users with no `employeeId`, bots, and rooms.
 
-### GET /avatar/v1/:accountName
+### GET /api/v1/avatar/:accountName
 
 **Auth:** public (no credentials required)
 
@@ -5146,7 +5146,7 @@ Resolves a user or bot avatar. The frontend also routes DM/botDM room avatars he
 | `304 Not Modified` | `If-None-Match` matches the stored `ETag` | Empty body. |
 | `200 OK` | Bot with a custom image (local) | Streams the MinIO object. `Content-Type` as stored. `ETag` + `Cache-Control: public, max-age=<cfg>`. |
 | `200 OK` | No custom image or user with no `employeeId` | Returns the generated default SVG (`Content-Type: image/svg+xml`). `ETag` + `Cache-Control: public, max-age=<cfg>`. |
-| `307 Temporary Redirect` | Bot whose owning site is a remote cluster | `Location: {clusterBaseURL}/avatar/v1/{account}?fwd=1`. Single hop only. |
+| `307 Temporary Redirect` | Bot whose owning site is a remote cluster | `Location: {clusterBaseURL}/api/v1/avatar/{account}?fwd=1`. Single hop only. |
 
 **Decision logic:**
 
@@ -5154,18 +5154,18 @@ Resolves a user or bot avatar. The frontend also routes DM/botDM room avatars he
 2. Otherwise (user): look up `employeeId` locally (users are synced to every cluster). If found → `307` to employee-photo URL. If not found → default SVG.
 
 ```
-GET /avatar/v1/alice          → 307 to employee-photo host
-GET /avatar/v1/helper.bot     → 200 (custom image) or 200 (default SVG)
-GET /avatar/v1/p_webhook      → 200 (custom image) or 200 (default SVG)
+GET /api/v1/avatar/alice          → 307 to employee-photo host
+GET /api/v1/avatar/helper.bot     → 200 (custom image) or 200 (default SVG)
+GET /api/v1/avatar/p_webhook      → 200 (custom image) or 200 (default SVG)
 ```
 
 ---
 
-### GET /avatar/v1/room/:roomID
+### GET /api/v1/avatar/room/:roomID
 
 **Auth:** public (no credentials required)
 
-Resolves a channel or discussion room avatar. For DM and botDM rooms the service returns the default SVG — the frontend should use [GET /avatar/v1/:accountName](#get-avatarv1accountname) for those.
+Resolves a channel or discussion room avatar. For DM and botDM rooms the service returns the default SVG — the frontend should use [GET /api/v1/avatar/:accountName](#get-apiv1avataraccountname) for those.
 
 #### Query parameters
 
@@ -5181,7 +5181,7 @@ Resolves a channel or discussion room avatar. For DM and botDM rooms the service
 | `304 Not Modified` | `If-None-Match` matches the stored `ETag` | Empty body. |
 | `200 OK` | Local room with a custom image | Streams the MinIO object. `ETag` + `Cache-Control: public, max-age=<cfg>`. |
 | `200 OK` | DM/botDM room, unknown room, or no custom image | Default SVG (`Content-Type: image/svg+xml`). Initial derived from room name when available, else from `roomID`. |
-| `307 Temporary Redirect` | Room owned by a remote cluster | `Location: {clusterBaseURL}/avatar/v1/room/{roomID}?fwd=1`. Single hop only. |
+| `307 Temporary Redirect` | Room owned by a remote cluster | `Location: {clusterBaseURL}/api/v1/avatar/room/{roomID}?fwd=1`. Single hop only. |
 
 **Decision logic:**
 
@@ -5191,13 +5191,13 @@ Resolves a channel or discussion room avatar. For DM and botDM rooms the service
 4. Check `avatars` collection: custom image found → `304`/stream; else → default SVG.
 
 ```
-GET /avatar/v1/room/01970a4f8c2d7c9aQ    → 200 (custom) or 200 (default SVG)
-GET /avatar/v1/room/<dm-room-id>         → 200 (default SVG — use Endpoint 1 for DMs)
+GET /api/v1/avatar/room/01970a4f8c2d7c9aQ    → 200 (custom) or 200 (default SVG)
+GET /api/v1/avatar/room/<dm-room-id>         → 200 (default SVG — use Endpoint 1 for DMs)
 ```
 
 ---
 
-### PUT /avatar/v1/bot/:botName
+### PUT /api/v1/avatar/bot/:botName
 
 > [!WARNING]
 > **This endpoint is UNAUTHENTICATED in v1.** Anyone who can reach the service can upload or overwrite any bot's avatar. Auth is deferred until the authorization model is decided. **It MUST be network-restricted or gated before any production exposure.**
@@ -5246,7 +5246,7 @@ The service decodes the image bytes to verify they are a valid PNG or JPEG — m
 
 On `409`, the response body carries a human-readable message indicating which cluster to re-upload to (e.g. `"bot is owned by site-b — upload to https://media-service-site-b"`). The client must re-issue the `PUT` to the correct domain.
 
-On success, the custom image takes effect immediately: subsequent `GET /avatar/v1/:accountName` calls for that bot will stream it (or return `304`). A re-upload overwrites the previous image; there is no delete/reset in v1.
+On success, the custom image takes effect immediately: subsequent `GET /api/v1/avatar/:accountName` calls for that bot will stream it (or return `304`). A re-upload overwrites the previous image; there is no delete/reset in v1.
 
 ## 8. Presence
 

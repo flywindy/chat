@@ -48,7 +48,7 @@ func TestAuthHandler_Integration(t *testing.T) {
 
 	body := fmt.Sprintf(`{"ssoToken":"valid-token","natsPublicKey":"%s"}`, userPub)
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/auth", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(w, req)
 

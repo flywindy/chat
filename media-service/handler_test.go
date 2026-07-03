@@ -87,7 +87,7 @@ func TestEndpoint1_UserRedirectToEmployeePhoto(t *testing.T) {
 	r, store, _ := newTestRouter(t)
 	store.EXPECT().EmployeeID(gomock.Any(), "alice").Return("E123", true, nil)
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/avatar/v1/alice", nil))
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/avatar/alice", nil))
 	assert.Equal(t, http.StatusTemporaryRedirect, w.Code)
 	assert.Equal(t, "https://photos.example.com/E123_120.JPG", w.Header().Get("Location"))
 }
@@ -96,7 +96,7 @@ func TestEndpoint1_UserNoEmployeeID_ServesDefault(t *testing.T) {
 	r, store, _ := newTestRouter(t)
 	store.EXPECT().EmployeeID(gomock.Any(), "alice").Return("", false, nil)
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/avatar/v1/alice", nil))
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/avatar/alice", nil))
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Equal(t, "image/svg+xml", w.Header().Get("Content-Type"))
 	assert.Equal(t, "nosniff", w.Header().Get("X-Content-Type-Options"))
@@ -111,7 +111,7 @@ func TestEndpoint1_BotLocalCustomImage_Streams(t *testing.T) {
 	blobs.objects = map[string][]byte{"bot/helper.bot": []byte("PNG")}
 	blobs.info = map[string]blobInfo{"bot/helper.bot": {Size: 3, ContentType: "image/png", ETag: `"e1"`}}
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/avatar/v1/helper.bot", nil))
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/avatar/helper.bot", nil))
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Equal(t, "image/png", w.Header().Get("Content-Type"))
 	assert.Equal(t, "PNG", w.Body.String())
@@ -122,7 +122,7 @@ func TestEndpoint1_BotCustomImage_NotModified(t *testing.T) {
 	store.EXPECT().BotSite(gomock.Any(), "helper.bot").Return("s1", true, nil)
 	store.EXPECT().Avatar(gomock.Any(), model.AvatarSubjectBot, "helper.bot").
 		Return(&model.Avatar{MinioKey: "bot/helper.bot", ETag: `"e1"`}, true, nil)
-	req := httptest.NewRequest(http.MethodGet, "/avatar/v1/helper.bot", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/avatar/helper.bot", nil)
 	req.Header.Set("If-None-Match", `"e1"`)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -134,7 +134,7 @@ func TestEndpoint1_BotNoRecord_ServesDefault(t *testing.T) {
 	r, store, _ := newTestRouter(t)
 	store.EXPECT().BotSite(gomock.Any(), "helper.bot").Return("", false, nil)
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/avatar/v1/helper.bot", nil))
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/avatar/helper.bot", nil))
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Equal(t, "image/svg+xml", w.Header().Get("Content-Type"))
 }
@@ -143,18 +143,18 @@ func TestEndpoint1_BotRemoteCluster_Redirects(t *testing.T) {
 	r, store, _ := newTestRouter(t)
 	store.EXPECT().BotSite(gomock.Any(), "helper.bot").Return("s2", true, nil)
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/avatar/v1/helper.bot", nil))
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/avatar/helper.bot", nil))
 	assert.Equal(t, http.StatusTemporaryRedirect, w.Code)
-	assert.Equal(t, "https://avatar-s2/avatar/v1/helper.bot?fwd=1", w.Header().Get("Location"))
+	assert.Equal(t, "https://avatar-s2/api/v1/avatar/helper.bot?fwd=1", w.Header().Get("Location"))
 }
 
 func TestEndpoint1_BotSiteidHint_SkipsBotSite(t *testing.T) {
 	r, store, _ := newTestRouter(t)
 	_ = store // no BotSite EXPECT — the hint must skip the lookup
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/avatar/v1/helper.bot?siteid=s2", nil))
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/avatar/helper.bot?siteid=s2", nil))
 	assert.Equal(t, http.StatusTemporaryRedirect, w.Code)
-	assert.Equal(t, "https://avatar-s2/avatar/v1/helper.bot?fwd=1", w.Header().Get("Location"))
+	assert.Equal(t, "https://avatar-s2/api/v1/avatar/helper.bot?fwd=1", w.Header().Get("Location"))
 }
 
 func TestEndpoint1_BotRemoteWithFwd_NoReRedirect(t *testing.T) {
@@ -162,7 +162,7 @@ func TestEndpoint1_BotRemoteWithFwd_NoReRedirect(t *testing.T) {
 	store.EXPECT().BotSite(gomock.Any(), "helper.bot").Return("s2", true, nil)
 	store.EXPECT().Avatar(gomock.Any(), model.AvatarSubjectBot, "helper.bot").Return(nil, false, nil)
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/avatar/v1/helper.bot?fwd=1", nil))
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/avatar/helper.bot?fwd=1", nil))
 	assert.Equal(t, http.StatusOK, w.Code) // served default locally despite remote site
 }
 
@@ -174,7 +174,7 @@ func TestEndpoint2_ChannelCustomImage_Streams(t *testing.T) {
 	blobs.objects = map[string][]byte{"room/room-1": []byte("PNG")}
 	blobs.info = map[string]blobInfo{"room/room-1": {Size: 3, ContentType: "image/png", ETag: `"r1"`}}
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/avatar/v1/room/room-1", nil))
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/avatar/room/room-1", nil))
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Equal(t, "PNG", w.Body.String())
 }
@@ -184,7 +184,7 @@ func TestEndpoint2_ChannelNoCustomImage_Default(t *testing.T) {
 	store.EXPECT().RoomSite(gomock.Any(), "room-1").Return("s1", model.RoomTypeChannel, "General", true, nil)
 	store.EXPECT().Avatar(gomock.Any(), model.AvatarSubjectRoom, "room-1").Return(nil, false, nil)
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/avatar/v1/room/room-1", nil))
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/avatar/room/room-1", nil))
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Equal(t, "image/svg+xml", w.Header().Get("Content-Type"))
 }
@@ -193,7 +193,7 @@ func TestEndpoint2_NotFound_Default(t *testing.T) {
 	r, store, _ := newTestRouter(t)
 	store.EXPECT().RoomSite(gomock.Any(), "room-x").Return("", model.RoomType(""), "", false, nil)
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/avatar/v1/room/room-x", nil))
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/avatar/room/room-x", nil))
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Equal(t, "image/svg+xml", w.Header().Get("Content-Type"))
 }
@@ -202,7 +202,7 @@ func TestEndpoint2_DMType_Default(t *testing.T) {
 	r, store, _ := newTestRouter(t)
 	store.EXPECT().RoomSite(gomock.Any(), "dm-1").Return("s1", model.RoomTypeDM, "", true, nil)
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/avatar/v1/room/dm-1", nil))
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/avatar/room/dm-1", nil))
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Equal(t, "image/svg+xml", w.Header().Get("Content-Type"))
 }
@@ -211,25 +211,25 @@ func TestEndpoint2_RemoteCluster_Redirects(t *testing.T) {
 	r, store, _ := newTestRouter(t)
 	store.EXPECT().RoomSite(gomock.Any(), "room-1").Return("s2", model.RoomTypeChannel, "General", true, nil)
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/avatar/v1/room/room-1", nil))
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/avatar/room/room-1", nil))
 	assert.Equal(t, http.StatusTemporaryRedirect, w.Code)
-	assert.Equal(t, "https://avatar-s2/avatar/v1/room/room-1?fwd=1", w.Header().Get("Location"))
+	assert.Equal(t, "https://avatar-s2/api/v1/avatar/room/room-1?fwd=1", w.Header().Get("Location"))
 }
 
 func TestEndpoint2_SiteidHint_RemoteRedirect_SkipsRoomSite(t *testing.T) {
 	r, store, _ := newTestRouter(t)
 	_ = store // no RoomSite EXPECT — the hint skips it
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/avatar/v1/room/room-1?siteid=s2", nil))
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/avatar/room/room-1?siteid=s2", nil))
 	assert.Equal(t, http.StatusTemporaryRedirect, w.Code)
-	assert.Equal(t, "https://avatar-s2/avatar/v1/room/room-1?fwd=1", w.Header().Get("Location"))
+	assert.Equal(t, "https://avatar-s2/api/v1/avatar/room/room-1?fwd=1", w.Header().Get("Location"))
 }
 
 func TestEndpoint2_SiteidHint_Local_AvatarsLookupOnly(t *testing.T) {
 	r, store, _ := newTestRouter(t)
 	store.EXPECT().Avatar(gomock.Any(), model.AvatarSubjectRoom, "room-1").Return(nil, false, nil)
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/avatar/v1/room/room-1?siteid=s1", nil))
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/avatar/room/room-1?siteid=s1", nil))
 	assert.Equal(t, http.StatusOK, w.Code) // default, no RoomSite call
 }
 
@@ -237,7 +237,7 @@ func TestEndpoint1_BotSiteError_500(t *testing.T) {
 	r, store, _ := newTestRouter(t)
 	store.EXPECT().BotSite(gomock.Any(), "helper.bot").Return("", false, errors.New("mongo down"))
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/avatar/v1/helper.bot", nil))
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/avatar/helper.bot", nil))
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
 }
 
@@ -246,7 +246,7 @@ func TestEndpoint1_BotAvatarError_500(t *testing.T) {
 	store.EXPECT().BotSite(gomock.Any(), "helper.bot").Return("s1", true, nil)
 	store.EXPECT().Avatar(gomock.Any(), model.AvatarSubjectBot, "helper.bot").Return(nil, false, errors.New("mongo down"))
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/avatar/v1/helper.bot", nil))
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/avatar/helper.bot", nil))
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
 }
 
@@ -254,7 +254,7 @@ func TestEndpoint1_UserEmployeeIDError_500(t *testing.T) {
 	r, store, _ := newTestRouter(t)
 	store.EXPECT().EmployeeID(gomock.Any(), "alice").Return("", false, errors.New("mongo down"))
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/avatar/v1/alice", nil))
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/avatar/alice", nil))
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
 }
 
@@ -265,7 +265,7 @@ func TestServeStored_BlobError_500(t *testing.T) {
 		Return(&model.Avatar{MinioKey: "bot/helper.bot", ETag: `"e1"`}, true, nil)
 	blobs.getErr = errors.New("minio down")
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/avatar/v1/helper.bot", nil))
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/avatar/helper.bot", nil))
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
 }
 
@@ -276,7 +276,7 @@ func TestServeStored_BlobNotFound_FallsBackToDefault(t *testing.T) {
 		Return(&model.Avatar{MinioKey: "bot/helper.bot", ETag: `"e1"`}, true, nil)
 	// blobs has no object for that key → Get returns errBlobNotFound → default SVG
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/avatar/v1/helper.bot", nil))
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/avatar/helper.bot", nil))
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Equal(t, "image/svg+xml", w.Header().Get("Content-Type"))
 }
@@ -285,7 +285,7 @@ func TestEndpoint2_RoomSiteError_500(t *testing.T) {
 	r, store, _ := newTestRouter(t)
 	store.EXPECT().RoomSite(gomock.Any(), "room-1").Return("", model.RoomType(""), "", false, errors.New("mongo down"))
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/avatar/v1/room/room-1", nil))
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/avatar/room/room-1", nil))
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
 }
 
@@ -294,6 +294,6 @@ func TestEndpoint2_RoomAvatarError_500(t *testing.T) {
 	store.EXPECT().RoomSite(gomock.Any(), "room-1").Return("s1", model.RoomTypeChannel, "General", true, nil)
 	store.EXPECT().Avatar(gomock.Any(), model.AvatarSubjectRoom, "room-1").Return(nil, false, errors.New("mongo down"))
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/avatar/v1/room/room-1", nil))
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/avatar/room/room-1", nil))
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
 }

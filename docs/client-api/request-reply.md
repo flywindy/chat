@@ -18,11 +18,11 @@ For connection, auth, shared schemas, and error reference, see [../client-api.md
 ## Table of contents
 
 1. [HTTP — Connection & Auth](#http--connection--auth)
-   - [POST /auth](#post-auth)
+   - [POST /api/v1/auth](#post-apiv1auth)
    - [GET /api/userInfo](#get-apiuserinfo)
-   - [POST /api/v1/rooms/:roomId/upload/images](#post-apiv1roomsroomiduploadimages)
-   - [POST /api/v1/rooms/:roomId/upload/file](#post-apiv1roomsroomiduploadfile)
-   - [GET /api/v1/rooms/:roomId/file/:fileId](#get-apiv1roomsroomidfilefileid)
+   - [POST /api/v1/file/rooms/:roomId/upload/images](#post-apiv1fileroomsroomiduploadimages)
+   - [POST /api/v1/file/rooms/:roomId/upload/file](#post-apiv1fileroomsroomiduploadfile)
+   - [GET /api/v1/file/rooms/:roomId/file/:fileId](#get-apiv1fileroomsroomidfilefileid)
    - [GET /api/v1/file-upload/:fileId/:fileName](#get-apiv1file-uploadfileidfilename)
    - [Media Service — avatar endpoints](#media-service--avatar-endpoints)
 2. [room-service (§3.1)](#room-service)
@@ -38,13 +38,13 @@ For connection, auth, shared schemas, and error reference, see [../client-api.md
 
 ## HTTP — Connection & Auth
 
-### POST /auth
+### POST /api/v1/auth
 
-**Endpoint:** `POST /auth`
+**Endpoint:** `POST /api/v1/auth`
 **Reply:** synchronous HTTP response
 
 Exchanges an SSO token for a signed NATS user JWT. See
-[../client-api.md §2.2](../client-api.md#22-http--post-auth) for the full schema, examples,
+[../client-api.md §2.2](../client-api.md#22-http--post-apiv1auth) for the full schema, examples,
 and error table.
 
 **Emits:** `None — HTTP-only.`
@@ -56,7 +56,7 @@ and error table.
 **Endpoint:** `GET /api/userInfo?account={account}`
 **Reply:** synchronous HTTP response
 
-Site discovery — called once per login before POST /auth. Returns the home site's NATS
+Site discovery — called once per login before POST /api/v1/auth. Returns the home site's NATS
 and auth-service connection coordinates. See
 [../client-api.md §2.3](../client-api.md#23-http--get-apiuserinfo-portal-service).
 
@@ -64,45 +64,45 @@ and auth-service connection coordinates. See
 
 ---
 
-### POST /api/v1/rooms/:roomId/upload/images
+### POST /api/v1/file/rooms/:roomId/upload/images
 
-**Endpoint:** `POST /api/v1/rooms/:roomId/upload/images`
+**Endpoint:** `POST /api/v1/file/rooms/:roomId/upload/images`
 **Reply:** synchronous HTTP response
 
 Uploads one or more protected inline images. `Content-Type: multipart/form-data`.
 `ssoToken` header required; caller must be a room member. Returns per-file
 success/failure in one `200`. See
-[../client-api.md §2.4](../client-api.md#post-apiv1roomsroomiduploadimages).
+[../client-api.md §2.4](../client-api.md#post-apiv1fileroomsroomiduploadimages).
 
 **Emits:** `None — HTTP-only.`
 
 ---
 
-### POST /api/v1/rooms/:roomId/upload/file
+### POST /api/v1/file/rooms/:roomId/upload/file
 
-**Endpoint:** `POST /api/v1/rooms/:roomId/upload/file`
+**Endpoint:** `POST /api/v1/file/rooms/:roomId/upload/file`
 **Reply:** synchronous HTTP response
 
 Uploads a single file (image/audio/video/document) and returns a render-ready
 [Attachment](../client-api.md#attachment) for the client to embed in a `msg.send`
 (§4) — pure HTTP, does **not** itself publish a message. `Content-Type:
 multipart/form-data`. `ssoToken` header required; caller must be a room member. See
-[../client-api.md §2.4](../client-api.md#post-apiv1roomsroomiduploadfile).
+[../client-api.md §2.4](../client-api.md#post-apiv1fileroomsroomiduploadfile).
 
 **Emits:** `None — HTTP-only.`
 
 ---
 
-### GET /api/v1/rooms/:roomId/file/:fileId
+### GET /api/v1/file/rooms/:roomId/file/:fileId
 
-**Endpoint:** `GET /api/v1/rooms/:roomId/file/:fileId`
+**Endpoint:** `GET /api/v1/file/rooms/:roomId/file/:fileId`
 **Reply:** synchronous HTTP response (raw file bytes, any type)
 
 Downloads a protected file (image/audio/video/document). `ssoToken` header
 required; caller must be a room member. `drive_host` query param required.
 Called with the `relativePath` (image upload) or `titleLink` (file upload)
 returned by the upload endpoints. See
-[../client-api.md §2.4](../client-api.md#get-apiv1roomsroomidfilefileid).
+[../client-api.md §2.4](../client-api.md#get-apiv1fileroomsroomidfilefileid).
 
 **Emits:** `None — HTTP-only.`
 
@@ -130,9 +130,9 @@ Full decision logic, redirect/caching rules, and the `PUT` upload contract are i
 
 | Endpoint | Reply | Purpose |
 |---|---|---|
-| `GET /avatar/v1/:accountName` | synchronous HTTP (redirect, image bytes, or default SVG) | User/bot avatar; frontend also uses this for DM/botDM room avatars. |
-| `GET /avatar/v1/room/:roomID` | synchronous HTTP (image bytes or default SVG) | Channel/discussion room avatar. |
-| `PUT /avatar/v1/bot/:botName` | synchronous HTTP | Upload a bot's custom avatar. ⚠️ Unauthenticated in v1 — must be network-restricted. |
+| `GET /api/v1/avatar/:accountName` | synchronous HTTP (redirect, image bytes, or default SVG) | User/bot avatar; frontend also uses this for DM/botDM room avatars. |
+| `GET /api/v1/avatar/room/:roomID` | synchronous HTTP (image bytes or default SVG) | Channel/discussion room avatar. |
+| `PUT /api/v1/avatar/bot/:botName` | synchronous HTTP | Upload a bot's custom avatar. ⚠️ Unauthenticated — must be network-restricted. |
 
 **Emits:** `None — HTTP-only.`
 

@@ -10,7 +10,7 @@ import (
 )
 
 func TestFileURL(t *testing.T) {
-	assert.Equal(t, "api/v1/rooms/room-1/file/f1?drive_host=http://drive",
+	assert.Equal(t, "api/v1/file/rooms/room-1/file/f1?drive_host=http://drive",
 		fileURL("room-1", "f1", "http://drive"))
 }
 

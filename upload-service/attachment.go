@@ -17,7 +17,7 @@ type fileMeta struct {
 
 // fileURL builds the relative download URL for the protected file-download route.
 func fileURL(roomID, fileID, driveHost string) string {
-	return fmt.Sprintf("api/v1/rooms/%s/file/%s?drive_host=%s", roomID, fileID, driveHost)
+	return fmt.Sprintf("api/v1/file/rooms/%s/file/%s?drive_host=%s", roomID, fileID, driveHost)
 }
 
 // buildAttachment assembles the render-ready attachment, adding media-specific

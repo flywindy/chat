@@ -103,7 +103,7 @@ func (h *handler) HandleRoomAvatar(c *gin.Context) {
 
 	// Fast path: trust the ?siteid= hint, skip the subscription query.
 	if hint := c.Query(siteIDParam); hint != "" {
-		if h.redirectCrossCluster(c, "room", hint, "/avatar/v1/room/"+url.PathEscape(roomID)) {
+		if h.redirectCrossCluster(c, "room", hint, "/api/v1/avatar/room/"+url.PathEscape(roomID)) {
 			return
 		}
 		h.serveRoomLocal(c, roomID, roomID) // no Name available → use roomID
@@ -124,7 +124,7 @@ func (h *handler) HandleRoomAvatar(c *gin.Context) {
 		h.serveDefault(c, "room", roomID, name)
 		return
 	}
-	if h.redirectCrossCluster(c, "room", siteID, "/avatar/v1/room/"+url.PathEscape(roomID)) {
+	if h.redirectCrossCluster(c, "room", siteID, "/api/v1/avatar/room/"+url.PathEscape(roomID)) {
 		return
 	}
 	h.serveRoomLocal(c, roomID, name)
@@ -164,7 +164,7 @@ func (h *handler) HandleAccountAvatar(c *gin.Context) {
 			}
 			owning = s
 		}
-		if h.redirectCrossCluster(c, "bot", owning, "/avatar/v1/"+url.PathEscape(account)) {
+		if h.redirectCrossCluster(c, "bot", owning, "/api/v1/avatar/"+url.PathEscape(account)) {
 			return
 		}
 		av, found, err := h.store.Avatar(ctx, model.AvatarSubjectBot, account)
