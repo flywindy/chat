@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/caarlos0/env/v11"
+	o11ynats "github.com/flywindy/o11y/nats"
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/hmchangw/chat/pkg/health"
@@ -197,10 +198,7 @@ func main() {
 		slog.Error("nats connect failed", "error", err)
 		os.Exit(1)
 	}
-	// Native JetStream context: this worker's consume path uses Fetch (batch
-	// pull), which the o11y/nats facade does not yet wrap. The connection itself
-	// is the traced o11y/nats Conn; ES writes carry o11y spans via searchengine.
-	js, err := jetstream.New(nc.NatsConn())
+	js, err := nc.JetStream()
 	if err != nil {
 		slog.Error("jetstream init failed", "error", err)
 		os.Exit(1)
@@ -330,7 +328,7 @@ func main() {
 // Bulk flush spans many client requests, so per-message X-Request-ID is intentionally NOT propagated; mint a per-flush bulkID if per-batch traceability becomes a need.
 func runConsumer(
 	ctx context.Context,
-	cons jetstream.Consumer,
+	cons o11ynats.Consumer,
 	handler *Handler,
 	fetchBatchSize, bulkBatchSize int,
 	bulkFlushInterval time.Duration,
@@ -345,8 +343,8 @@ func runConsumer(
 	// consumer goroutine for good. On a recovered panic the in-flight messages
 	// are left un-acked and JetStream redelivers them after AckWait.
 	flush := func() { jobguard.Guard("search-sync flush", func() { handler.Flush(ctx) }) }
-	add := func(m jetstream.Msg) {
-		jobguard.Guard("search-sync add: "+m.Subject(), func() { handler.Add(m) })
+	add := func(msgCtx context.Context, m jetstream.Msg) {
+		jobguard.Guard("search-sync add: "+m.Subject(), func() { handler.AddWithContext(msgCtx, m) })
 	}
 
 	for {
@@ -371,7 +369,7 @@ func runConsumer(
 			fetchCount = remaining
 		}
 
-		batch, err := cons.Fetch(fetchCount, jetstream.FetchMaxWait(time.Second))
+		batch, err := cons.Fetch(ctx, fetchCount, jetstream.FetchMaxWait(time.Second))
 		if err != nil {
 			select {
 			case <-stopCh:
@@ -387,7 +385,7 @@ func runConsumer(
 		}
 
 		for msg := range batch.Messages() {
-			add(msg)
+			add(msg.Ctx, msg.Msg)
 			// Mid-batch flush: if a single fan-out message just pushed the
 			// buffer over the bulk cap, flush immediately instead of waiting
 			// for the outer loop — otherwise the next message's actions
