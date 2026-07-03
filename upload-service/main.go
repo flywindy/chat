@@ -52,6 +52,8 @@ type config struct {
 	MinioSecretKey string `env:"MINIO_SECRET_KEY,required"`
 	MinioUseSSL    bool   `env:"MINIO_USE_SSL" envDefault:"false"`
 	MinioBucket    string `env:"MINIO_BUCKET"`
+	// MinioDownloadTimeout bounds a single MinIO/S3 download (Stat probe + streamed body).
+	MinioDownloadTimeout time.Duration `env:"MINIO_DOWNLOAD_TIMEOUT" envDefault:"5m"`
 
 	Drive drive.Config `envPrefix:"DRIVE_"`
 }
@@ -93,7 +95,7 @@ func run() error {
 	if bucket == "" {
 		bucket = "chat-" + cfg.SiteID
 	}
-	s3Store := newMinioObjectStore(minioClient, bucket)
+	s3Store := newMinioObjectStore(minioClient, bucket, cfg.MinioDownloadTimeout)
 
 	var validator TokenValidator
 	if !cfg.DevMode {

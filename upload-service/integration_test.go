@@ -87,7 +87,7 @@ func TestMinioObjectStore_Open(t *testing.T) {
 		minio.PutObjectOptions{ContentType: "application/pdf"})
 	require.NoError(t, err)
 
-	s := newMinioObjectStore(client, bucket)
+	s := newMinioObjectStore(client, bucket, 5*time.Minute)
 
 	reader, err := s.Open(ctx, key)
 	require.NoError(t, err)

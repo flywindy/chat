@@ -4,33 +4,51 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/minio/minio-go/v7"
 )
 
 // minioObjectStore streams objects out of a single MinIO/S3 bucket.
 type minioObjectStore struct {
-	client *minio.Client
-	bucket string
+	client          *minio.Client
+	bucket          string
+	downloadTimeout time.Duration
 }
 
-// newMinioObjectStore binds a minio client to a bucket.
-func newMinioObjectStore(client *minio.Client, bucket string) *minioObjectStore {
-	return &minioObjectStore{client: client, bucket: bucket}
+// newMinioObjectStore binds a minio client to a bucket. downloadTimeout bounds a
+// single download (Stat probe + streamed body) so a hung backend can't hang the request.
+func newMinioObjectStore(client *minio.Client, bucket string, downloadTimeout time.Duration) *minioObjectStore {
+	return &minioObjectStore{client: client, bucket: bucket, downloadTimeout: downloadTimeout}
 }
 
-// Open returns a streaming reader for the object at key. It Stats the object so
-// a missing object or unreachable backend surfaces here — before any response
-// body is written — letting the handler map it to 503.
+// Open returns a streaming reader for the object at key, Stat-probing first so a missing
+// object or dead backend surfaces before any body is written. minio-go ties Reads to the
+// GetObject context, so cancel must outlive Open — the reader releases it on Close.
 func (s *minioObjectStore) Open(ctx context.Context, key string) (io.ReadCloser, error) {
-	obj, err := s.client.GetObject(ctx, s.bucket, key, minio.GetObjectOptions{})
+	tctx, cancel := context.WithTimeout(ctx, s.downloadTimeout)
+	obj, err := s.client.GetObject(tctx, s.bucket, key, minio.GetObjectOptions{})
 	if err != nil {
+		cancel()
 		return nil, fmt.Errorf("get object %s/%s: %w", s.bucket, key, err)
 	}
-	// minio-go's GetObject is lazy; the request only fires on Stat/Read, so probe now.
+	// GetObject is lazy; the request only fires on Stat/Read, so probe now.
 	if _, err := obj.Stat(); err != nil {
 		_ = obj.Close()
+		cancel()
 		return nil, fmt.Errorf("stat object %s/%s: %w", s.bucket, key, err)
 	}
-	return obj, nil
+	return &cancelReadCloser{ReadCloser: obj, cancel: cancel}, nil
+}
+
+// cancelReadCloser cancels the download's timeout context when the reader is closed.
+type cancelReadCloser struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (c *cancelReadCloser) Close() error {
+	err := c.ReadCloser.Close()
+	c.cancel()
+	return err
 }
