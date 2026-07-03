@@ -203,6 +203,8 @@ All commands are wrapped in the root Makefile. Always use `make` targets — nev
 - Every request body and response payload is a field table (current style). Each field has an explicit type — never `object`. Compound types get their own named table (shared types in §3.0 Shared schemas, one-offs inline) and are referenced by linked name (e.g. `[Participant](#participant)`, `ChannelRef[]`, `map<emoji, UserRef[]>`).
 - Every success response includes a JSON example.
 - Keep edits clean: minimal prose, no redundant comments or long explanations.
+- If the change also touches `docs/client-api/request-reply.md` or `docs/client-api/events.md` (the derived request/reply and events views), update the matching view(s) in the same PR — they must never drift from the canonical `docs/client-api.md`.
+- Any change to a client-facing **request/reply struct or a server→client event struct** in `pkg/model/` (including `pkg/model/event.go`) — adding, removing, renaming, or retyping a field — must update `docs/client-api.md` **and** its derived views (`docs/client-api/request-reply.md`, `docs/client-api/events.md`) in the same PR, even when no handler registration changed.
 
 ### Before Editing
 - Always read a file before modifying it — understand existing code before suggesting changes

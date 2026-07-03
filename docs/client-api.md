@@ -33,6 +33,8 @@ example, the success response schema and example, the error response, and
 the server-pushed events the client will receive on the success and error
 paths.
 
+> Frontend-oriented split views: [request-reply](client-api/request-reply.md) · [events](client-api/events.md). This document remains canonical.
+
 ## Table of contents
 
 1. [Overview](#1-overview)
