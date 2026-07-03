@@ -110,7 +110,7 @@ func (h *Handler) Register(r *natsrouter.Router) {
 	natsrouter.Register(r, subject.RoomRenamePattern(h.siteID), h.roomRename)
 	natsrouter.Register(r, subject.RoomRestricted(h.siteID), h.roomRestricted)
 	natsrouter.Register(r, subject.RoomsInfoBatchSubscribe(h.siteID), h.roomsInfoBatch)
-	natsrouter.Register(r, subject.ThreadUnreadSummarySubscribe(h.siteID), h.threadUnreadSummary)
+	natsrouter.Register(r, subject.ThreadRoomInfoBatch(h.siteID), h.threadRoomInfoBatch)
 	natsrouter.Register(r, subject.RoomKeyEnsure(h.siteID), h.ensureRoomKey)
 	natsrouter.Register(r, subject.RoomCreatePattern(h.siteID), h.createRoom)
 	natsrouter.Register(r, subject.TeamsRoomCallPattern(h.siteID), h.teamsRoomCall)
@@ -1149,39 +1149,42 @@ func (h *Handler) roomsInfoBatch(c *natsrouter.Context, req model.RoomsInfoBatch
 	return &model.RoomsInfoBatchResponse{Rooms: infos}, nil
 }
 
-func (h *Handler) threadUnreadSummary(c *natsrouter.Context, req model.ThreadUnreadSummaryRequest) (*model.ThreadUnreadSummaryResponse, error) {
+func (h *Handler) threadRoomInfoBatch(c *natsrouter.Context, req model.ThreadRoomInfoBatchRequest) (*model.ThreadRoomInfoBatchResponse, error) {
 	var ctx context.Context = c
 	start := time.Now()
-	if req.UserAccount == "" {
-		return nil, errcode.BadRequest("userAccount must not be empty")
+	if len(req.ThreadRoomIDs) == 0 {
+		return nil, errcode.BadRequest("threadRoomIds must not be empty")
 	}
-
-	if span := trace.SpanFromContext(ctx); span.IsRecording() {
-		span.SetAttributes(attribute.String("site_id", h.siteID))
+	if len(req.ThreadRoomIDs) > h.maxBatchSize {
+		return nil, errcode.BadRequest(fmt.Sprintf("batch size %d exceeds limit %d", len(req.ThreadRoomIDs), h.maxBatchSize))
 	}
-
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	summary, err := h.store.GetThreadUnreadSummary(ctx, req.UserAccount, h.siteID)
+	rows, err := h.store.GetThreadRoomInfos(ctx, req.ThreadRoomIDs)
 	if err != nil {
-		return nil, fmt.Errorf("get thread unread summary: %w", err)
+		return nil, fmt.Errorf("get thread room infos: %w", err)
 	}
-
-	resp := &model.ThreadUnreadSummaryResponse{
-		Unread:              summary.Unread,
-		UnreadDirectMessage: summary.UnreadDirectMessage,
-		UnreadMention:       summary.UnreadMention,
-		LastMessageAt:       timePtrToMillis(summary.LastMessageAt),
+	byID := make(map[string]ThreadRoomInfoRow, len(rows))
+	for _, r := range rows {
+		byID[r.ThreadRoomID] = r
 	}
-
-	slog.Debug("thread unread summary handled",
-		"site_id", h.siteID,
-		"unread", resp.Unread,
-		"latency_ms", time.Since(start).Milliseconds(),
-	)
-
-	return resp, nil
+	threads := make([]model.ThreadRoomInfo, 0, len(req.ThreadRoomIDs))
+	for _, id := range req.ThreadRoomIDs {
+		if r, ok := byID[id]; ok {
+			threads = append(threads, model.ThreadRoomInfo{
+				ThreadRoomID: id, Found: true,
+				LastMsgAt: r.LastMsgAt.UTC().UnixMilli(),
+			})
+		} else {
+			threads = append(threads, model.ThreadRoomInfo{ThreadRoomID: id, Found: false})
+		}
+	}
+	slog.DebugContext(ctx, "thread room info batch handled",
+		"site_id", h.siteID, "batch_size", len(req.ThreadRoomIDs),
+		"request_id", natsutil.RequestIDFromContext(ctx),
+		"latency_ms", time.Since(start).Milliseconds())
+	return &model.ThreadRoomInfoBatchResponse{Threads: threads}, nil
 }
 
 // timePtrToMillis converts a nullable timestamp to UnixMilli for wire responses,

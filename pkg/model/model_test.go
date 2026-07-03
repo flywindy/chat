@@ -240,22 +240,6 @@ func TestThreadSubscriptionJSON(t *testing.T) {
 	roundTrip(t, &ts, &model.ThreadSubscription{})
 }
 
-func TestThreadUnreadSummaryResponseJSON(t *testing.T) {
-	ms := int64(1717000000000)
-	r := model.ThreadUnreadSummaryResponse{
-		Unread:              true,
-		UnreadDirectMessage: false,
-		UnreadMention:       true,
-		LastMessageAt:       &ms,
-	}
-	roundTrip(t, &r, &model.ThreadUnreadSummaryResponse{})
-}
-
-func TestThreadUnreadSummaryRequestJSON(t *testing.T) {
-	r := model.ThreadUnreadSummaryRequest{UserAccount: "alice@example.com"}
-	roundTrip(t, &r, &model.ThreadUnreadSummaryRequest{})
-}
-
 func TestMessageJSON(t *testing.T) {
 	t.Run("with threadParentMessageId", func(t *testing.T) {
 		m := model.Message{
@@ -4171,4 +4155,39 @@ func TestMigrationRequests_RoundTrip(t *testing.T) {
 	roundTrip(t, &model.MigrationEditRequest{MessageID: "m1", RoomID: "r1", CreatedAt: ts, Content: "edited", EditedAt: ts}, &model.MigrationEditRequest{})
 	roundTrip(t, &model.MigrationDeleteRequest{MessageID: "m1", DeletedAt: ts}, &model.MigrationDeleteRequest{})
 	roundTrip(t, &model.MigrationAck{OK: true}, &model.MigrationAck{})
+}
+
+func TestThreadUnreadSummaryResponseJSON(t *testing.T) {
+	ts := int64(1717000000000)
+	r := model.ThreadUnreadSummaryResponse{
+		Unread: true, UnreadDirectMessage: false, UnreadMention: true,
+		LastMessageAt: &ts, UnavailableSites: []string{"site-b"},
+	}
+	roundTrip(t, &r, &model.ThreadUnreadSummaryResponse{})
+}
+
+func TestThreadUnreadSummaryRequestJSON(t *testing.T) {
+	roundTrip(t, &model.ThreadUnreadSummaryRequest{}, &model.ThreadUnreadSummaryRequest{})
+}
+
+func TestThreadRoomInfoBatchRequestJSON(t *testing.T) {
+	r := model.ThreadRoomInfoBatchRequest{ThreadRoomIDs: []string{"tr1", "tr2"}}
+	roundTrip(t, &r, &model.ThreadRoomInfoBatchRequest{})
+}
+
+func TestThreadRoomInfoBatchResponseJSON(t *testing.T) {
+	r := model.ThreadRoomInfoBatchResponse{Threads: []model.ThreadRoomInfo{
+		{ThreadRoomID: "tr1", Found: true, LastMsgAt: 1717000000000},
+		{ThreadRoomID: "tr2", Found: false},
+	}}
+	roundTrip(t, &r, &model.ThreadRoomInfoBatchResponse{})
+}
+
+func TestThreadUnreadRowJSON(t *testing.T) {
+	seen := time.UnixMilli(1717000000000).UTC()
+	r := model.ThreadUnreadRow{
+		ThreadRoomID: "tr1", SiteID: "site-a", RoomType: model.RoomTypeDM,
+		LastSeenAt: &seen, HasMention: true,
+	}
+	roundTrip(t, &r, &model.ThreadUnreadRow{})
 }

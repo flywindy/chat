@@ -240,10 +240,11 @@ func RoomsInfoBatch(siteID string) string {
 	return fmt.Sprintf("chat.server.request.room.%s.info.batch", siteID)
 }
 
-// ThreadUnreadSummary is the server-to-server request subject for a per-site
-// thread unread rollup for a single user.
-func ThreadUnreadSummary(siteID string) string {
-	return fmt.Sprintf("chat.server.request.room.%s.thread.unread.summary", siteID)
+// ThreadRoomInfoBatch is the server-to-server request subject for a batch
+// lookup of thread rooms' lastMsgAt + parent room type; room-service also
+// registers its handler on this subject. Mirrors RoomsInfoBatch.
+func ThreadRoomInfoBatch(siteID string) string {
+	return fmt.Sprintf("chat.server.request.room.%s.thread.info.batch", siteID)
 }
 
 // ThreadSubscriptionList is the server-to-server request subject for the per-site
@@ -382,12 +383,6 @@ func MsgCanonicalWildcard(siteID string) string {
 // RoomsInfoBatchSubscribe is the per-site subscription subject for room-service.
 func RoomsInfoBatchSubscribe(siteID string) string {
 	return fmt.Sprintf("chat.server.request.room.%s.info.batch", siteID)
-}
-
-// ThreadUnreadSummarySubscribe is the per-site subscription subject for the
-// thread unread summary RPC.
-func ThreadUnreadSummarySubscribe(siteID string) string {
-	return fmt.Sprintf("chat.server.request.room.%s.thread.unread.summary", siteID)
 }
 
 func UserResponseWildcard() string {
@@ -972,6 +967,21 @@ func UserThreadList(account, siteID string) string {
 // thread inbox RPC (siteID baked in, account left as {account}).
 func UserThreadListPattern(siteID string) string {
 	return fmt.Sprintf("chat.user.{account}.request.user.%s.thread.list", siteID)
+}
+
+// UserThreadUnreadSummary is the client-facing subject for the cross-site thread
+// unread badge. siteID is the CALLER's own home site. Pair with
+// UserThreadUnreadSummaryPattern for user-service's registration.
+func UserThreadUnreadSummary(account, siteID string) string {
+	if !isValidAccountToken(account) {
+		panic("invalid account token: contains NATS wildcard characters")
+	}
+	return fmt.Sprintf("chat.user.%s.request.user.%s.thread.unread.summary", account, siteID)
+}
+
+// UserThreadUnreadSummaryPattern is the natsrouter pattern user-service registers.
+func UserThreadUnreadSummaryPattern(siteID string) string {
+	return fmt.Sprintf("chat.user.{account}.request.user.%s.thread.unread.summary", siteID)
 }
 
 func UserSubscriptionSetAppSubscription(account, siteID string) string {

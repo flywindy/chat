@@ -2272,6 +2272,65 @@ func TestHandler_handleRoomsInfoBatch_chunking(t *testing.T) {
 	}
 }
 
+func TestHandler_threadRoomInfoBatch(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	store := NewMockRoomStore(ctrl)
+	h := &Handler{store: store, siteID: "site-a", maxBatchSize: 100}
+
+	lastMsg := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	store.EXPECT().
+		GetThreadRoomInfos(gomock.Any(), []string{"tr1", "tr2"}).
+		Return([]ThreadRoomInfoRow{
+			{ThreadRoomID: "tr1", LastMsgAt: lastMsg},
+		}, nil)
+
+	resp, err := h.threadRoomInfoBatch(ctxParams(map[string]string{}), model.ThreadRoomInfoBatchRequest{
+		ThreadRoomIDs: []string{"tr1", "tr2"},
+	})
+	require.NoError(t, err)
+	require.Len(t, resp.Threads, 2)
+	assert.Equal(t, model.ThreadRoomInfo{
+		ThreadRoomID: "tr1", Found: true,
+		LastMsgAt: lastMsg.UTC().UnixMilli(),
+	}, resp.Threads[0])
+	assert.Equal(t, model.ThreadRoomInfo{ThreadRoomID: "tr2", Found: false}, resp.Threads[1])
+}
+
+func TestHandler_threadRoomInfoBatch_Empty(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	h := &Handler{store: NewMockRoomStore(ctrl), siteID: "site-a", maxBatchSize: 100}
+
+	_, err := h.threadRoomInfoBatch(ctxParams(map[string]string{}), model.ThreadRoomInfoBatchRequest{})
+	var e *errcode.Error
+	require.True(t, errors.As(err, &e))
+	assert.Equal(t, errcode.CodeBadRequest, e.Code)
+}
+
+func TestHandler_threadRoomInfoBatch_OverLimit(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	store := NewMockRoomStore(ctrl)
+	h := &Handler{store: store, siteID: "site-a", maxBatchSize: 1}
+
+	_, err := h.threadRoomInfoBatch(ctxParams(map[string]string{}), model.ThreadRoomInfoBatchRequest{
+		ThreadRoomIDs: []string{"tr1", "tr2"},
+	})
+	var e *errcode.Error
+	require.True(t, errors.As(err, &e))
+	assert.Equal(t, errcode.CodeBadRequest, e.Code)
+}
+
+func TestHandler_threadRoomInfoBatch_StoreError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	store := NewMockRoomStore(ctrl)
+	store.EXPECT().GetThreadRoomInfos(gomock.Any(), gomock.Any()).Return(nil, errors.New("boom"))
+	h := &Handler{store: store, siteID: "site-a", maxBatchSize: 100}
+
+	_, err := h.threadRoomInfoBatch(ctxParams(map[string]string{}), model.ThreadRoomInfoBatchRequest{
+		ThreadRoomIDs: []string{"tr1"},
+	})
+	require.Error(t, err)
+}
+
 // --- createRoom tests ---
 
 const testRequestID = "01970a4f-8c2d-7c9a-abcd-e0123456789f"
@@ -6266,103 +6325,6 @@ func TestHandler_MessageRead_DMListSubscriptionsError_StillAccepted(t *testing.T
 	// subscription.update fires before the DM fan-out; the DM list failure only suppresses floor events.
 	require.Len(t, f.coreSubjects, 1)
 	assert.Equal(t, subject.SubscriptionUpdate("alice"), f.coreSubjects[0])
-}
-
-func TestHandler_threadUnreadSummary(t *testing.T) {
-	ms := time.UnixMilli(1717000000000).UTC()
-
-	tests := []struct {
-		name       string
-		req        model.ThreadUnreadSummaryRequest
-		setupStore func(*MockRoomStore)
-		wantErr    string
-		assertResp func(t *testing.T, resp model.ThreadUnreadSummaryResponse)
-	}{
-		{
-			name: "happy path maps all fields",
-			req:  model.ThreadUnreadSummaryRequest{UserAccount: "alice@example.com"},
-			setupStore: func(s *MockRoomStore) {
-				s.EXPECT().GetThreadUnreadSummary(gomock.Any(), "alice@example.com", "site-a").
-					Return(&ThreadUnreadSummary{
-						Unread:              true,
-						UnreadDirectMessage: true,
-						UnreadMention:       false,
-						LastMessageAt:       &ms,
-					}, nil)
-			},
-			assertResp: func(t *testing.T, resp model.ThreadUnreadSummaryResponse) {
-				assert.True(t, resp.Unread)
-				assert.True(t, resp.UnreadDirectMessage)
-				assert.False(t, resp.UnreadMention)
-				require.NotNil(t, resp.LastMessageAt)
-				assert.Equal(t, int64(1717000000000), *resp.LastMessageAt)
-			},
-		},
-		{
-			name: "nil lastMessageAt maps to nil",
-			req:  model.ThreadUnreadSummaryRequest{UserAccount: "bob@example.com"},
-			setupStore: func(s *MockRoomStore) {
-				s.EXPECT().GetThreadUnreadSummary(gomock.Any(), "bob@example.com", "site-a").
-					Return(&ThreadUnreadSummary{}, nil)
-			},
-			assertResp: func(t *testing.T, resp model.ThreadUnreadSummaryResponse) {
-				assert.False(t, resp.Unread)
-				assert.Nil(t, resp.LastMessageAt)
-			},
-		},
-		{
-			name: "non-nil zero-time lastMessageAt maps to nil",
-			req:  model.ThreadUnreadSummaryRequest{UserAccount: "carol@example.com"},
-			setupStore: func(s *MockRoomStore) {
-				zero := time.Time{}
-				s.EXPECT().GetThreadUnreadSummary(gomock.Any(), "carol@example.com", "site-a").
-					Return(&ThreadUnreadSummary{Unread: true, UnreadMention: true, LastMessageAt: &zero}, nil)
-			},
-			assertResp: func(t *testing.T, resp model.ThreadUnreadSummaryResponse) {
-				assert.True(t, resp.Unread)
-				assert.True(t, resp.UnreadMention)
-				assert.Nil(t, resp.LastMessageAt, "non-nil zero *time.Time must produce nil LastMessageAt")
-			},
-		},
-		{
-			name:    "empty userAccount is rejected",
-			req:     model.ThreadUnreadSummaryRequest{UserAccount: ""},
-			wantErr: "userAccount must not be empty",
-		},
-		{
-			name: "store error propagates",
-			req:  model.ThreadUnreadSummaryRequest{UserAccount: "alice@example.com"},
-			setupStore: func(s *MockRoomStore) {
-				s.EXPECT().GetThreadUnreadSummary(gomock.Any(), "alice@example.com", "site-a").
-					Return(nil, errors.New("boom"))
-			},
-			wantErr: "get thread unread summary",
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			ctrl := gomock.NewController(t)
-			store := NewMockRoomStore(ctrl)
-			if tc.setupStore != nil {
-				tc.setupStore(store)
-			}
-			h := &Handler{store: store, siteID: "site-a"}
-
-			resp, err := h.threadUnreadSummary(ctxParams(map[string]string{}), tc.req)
-
-			if tc.wantErr != "" {
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), tc.wantErr)
-				return
-			}
-			require.NoError(t, err)
-			require.NotNil(t, resp)
-			if tc.assertResp != nil {
-				tc.assertResp(t, *resp)
-			}
-		})
-	}
 }
 
 func TestHandler_MuteToggle_OmitsRoomName(t *testing.T) {

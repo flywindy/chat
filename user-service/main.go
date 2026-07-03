@@ -23,12 +23,13 @@ import (
 
 // Compile-time interface assertions — fail the build if implementations drift.
 var (
-	_ service.SubscriptionRepository = (*mongorepo.SubscriptionRepo)(nil)
-	_ service.UserRepository         = (*mongorepo.UserRepo)(nil)
-	_ service.AppRepository          = (*mongorepo.AppRepo)(nil)
-	_ service.RoomClient             = (*roomclient.Client)(nil)
-	_ service.HistoryClient          = (*historyclient.Client)(nil)
-	_ service.EventPublisher         = (*publisher.Publisher)(nil)
+	_ service.SubscriptionRepository       = (*mongorepo.SubscriptionRepo)(nil)
+	_ service.UserRepository               = (*mongorepo.UserRepo)(nil)
+	_ service.AppRepository                = (*mongorepo.AppRepo)(nil)
+	_ service.ThreadSubscriptionRepository = (*mongorepo.ThreadSubscriptionRepo)(nil)
+	_ service.RoomClient                   = (*roomclient.Client)(nil)
+	_ service.HistoryClient                = (*historyclient.Client)(nil)
+	_ service.EventPublisher               = (*publisher.Publisher)(nil)
 )
 
 func main() {
@@ -70,6 +71,7 @@ func main() {
 	subRepo := mongorepo.NewSubscriptionRepo(db, cfg.SiteID)
 	userRepo := mongorepo.NewUserRepo(db)
 	appRepo := mongorepo.NewAppRepo(db)
+	threadSubRepo := mongorepo.NewThreadSubscriptionRepo(db)
 	if err := subRepo.EnsureIndexes(ctx); err != nil {
 		slog.Error("ensure indexes failed", "error", err)
 		os.Exit(1)
@@ -82,8 +84,12 @@ func main() {
 		slog.Error("ensure indexes failed", "error", err)
 		os.Exit(1)
 	}
+	if err := threadSubRepo.EnsureIndexes(ctx); err != nil {
+		slog.Error("ensure indexes failed", "error", err)
+		os.Exit(1)
+	}
 
-	svc := service.New(subRepo, userRepo, appRepo, roomclient.New(nc, cfg.SiteID), historyclient.New(nc), publisher.New(js), &cfg)
+	svc := service.New(subRepo, userRepo, appRepo, threadSubRepo, roomclient.New(nc, cfg.SiteID), historyclient.New(nc), publisher.New(js), &cfg)
 
 	router := natsrouter.New(nc, "user-service")
 	router.Use(natsrouter.Recovery())

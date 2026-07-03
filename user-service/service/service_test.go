@@ -24,7 +24,8 @@ func newSvc(t *testing.T) (*UserService, *mocks.MockSubscriptionRepository, *moc
 	history := mocks.NewMockHistoryClient(ctrl)
 	pub := mocks.NewMockEventPublisher(ctrl)
 	cfg := &config.Config{SiteID: "site-a", AllSiteIDs: []string{"site-a", "site-b"}, MaxSubscriptionLimit: 1000, DefaultSubscriptionLimit: 40, MaxAppsLimit: 100, DefaultAppsLimit: 20, MaxAccountNames: 100}
-	return New(subs, users, apps, rooms, history, pub, cfg), subs, users, apps, rooms, pub
+	threadSubs := mocks.NewMockThreadSubscriptionRepository(ctrl)
+	return New(subs, users, apps, threadSubs, rooms, history, pub, cfg), subs, users, apps, rooms, pub
 }
 
 // ctx builds a handler context. siteID is retained for readability but unused

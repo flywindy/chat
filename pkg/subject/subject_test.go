@@ -54,8 +54,6 @@ func TestSubjectBuilders(t *testing.T) {
 			"chat.msg.canonical.site-a.deleted"},
 		{"RoomsInfoBatch", subject.RoomsInfoBatch("site-a"),
 			"chat.server.request.room.site-a.info.batch"},
-		{"ThreadUnreadSummary", subject.ThreadUnreadSummary("site-a"),
-			"chat.server.request.room.site-a.thread.unread.summary"},
 		{"RoomEvent", subject.RoomEvent("r1"), "chat.room.r1.event"},
 		{"UserRoomEvent", subject.UserRoomEvent("alice"), "chat.user.alice.event.room"},
 		{"RoomKeyUpdate", subject.RoomKeyUpdate("alice"),
@@ -271,8 +269,6 @@ func TestWildcardPatterns(t *testing.T) {
 			"chat.user.*.request.room.*.site-a.member.add"},
 		{"RoomsInfoBatchSubscribe", subject.RoomsInfoBatchSubscribe("site-a"),
 			"chat.server.request.room.site-a.info.batch"},
-		{"ThreadUnreadSummarySubscribe", subject.ThreadUnreadSummarySubscribe("site-a"),
-			"chat.server.request.room.site-a.thread.unread.summary"},
 		{"MsgThreadWild", subject.MsgThreadWildcard("site-a"),
 			"chat.user.*.request.room.*.site-a.msg.thread"},
 		{"MsgThreadParentWild", subject.MsgThreadParentWildcard("site-a"),
@@ -913,6 +909,25 @@ func TestTeamsSubjectBuilders(t *testing.T) {
 		assert.Equal(t, "chat.user.{account}.request.room.{roomID}.site-a.teams.meeting", subject.TeamsMeetingPattern("site-a"))
 		assert.Equal(t, "chat.user.{account}.request.teams.site-a.call.user", subject.TeamsUserCallPattern("site-a"))
 	})
+}
+
+func TestUserThreadUnreadSummary(t *testing.T) {
+	assert.Equal(t,
+		"chat.user.alice.request.user.site-a.thread.unread.summary",
+		subject.UserThreadUnreadSummary("alice", "site-a"))
+	assert.Equal(t,
+		"chat.user.{account}.request.user.site-a.thread.unread.summary",
+		subject.UserThreadUnreadSummaryPattern("site-a"))
+}
+
+func TestUserThreadUnreadSummary_PanicsOnWildcardAccount(t *testing.T) {
+	assert.Panics(t, func() { subject.UserThreadUnreadSummary("a.*", "site-a") })
+}
+
+func TestThreadRoomInfoBatch(t *testing.T) {
+	assert.Equal(t,
+		"chat.server.request.room.site-a.thread.info.batch",
+		subject.ThreadRoomInfoBatch("site-a"))
 }
 
 func TestOrgSyncEmployeesUpsert(t *testing.T) {

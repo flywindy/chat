@@ -35,14 +35,11 @@ type RoomCounts struct {
 	OwnerCount  int
 }
 
-// ThreadUnreadSummary is the result of GetThreadUnreadSummary — a per-site
-// rollup of a single user's thread unread state, computed in one aggregation.
-// The bson tags let the aggregation's $group output decode straight into it.
-type ThreadUnreadSummary struct {
-	Unread              bool       `bson:"unread"`
-	UnreadDirectMessage bool       `bson:"unreadDirectMessage"`
-	UnreadMention       bool       `bson:"unreadMention"`
-	LastMessageAt       *time.Time `bson:"lastMessageAt"`
+// ThreadRoomInfoRow is one thread room's last-activity time, the result of
+// GetThreadRoomInfos.
+type ThreadRoomInfoRow struct {
+	ThreadRoomID string
+	LastMsgAt    time.Time
 }
 
 type ReadReceiptRow struct {
@@ -62,7 +59,6 @@ type RoomBotAppEntry struct {
 type RoomStore interface {
 	GetRoom(ctx context.Context, id string) (*model.Room, error)
 	ListRoomsByIDs(ctx context.Context, ids []string) ([]model.Room, error)
-	GetThreadUnreadSummary(ctx context.Context, account, siteID string) (*ThreadUnreadSummary, error)
 	GetSubscription(ctx context.Context, account, roomID string) (*model.Subscription, error)
 	// CheckMembership verifies (account, roomID) has a subscription without
 	// decoding the document — an {_id:1}-projected existence check for the
@@ -202,6 +198,9 @@ type RoomStore interface {
 	// UpdateThreadRoomMinUserLastSeenAt sets or clears thread_rooms.minUserLastSeenAt
 	// for threadRoomID. A nil value clears the field via $unset; non-nil writes via $set.
 	UpdateThreadRoomMinUserLastSeenAt(ctx context.Context, threadRoomID string, t *time.Time) error
+	// GetThreadRoomInfos returns each existing thread room's lastMsgAt. Missing
+	// thread rooms are omitted, not an error.
+	GetThreadRoomInfos(ctx context.Context, threadRoomIDs []string) ([]ThreadRoomInfoRow, error)
 
 	// UpdateRoomVisibility sets rooms.{restricted, externalAccess, updatedAt}.
 	// Returns ErrRoomNotFound when no room matches.

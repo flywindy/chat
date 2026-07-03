@@ -176,8 +176,8 @@ func (s *MongoStore) EnsureIndexes(ctx context.Context) error {
 	}); err != nil {
 		return fmt.Errorf("ensure thread_subscriptions (threadRoomId,lastSeenAt) index: %w", err)
 	}
-	// Backs GetThreadUnreadSummary's $match {userAccount, siteId}. No existing
-	// thread_subscriptions index has userAccount as a prefix.
+	// Backs per-user, per-site thread_subscriptions lookups on {userAccount,
+	// siteId}. No existing thread_subscriptions index has userAccount as a prefix.
 	if _, err := s.threadSubscriptions.Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys: bson.D{{Key: "userAccount", Value: 1}, {Key: "siteId", Value: 1}},
 	}); err != nil {
@@ -1677,68 +1677,6 @@ func (s *MongoStore) FindUsersByAccounts(ctx context.Context, accounts []string)
 	return users, nil
 }
 
-// GetThreadUnreadSummary rolls up a single user's thread unread state on this
-// site. Unread = subscribed AND threadRoom.lastMsgAt > lastSeenAt (nil lastSeenAt
-// = never seen = unread, via BSON null being the smallest value). The booleans
-// are an OR across the user's threads, expressed as $max over per-row booleans
-// (BSON orders false < true). lastMessageAt is the newest thread message time.
-func (s *MongoStore) GetThreadUnreadSummary(ctx context.Context, account, siteID string) (*ThreadUnreadSummary, error) {
-	pipeline := mongo.Pipeline{
-		{{Key: "$match", Value: bson.M{"userAccount": account, "siteId": siteID}}},
-		{{Key: "$lookup", Value: bson.M{
-			"from":         "thread_rooms",
-			"localField":   "threadRoomId",
-			"foreignField": "_id",
-			"as":           "tr",
-		}}},
-		{{Key: "$unwind", Value: "$tr"}},
-		{{Key: "$lookup", Value: bson.M{
-			"from":         "rooms",
-			"localField":   "roomId",
-			"foreignField": "_id",
-			"as":           "room",
-		}}},
-		{{Key: "$unwind", Value: bson.M{"path": "$room", "preserveNullAndEmptyArrays": true}}},
-		{{Key: "$addFields", Value: bson.M{
-			"isUnread": bson.M{"$gt": bson.A{"$tr.lastMsgAt", "$lastSeenAt"}},
-			"isDMUnread": bson.M{"$and": bson.A{
-				bson.M{"$gt": bson.A{"$tr.lastMsgAt", "$lastSeenAt"}},
-				bson.M{"$eq": bson.A{"$room.type", model.RoomTypeDM}},
-			}},
-		}}},
-		{{Key: "$group", Value: bson.M{
-			"_id":    nil,
-			"unread": bson.M{"$max": "$isUnread"},
-			// unreadMention is not conditioned on isUnread: UpdateThreadSubscriptionRead
-			// always clears hasMention to false, so a true value implies the thread is
-			// still unread. inbox-worker's $max-merge can re-set it on a late federated
-			// mention event after a local read — intentional, pre-existing behavior.
-			"unreadDirectMessage": bson.M{"$max": "$isDMUnread"},
-			"unreadMention":       bson.M{"$max": "$hasMention"},
-			"lastMessageAt":       bson.M{"$max": "$tr.lastMsgAt"},
-		}}},
-	}
-
-	cursor, err := s.threadSubscriptions.Aggregate(ctx, pipeline)
-	if err != nil {
-		return nil, fmt.Errorf("aggregate thread unread summary: %w", err)
-	}
-	defer cursor.Close(ctx)
-
-	if !cursor.Next(ctx) {
-		if err := cursor.Err(); err != nil {
-			return nil, fmt.Errorf("iterate thread unread summary: %w", err)
-		}
-		return &ThreadUnreadSummary{}, nil
-	}
-
-	var result ThreadUnreadSummary
-	if err := cursor.Decode(&result); err != nil {
-		return nil, fmt.Errorf("decode thread unread summary: %w", err)
-	}
-	return &result, nil
-}
-
 // GetThreadRoomByID returns the thread_rooms document for threadRoomID,
 // projected to lastMsgAt + minUserLastSeenAt for the floor-recompute path.
 // Other ThreadRoom fields are NOT populated. Returns (nil, nil) when no
@@ -1800,4 +1738,34 @@ func (s *MongoStore) UpdateThreadRoomMinUserLastSeenAt(ctx context.Context, thre
 		return fmt.Errorf("update minUserLastSeenAt for thread room %q: %w", threadRoomID, err)
 	}
 	return nil
+}
+
+// GetThreadRoomInfos returns each existing thread room's lastMsgAt via a single
+// projected find; missing thread rooms are omitted.
+func (s *MongoStore) GetThreadRoomInfos(ctx context.Context, threadRoomIDs []string) ([]ThreadRoomInfoRow, error) {
+	cursor, err := s.threadRooms.Find(ctx,
+		bson.M{"_id": bson.M{"$in": threadRoomIDs}},
+		options.Find().SetProjection(bson.M{"_id": 1, "lastMsgAt": 1}),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("find thread rooms: %w", err)
+	}
+	defer cursor.Close(ctx)
+
+	var trs []struct {
+		ID        string    `bson:"_id"`
+		LastMsgAt time.Time `bson:"lastMsgAt"`
+	}
+	if err := cursor.All(ctx, &trs); err != nil {
+		return nil, fmt.Errorf("decode thread rooms: %w", err)
+	}
+
+	out := make([]ThreadRoomInfoRow, 0, len(trs))
+	for _, tr := range trs {
+		out = append(out, ThreadRoomInfoRow{
+			ThreadRoomID: tr.ID,
+			LastMsgAt:    tr.LastMsgAt,
+		})
+	}
+	return out, nil
 }

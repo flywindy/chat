@@ -122,6 +122,70 @@ func TestGetRoomsInfo_Integration(t *testing.T) {
 	})
 }
 
+func TestGetThreadRoomInfoBatch_Integration(t *testing.T) {
+	t.Run("happy path", func(t *testing.T) {
+		nc := dial(t)
+		sub, err := nc.Subscribe(subject.ThreadRoomInfoBatch("site-a"), func(m otelnats.Msg) {
+			out, _ := json.Marshal(model.ThreadRoomInfoBatchResponse{
+				Threads: []model.ThreadRoomInfo{{ThreadRoomID: "tr1", Found: true, LastMsgAt: 42}},
+			})
+			_ = m.Msg.Respond(out)
+		})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = sub.Unsubscribe() })
+
+		got, err := New(nc, "site-a").GetThreadRoomInfoBatch(context.Background(), "site-a", []string{"tr1"})
+		require.NoError(t, err)
+		require.Len(t, got, 1)
+		assert.Equal(t, int64(42), got[0].LastMsgAt)
+	})
+
+	t.Run("errcode reply relayed", func(t *testing.T) {
+		nc := dial(t)
+		sub, err := nc.Subscribe(subject.ThreadRoomInfoBatch("site-a"), func(m otelnats.Msg) {
+			data, _ := json.Marshal(errcode.BadRequest("bad"))
+			_ = m.Msg.Respond(data)
+		})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = sub.Unsubscribe() })
+
+		_, err = New(nc, "site-a").GetThreadRoomInfoBatch(context.Background(), "site-a", []string{"tr1"})
+		var e *errcode.Error
+		require.True(t, errors.As(err, &e))
+		assert.Equal(t, errcode.CodeBadRequest, e.Code)
+	})
+
+	t.Run("no responder — returns error wrapping thread-room-info rpc", func(t *testing.T) {
+		nc := dial(t)
+		// Intentionally no subscriber: nc.Request must fail with "no responders".
+
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+
+		_, err := New(nc, "site-a").GetThreadRoomInfoBatch(ctx, "site-a", []string{"tr1"})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "thread-room-info rpc")
+	})
+
+	t.Run("cross-site siteID routing — uses siteID param not c.siteID", func(t *testing.T) {
+		nc := dial(t)
+
+		// Responder on "site-b" subject proves the method routes on siteID param, not c.siteID.
+		sub, err := nc.Subscribe(subject.ThreadRoomInfoBatch("site-b"), func(m otelnats.Msg) {
+			out, _ := json.Marshal(model.ThreadRoomInfoBatchResponse{
+				Threads: []model.ThreadRoomInfo{{ThreadRoomID: "tr2", Found: true, LastMsgAt: 99}},
+			})
+			_ = m.Msg.Respond(out)
+		})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = sub.Unsubscribe() })
+
+		got, err := New(nc, "site-a").GetThreadRoomInfoBatch(context.Background(), "site-b", []string{"tr2"})
+		require.NoError(t, err)
+		require.Len(t, got, 1)
+	})
+}
+
 func TestCreateDMRoom_Integration(t *testing.T) {
 	t.Run("happy path — returns subscription from responder", func(t *testing.T) {
 		nc := dial(t)

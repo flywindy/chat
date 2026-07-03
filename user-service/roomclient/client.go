@@ -47,6 +47,27 @@ func (c *Client) GetRoomsInfo(ctx context.Context, siteID string, roomIDs []stri
 	return out.Rooms, nil
 }
 
+// GetThreadRoomInfoBatch issues a batch thread-room-info RPC to room-service on
+// the given site; non-OK reply envelopes are relayed via errcode.Parse.
+func (c *Client) GetThreadRoomInfoBatch(ctx context.Context, siteID string, threadRoomIDs []string) ([]model.ThreadRoomInfo, error) {
+	req, err := json.Marshal(model.ThreadRoomInfoBatchRequest{ThreadRoomIDs: threadRoomIDs})
+	if err != nil {
+		return nil, fmt.Errorf("marshal thread-room-info request: %w", err)
+	}
+	msg, err := c.nc.Request(ctx, subject.ThreadRoomInfoBatch(siteID), req, roomRPCTimeout)
+	if err != nil {
+		return nil, fmt.Errorf("thread-room-info rpc: %w", err)
+	}
+	if e, ok := errcode.Parse(msg.Data); ok {
+		return nil, e
+	}
+	var out model.ThreadRoomInfoBatchResponse
+	if err := json.Unmarshal(msg.Data, &out); err != nil {
+		return nil, fmt.Errorf("decode thread-room-info response: %w", err)
+	}
+	return out.Threads, nil
+}
+
 // CreateDMRoom issues a DM-room creation RPC to room-worker; non-OK reply envelopes are relayed via errcode.Parse.
 func (c *Client) CreateDMRoom(ctx context.Context, account, otherAccount string, roomType model.RoomType) (model.Subscription, error) {
 	body, err := json.Marshal(model.SyncCreateDMRequest{

@@ -3776,6 +3776,7 @@ Additional legacy fields may be present, mirroring the `GET /api/v3/users` respo
 | `chat.user.{account}.request.user.{siteID}.subscription.setAppSubscription` | [`subscription.setAppSubscription`](#subscriptionsetappsubscription) |
 | `chat.user.{account}.request.user.{siteID}.apps.list` | [`apps.list`](#appslist) |
 | `chat.user.{account}.request.user.{siteID}.thread.list` | [List User Threads](#list-user-threads) |
+| `chat.user.{account}.request.user.{siteID}.thread.unread.summary` | [Get Thread Unread Summary](#get-thread-unread-summary) |
 
 #### status.getByName
 
@@ -4521,6 +4522,58 @@ Returns the user's thread subscriptions across **all sites** as one globally-ord
 ##### Error response
 
 See [Error envelope](#6-error-envelope-reference). A malformed `cursor` returns `bad_request`.
+
+##### Triggered events — success path
+
+`None — reply only.`
+
+##### Triggered events — error path
+
+`None — error returned only via the reply subject.`
+
+---
+
+#### Get Thread Unread Summary
+
+**Subject:** `chat.user.{account}.request.user.{siteID}.thread.unread.summary`
+**Reply subject:** auto-generated `_INBOX.>` (NATS request/reply)
+
+- `{siteID}` is the **caller's own home site** — the site that holds the user's federated subscriptions and runs the aggregator.
+
+Returns the aggregated unread status of the user's thread subscriptions across every site the user participates in. `user-service` determines those sites from the user's local thread-subscription replica — joined against the user's subscriptions so a thread is only counted while the user still belongs to its room, and app (`botDM`) threads drop out once the user unsubscribes the app — queries each owning site's `room-service` for the threads' latest activity, and merges the results into one response. `unreadDirectMessage` is classified from the room type on that subscription. Sites that fail to respond are listed in `unavailableSites` rather than failing the request.
+
+##### Request body
+
+Empty object.
+
+```json
+{}
+```
+
+##### Success response
+
+| Field | Type | Notes |
+|---|---|---|
+| `unread` | boolean | Any thread has activity newer than the user's last-seen. |
+| `unreadDirectMessage` | boolean | `unread` restricted to DM-room threads. |
+| `unreadMention` | boolean | The user is @-mentioned in any unread-tracked thread. |
+| `lastMessageAt` | number? | Optional. UnixMilli of the newest thread activity across sites; omitted when none. |
+| `unavailableSites` | string[]? | Optional. Sites whose per-site lookup failed; omitted when all responded. |
+
+```json
+{
+  "unread": true,
+  "unreadDirectMessage": false,
+  "unreadMention": true,
+  "lastMessageAt": 1717000000000
+}
+```
+
+##### Error response
+
+| Condition | `code` | Notes |
+|-----------|--------|-------|
+| Internal failure | `internal` | Local thread-subscription read failed. Per-site RPC failures degrade into `unavailableSites` rather than erroring. |
 
 ##### Triggered events — success path
 
