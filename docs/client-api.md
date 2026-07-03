@@ -146,9 +146,13 @@ Login is a three-step sequence: portal userInfo lookup (§2.3) resolves the user
 |---|---|---|
 | Publish | `chat.user.{account}.>` | The client may publish only under its own user namespace. All RPC requests, the message-send subject, and any client-emitted event fall here. |
 | Publish | `_INBOX.>` | Required for the standard NATS request/reply pattern (the auto-generated reply inbox). |
+| Publish | `chat.user.presence.*.query.batch` | Batch presence-state queries. Read-only for the state broadcast (`chat.user.presence.state.*`) — this subject is deliberately named `query` so it cannot match the state pub-rule. |
 | Subscribe | `chat.user.{account}.>` | Receives all responses, notifications, and per-user events. |
 | Subscribe | `chat.room.>` | Subscribes to per-room message streams and room events for any room the user belongs to. |
 | Subscribe | `_INBOX.>` | Required to receive replies to client-issued requests. |
+| Subscribe | `chat.user.presence.state.*` | Read anyone's live presence state broadcast. |
+
+Permissions and connection limits come from the auth-service account's scoped signing key template on the NATS side — they are not inlined per JWT. The user JWT carries only an `account:{account}` tag; the scope template on the server substitutes `{{tag(account)}}` at connect time to produce the grants above.
 
 **Recommended baseline subscriptions on connect:**
 

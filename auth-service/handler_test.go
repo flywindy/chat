@@ -52,12 +52,16 @@ func (f *fakeValidator) Validate(_ context.Context, _ string) (pkgoidc.Claims, e
 	}, nil
 }
 
-// helper: create a fresh account signing key pair for tests.
-func mustAccountKP(t *testing.T) nkeys.KeyPair {
+// helper: create a fresh account signing key pair for tests. Returns both the
+// keypair and its public key — every AuthHandler needs the account pubkey to
+// stamp issuer_account on the JWT.
+func mustAccountKP(t *testing.T) (nkeys.KeyPair, string) {
 	t.Helper()
 	kp, err := nkeys.CreateAccount()
 	require.NoError(t, err, "create account key")
-	return kp
+	pub, err := kp.PublicKey()
+	require.NoError(t, err, "account public key")
+	return kp, pub
 }
 
 // helper: create a fresh user nkey public key for tests.
@@ -80,7 +84,7 @@ func setupRouter(t *testing.T, handler *AuthHandler) *gin.Engine {
 }
 
 func TestHandleAuth_ValidToken(t *testing.T) {
-	signingKP := mustAccountKP(t)
+	signingKP, accPub := mustAccountKP(t)
 	userPub := mustUserNKey(t)
 
 	validator := &fakeValidator{
@@ -91,7 +95,7 @@ func TestHandleAuth_ValidToken(t *testing.T) {
 		deptName:    "Engineering",
 		deptId:      "ABC123",
 	}
-	handler := NewAuthHandler(validator, signingKP, 2*time.Hour, false)
+	handler := NewAuthHandler(validator, signingKP, accPub, 2*time.Hour, false)
 	router := setupRouter(t, handler)
 
 	body := `{"ssoToken":"valid-token","natsPublicKey":"` + userPub + `"}`
@@ -124,27 +128,19 @@ func TestHandleAuth_ValidToken(t *testing.T) {
 	expiresAt := time.Unix(claims.Expires, 0)
 	assert.LessOrEqual(t, time.Until(expiresAt), 2*time.Hour+time.Minute)
 
-	// Check publish permissions: chat.user.alice.> and _INBOX.>
-	assert.Contains(t, []string(claims.Pub.Allow), "chat.user.alice.>")
-	assert.Contains(t, []string(claims.Pub.Allow), "_INBOX.>")
-
-	// Check subscribe permissions: chat.user.alice.>, chat.room.>, _INBOX.>
-	assert.Contains(t, []string(claims.Sub.Allow), "chat.user.alice.>")
-	assert.Contains(t, []string(claims.Sub.Allow), "chat.room.>")
-	assert.Contains(t, []string(claims.Sub.Allow), "_INBOX.>")
-
-	// Presence: read anyone's live state; publish batch queries (but not state).
-	// Scoped to exactly the implemented subjects — no deeper subtopics.
-	assert.Contains(t, []string(claims.Sub.Allow), "chat.user.presence.state.*")
-	assert.Contains(t, []string(claims.Pub.Allow), "chat.user.presence.*.query.batch")
-	assert.NotContains(t, []string(claims.Pub.Allow), "chat.user.presence.state.*",
-		"clients must not be able to publish presence state")
+	// Perms and limits live on the scoped signing key template; the JWT
+	// only stamps the account tag for {{tag(account)}} substitution.
+	assert.Contains(t, claims.Tags, "account:alice")
+	assert.Empty(t, claims.Pub.Allow)
+	assert.Empty(t, claims.Sub.Allow)
+	assert.Equal(t, jwt.UserPermissionLimits{}, claims.UserPermissionLimits,
+		"non-zero per-user limits trigger auth violation under a scoped SK")
 }
 
 func TestHandleAuth_ExpiredToken(t *testing.T) {
-	signingKP := mustAccountKP(t)
+	signingKP, accPub := mustAccountKP(t)
 	validator := &fakeValidator{expired: true}
-	handler := NewAuthHandler(validator, signingKP, 2*time.Hour, false)
+	handler := NewAuthHandler(validator, signingKP, accPub, 2*time.Hour, false)
 	router := setupRouter(t, handler)
 
 	userPub := mustUserNKey(t)
@@ -160,9 +156,9 @@ func TestHandleAuth_ExpiredToken(t *testing.T) {
 }
 
 func TestHandleAuth_InvalidToken(t *testing.T) {
-	signingKP := mustAccountKP(t)
+	signingKP, accPub := mustAccountKP(t)
 	validator := &fakeValidator{invalid: true}
-	handler := NewAuthHandler(validator, signingKP, 2*time.Hour, false)
+	handler := NewAuthHandler(validator, signingKP, accPub, 2*time.Hour, false)
 	router := setupRouter(t, handler)
 
 	userPub := mustUserNKey(t)
@@ -178,9 +174,9 @@ func TestHandleAuth_InvalidToken(t *testing.T) {
 }
 
 func TestHandleAuth_InvalidNKey(t *testing.T) {
-	signingKP := mustAccountKP(t)
+	signingKP, accPub := mustAccountKP(t)
 	validator := &fakeValidator{account: "alice", subject: "uuid-alice"}
-	handler := NewAuthHandler(validator, signingKP, 2*time.Hour, false)
+	handler := NewAuthHandler(validator, signingKP, accPub, 2*time.Hour, false)
 	router := setupRouter(t, handler)
 
 	body := `{"ssoToken":"valid-token","natsPublicKey":"NOT-A-VALID-NKEY"}`
@@ -194,9 +190,9 @@ func TestHandleAuth_InvalidNKey(t *testing.T) {
 }
 
 func TestHandleAuth_MissingFields(t *testing.T) {
-	signingKP := mustAccountKP(t)
+	signingKP, accPub := mustAccountKP(t)
 	validator := &fakeValidator{account: "alice"}
-	handler := NewAuthHandler(validator, signingKP, 2*time.Hour, false)
+	handler := NewAuthHandler(validator, signingKP, accPub, 2*time.Hour, false)
 	router := setupRouter(t, handler)
 
 	tests := []struct {
@@ -221,13 +217,13 @@ func TestHandleAuth_MissingFields(t *testing.T) {
 }
 
 func TestHandleAuth_PermissionsPerUser(t *testing.T) {
-	signingKP := mustAccountKP(t)
+	signingKP, accPub := mustAccountKP(t)
 
 	accounts := []string{"alice", "bob", "charlie"}
 	for _, account := range accounts {
 		t.Run(account, func(t *testing.T) {
 			validator := &fakeValidator{account: account, subject: "uuid-" + account}
-			handler := NewAuthHandler(validator, signingKP, 2*time.Hour, false)
+			handler := NewAuthHandler(validator, signingKP, accPub, 2*time.Hour, false)
 			router := setupRouter(t, handler)
 
 			userPub := mustUserNKey(t)
@@ -245,20 +241,19 @@ func TestHandleAuth_PermissionsPerUser(t *testing.T) {
 			claims, err := jwt.DecodeUserClaims(resp.NATSJWT)
 			require.NoError(t, err)
 
-			wantPub := "chat.user." + account + ".>"
-			assert.Contains(t, []string(claims.Pub.Allow), wantPub)
-
-			wantSub := "chat.user." + account + ".>"
-			assert.Contains(t, []string(claims.Sub.Allow), wantSub)
+			assert.Contains(t, claims.Tags, "account:"+account)
+			assert.Equal(t, accPub, claims.IssuerAccount)
+			assert.Empty(t, claims.Pub.Allow)
+			assert.Empty(t, claims.Sub.Allow)
 		})
 	}
 }
 
 func TestHandleAuth_DevMode_ValidRequest(t *testing.T) {
-	signingKP := mustAccountKP(t)
+	signingKP, accPub := mustAccountKP(t)
 	userPub := mustUserNKey(t)
 
-	handler := NewAuthHandler(nil, signingKP, 2*time.Hour, true)
+	handler := NewAuthHandler(nil, signingKP, accPub, 2*time.Hour, true)
 	router := setupRouter(t, handler)
 
 	body := `{"account":"alice","natsPublicKey":"` + userPub + `"}`
@@ -276,19 +271,17 @@ func TestHandleAuth_DevMode_ValidRequest(t *testing.T) {
 	assert.Equal(t, "alice", resp.UserInfo.EngName)
 	assert.Equal(t, "alice@dev.local", resp.UserInfo.Email)
 
-	// Verify NATS JWT is valid and scoped to alice.
 	claims, err := jwt.DecodeUserClaims(resp.NATSJWT)
 	require.NoError(t, err)
 	assert.Equal(t, userPub, claims.Subject)
-	assert.Contains(t, []string(claims.Pub.Allow), "chat.user.alice.>")
-	assert.Contains(t, []string(claims.Sub.Allow), "chat.user.alice.>")
+	assert.Contains(t, claims.Tags, "account:alice")
 }
 
 func TestHandleAuth_DevMode_MissingAccount(t *testing.T) {
-	signingKP := mustAccountKP(t)
+	signingKP, accPub := mustAccountKP(t)
 	userPub := mustUserNKey(t)
 
-	handler := NewAuthHandler(nil, signingKP, 2*time.Hour, true)
+	handler := NewAuthHandler(nil, signingKP, accPub, 2*time.Hour, true)
 	router := setupRouter(t, handler)
 
 	body := `{"natsPublicKey":"` + userPub + `"}`
@@ -302,9 +295,9 @@ func TestHandleAuth_DevMode_MissingAccount(t *testing.T) {
 }
 
 func TestHandleAuth_DevMode_InvalidNKey(t *testing.T) {
-	signingKP := mustAccountKP(t)
+	signingKP, accPub := mustAccountKP(t)
 
-	handler := NewAuthHandler(nil, signingKP, 2*time.Hour, true)
+	handler := NewAuthHandler(nil, signingKP, accPub, 2*time.Hour, true)
 	router := setupRouter(t, handler)
 
 	body := `{"account":"alice","natsPublicKey":"NOT-VALID"}`
@@ -324,8 +317,9 @@ func TestHandleAuth_DevMode_TokenGenerationFailure(t *testing.T) {
 	// cause is logged via Classify and must NOT appear in the response body.
 	userKP, err := nkeys.CreateUser()
 	require.NoError(t, err, "create user key")
+	_, accPub := mustAccountKP(t)
 
-	handler := NewAuthHandler(nil, userKP, 2*time.Hour, true)
+	handler := NewAuthHandler(nil, userKP, accPub, 2*time.Hour, true)
 	router := setupRouter(t, handler)
 
 	userPub := mustUserNKey(t)
@@ -345,8 +339,8 @@ func TestHandleAuth_DevMode_TokenGenerationFailure(t *testing.T) {
 }
 
 func TestHandleHealth(t *testing.T) {
-	signingKP := mustAccountKP(t)
-	handler := NewAuthHandler(&fakeValidator{}, signingKP, 2*time.Hour, false)
+	signingKP, accPub := mustAccountKP(t)
+	handler := NewAuthHandler(&fakeValidator{}, signingKP, accPub, 2*time.Hour, false)
 	router := setupRouter(t, handler)
 
 	w := httptest.NewRecorder()
@@ -358,7 +352,7 @@ func TestHandleHealth(t *testing.T) {
 }
 
 func TestWithJitter_Clamping(t *testing.T) {
-	kp := mustAccountKP(t)
+	kp, accPub := mustAccountKP(t)
 	cases := []struct {
 		name string
 		in   float64
@@ -372,14 +366,14 @@ func TestWithJitter_Clamping(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			h := NewAuthHandler(nil, kp, time.Hour, true, WithJitter(tc.in))
+			h := NewAuthHandler(nil, kp, accPub, time.Hour, true, WithJitter(tc.in))
 			assert.Equal(t, tc.want, h.jwtJitter)
 		})
 	}
 }
 
 func TestSignNATSJWT_LifetimeJitter(t *testing.T) {
-	signingKP := mustAccountKP(t)
+	signingKP, accPub := mustAccountKP(t)
 	validator := &fakeValidator{account: "alice", subject: "uuid-alice"}
 	base := 100 * time.Minute
 
@@ -394,7 +388,7 @@ func TestSignNATSJWT_LifetimeJitter(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			handler := NewAuthHandler(validator, signingKP, base, false,
+			handler := NewAuthHandler(validator, signingKP, accPub, base, false,
 				WithJitter(0.1), WithRandFloat(func() float64 { return tt.rnd }))
 			router := setupRouter(t, handler)
 
@@ -423,7 +417,8 @@ func TestSignNATSJWT_LifetimeJitter(t *testing.T) {
 func TestHandleAuth_MissingAccountClaim(t *testing.T) {
 	// Prod-mode guard: a token with no usable account claim must be refused
 	// before minting — the JWT would otherwise grant chat.user..> permissions.
-	handler := NewAuthHandler(&fakeValidator{}, mustAccountKP(t), 2*time.Hour, false)
+	signingKP, accPub := mustAccountKP(t)
+	handler := NewAuthHandler(&fakeValidator{}, signingKP, accPub, 2*time.Hour, false)
 	router := setupRouter(t, handler)
 
 	body := `{"ssoToken":"valid-token","natsPublicKey":"` + mustUserNKey(t) + `"}`
@@ -440,7 +435,7 @@ func TestHandleAuth_MissingAccountClaim(t *testing.T) {
 func TestHandleAuth_InvalidAccountFormat(t *testing.T) {
 	// The account becomes a NATS subject token (chat.user.{account}.>): dots
 	// nest namespaces, wildcards broaden grants — refuse before gate and sign.
-	signingKP := mustAccountKP(t)
+	signingKP, accPub := mustAccountKP(t)
 	cases := []struct{ name, account string }{
 		{"dotted account nests subjects", "john.doe"},
 		{"single-token wildcard", "mal*ory"},
@@ -449,7 +444,7 @@ func TestHandleAuth_InvalidAccountFormat(t *testing.T) {
 	}
 	for _, tt := range cases {
 		t.Run("prod: "+tt.name, func(t *testing.T) {
-			handler := NewAuthHandler(&fakeValidator{account: tt.account}, signingKP, 2*time.Hour, false)
+			handler := NewAuthHandler(&fakeValidator{account: tt.account}, signingKP, accPub, 2*time.Hour, false)
 			router := setupRouter(t, handler)
 
 			body := `{"ssoToken":"valid-token","natsPublicKey":"` + mustUserNKey(t) + `"}`
@@ -462,7 +457,7 @@ func TestHandleAuth_InvalidAccountFormat(t *testing.T) {
 			errtest.AssertCode(t, w.Body.Bytes(), errcode.CodeBadRequest)
 		})
 		t.Run("dev: "+tt.name, func(t *testing.T) {
-			handler := NewAuthHandler(nil, signingKP, 2*time.Hour, true)
+			handler := NewAuthHandler(nil, signingKP, accPub, 2*time.Hour, true)
 			router := setupRouter(t, handler)
 
 			payload, err := json.Marshal(map[string]string{"account": tt.account, "natsPublicKey": mustUserNKey(t)})
@@ -481,7 +476,7 @@ func TestHandleAuth_InvalidAccountFormat(t *testing.T) {
 	// the rule is exactly pkg/subject's token invariant, not an ASCII allowlist.
 	for _, account := range []string{"alice@corp", "júlio"} {
 		t.Run("routable account accepted: "+account, func(t *testing.T) {
-			handler := NewAuthHandler(nil, signingKP, 2*time.Hour, true)
+			handler := NewAuthHandler(nil, signingKP, accPub, 2*time.Hour, true)
 			router := setupRouter(t, handler)
 
 			payload, err := json.Marshal(map[string]string{"account": account, "natsPublicKey": mustUserNKey(t)})
@@ -500,9 +495,10 @@ func TestHandleAuth_TokenGenerationFailure(t *testing.T) {
 	// Prod-mode twin of the dev-mode test: a user key cannot sign, so the prod path returns 500.
 	userKP, err := nkeys.CreateUser()
 	require.NoError(t, err, "create user key")
+	_, accPub := mustAccountKP(t)
 
 	validator := &fakeValidator{account: "alice", subject: "uuid-alice"}
-	handler := NewAuthHandler(validator, userKP, 2*time.Hour, false)
+	handler := NewAuthHandler(validator, userKP, accPub, 2*time.Hour, false)
 	router := setupRouter(t, handler)
 
 	userPub := mustUserNKey(t)

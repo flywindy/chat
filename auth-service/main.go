@@ -18,11 +18,12 @@ import (
 )
 
 type config struct {
-	Port                string        `env:"PORT"                  envDefault:"8080"`
-	DevMode             bool          `env:"DEV_MODE"              envDefault:"false"`
-	AuthSigningKey      string        `env:"AUTH_SIGNING_KEY,required"`
-	NATSJWTExpiry       time.Duration `env:"NATS_JWT_EXPIRY"        envDefault:"2h"`
-	NATSJWTExpiryJitter float64       `env:"NATS_JWT_EXPIRY_JITTER" envDefault:"0.1"`
+	Port                 string        `env:"PORT"                     envDefault:"8080"`
+	DevMode              bool          `env:"DEV_MODE"                 envDefault:"false"`
+	AuthScopedSigningKey string        `env:"AUTH_SCOPED_SIGNING_KEY,required"`
+	AuthAccountPubKey    string        `env:"AUTH_ACCOUNT_PUB_KEY,required"`
+	NATSJWTExpiry        time.Duration `env:"NATS_JWT_EXPIRY"           envDefault:"2h"`
+	NATSJWTExpiryJitter  float64       `env:"NATS_JWT_EXPIRY_JITTER"    envDefault:"0.1"`
 
 	// OIDC settings — required when DEV_MODE is false.
 	OIDCIssuerURL string   `env:"OIDC_ISSUER_URL"`
@@ -45,9 +46,15 @@ func run() error {
 		return fmt.Errorf("parse config: %w", err)
 	}
 
-	signingKP, err := nkeys.FromSeed([]byte(cfg.AuthSigningKey))
+	signingKP, err := nkeys.FromSeed([]byte(cfg.AuthScopedSigningKey))
 	if err != nil {
 		return fmt.Errorf("parse signing key: %w", err)
+	}
+	if skPub, err := signingKP.PublicKey(); err != nil || !nkeys.IsValidPublicAccountKey(skPub) {
+		return fmt.Errorf("AUTH_SCOPED_SIGNING_KEY is not an account-type signing key")
+	}
+	if !nkeys.IsValidPublicAccountKey(cfg.AuthAccountPubKey) {
+		return fmt.Errorf("AUTH_ACCOUNT_PUB_KEY is not a valid account public key")
 	}
 
 	ctx := context.Background()
@@ -58,7 +65,7 @@ func run() error {
 
 	if cfg.DevMode {
 		slog.Warn("dev mode enabled — OIDC validation disabled")
-		handler = NewAuthHandler(nil, signingKP, cfg.NATSJWTExpiry, true, opts...)
+		handler = NewAuthHandler(nil, signingKP, cfg.AuthAccountPubKey, cfg.NATSJWTExpiry, true, opts...)
 	} else {
 		if cfg.OIDCIssuerURL == "" || len(cfg.OIDCAudiences) == 0 {
 			return fmt.Errorf("OIDC_ISSUER_URL and OIDC_AUDIENCES are required when DEV_MODE is false")
@@ -74,7 +81,7 @@ func run() error {
 			return fmt.Errorf("create oidc validator: %w", err)
 		}
 		slog.Info("oidc validator initialized", "issuer", cfg.OIDCIssuerURL)
-		handler = NewAuthHandler(oidcValidator, signingKP, cfg.NATSJWTExpiry, false, opts...)
+		handler = NewAuthHandler(oidcValidator, signingKP, cfg.AuthAccountPubKey, cfg.NATSJWTExpiry, false, opts...)
 	}
 
 	gin.SetMode(gin.ReleaseMode)

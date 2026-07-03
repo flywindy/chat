@@ -54,12 +54,13 @@ type userInfoResp struct {
 // AuthHandler processes auth requests, validates SSO tokens via OIDC,
 // and returns signed NATS user JWTs with scoped permissions.
 type AuthHandler struct {
-	validator  TokenValidator
-	signingKey nkeys.KeyPair
-	jwtExpiry  time.Duration
-	jwtJitter  float64        // fraction of jwtExpiry; 0 = fixed lifetime
-	randFloat  func() float64 // injectable [0,1) source; defaults to crypto rand
-	devMode    bool
+	validator     TokenValidator
+	signingKey    nkeys.KeyPair
+	accountPubKey string
+	jwtExpiry     time.Duration
+	jwtJitter     float64        // fraction of jwtExpiry; 0 = fixed lifetime
+	randFloat     func() float64 // injectable [0,1) source; defaults to crypto rand
+	devMode       bool
 }
 
 // Option configures optional AuthHandler behavior.
@@ -84,15 +85,18 @@ func WithRandFloat(fn func() float64) Option {
 	return func(h *AuthHandler) { h.randFloat = fn }
 }
 
-// NewAuthHandler creates an AuthHandler with the given token validator,
-// NATS account signing key, and JWT expiry duration.
-func NewAuthHandler(validator TokenValidator, signingKey nkeys.KeyPair, jwtExpiry time.Duration, devMode bool, opts ...Option) *AuthHandler {
+// NewAuthHandler creates an AuthHandler with the given token validator, NATS
+// account scoped signing key, the account public key that key belongs to (used
+// for the JWT's issuer_account claim so the NATS resolver can look up the
+// account), and JWT expiry duration.
+func NewAuthHandler(validator TokenValidator, signingKey nkeys.KeyPair, accountPubKey string, jwtExpiry time.Duration, devMode bool, opts ...Option) *AuthHandler {
 	h := &AuthHandler{
-		validator:  validator,
-		signingKey: signingKey,
-		jwtExpiry:  jwtExpiry,
-		randFloat:  cryptoRandFloat,
-		devMode:    devMode,
+		validator:     validator,
+		signingKey:    signingKey,
+		accountPubKey: accountPubKey,
+		jwtExpiry:     jwtExpiry,
+		randFloat:     cryptoRandFloat,
+		devMode:       devMode,
 	}
 	for _, opt := range opts {
 		opt(h)
@@ -230,30 +234,32 @@ func (h *AuthHandler) handleDevAuth(c *gin.Context) {
 	})
 }
 
-// signNATSJWT creates a signed NATS user JWT with permissions scoped
-// to the user's namespace and standard chat subjects.
+// signNATSJWT signs a scoped NATS user JWT. Permissions and limits come
+// from the account's scoped signing key template; the account tag drives
+// per-user subject substitution ({{tag(account)}}). IssuerAccount tells
+// the NATS resolver which account this signing key belongs to, since the
+// JWT's iss is the signing-key pubkey, not the account root.
+//
+// Effective grants declared on the scope template (kept in sync with
+// docker-local/setup.sh; the prod template is owned by the platform team,
+// so a change there must be mirrored here and in docs/client-api.md §2.1):
+//
+//	Pub allow:
+//	  chat.user.{account}.>
+//	  _INBOX.>
+//	  chat.user.presence.*.query.batch
+//	  (+ allow-pub-response, for NATS request/reply)
+//	Sub allow:
+//	  chat.user.{account}.>
+//	  chat.room.>
+//	  _INBOX.>
+//	  chat.user.presence.state.*
 func (h *AuthHandler) signNATSJWT(userPubKey, account string) (string, error) {
 	uc := jwt.NewUserClaims(userPubKey)
+	uc.IssuerAccount = h.accountPubKey
 	uc.Expires = h.jwtExpiryAt().Unix()
-
-	// Publish permissions: user's own namespace + inbox for request-reply.
-	uc.Pub.Allow.Add(fmt.Sprintf("chat.user.%s.>", account))
-	uc.Pub.Allow.Add("_INBOX.>")
-
-	// Subscribe permissions: user's own namespace, all rooms, and inbox.
-	uc.Sub.Allow.Add(fmt.Sprintf("chat.user.%s.>", account))
-	uc.Sub.Allow.Add("chat.room.>")
-	uc.Sub.Allow.Add("_INBOX.>")
-
-	// Presence: read anyone's live state and publish batch queries. The state
-	// broadcast carries only the account (no siteID), so a single-token wildcard
-	// covers it. Writes (hello/ping/activity/bye/manual) live under the user's
-	// own chat.user.{account}.> namespace already granted above. Clients can read
-	// state but never publish it — the "state" vs "query" token keeps the query
-	// pub-rule from matching the state subject, so presence can't be forged.
-	uc.Sub.Allow.Add("chat.user.presence.state.*")
-	uc.Pub.Allow.Add("chat.user.presence.*.query.batch")
-
+	uc.Tags.Add("account:" + account)
+	uc.SetScoped(true)
 	return uc.Encode(h.signingKey)
 }
 

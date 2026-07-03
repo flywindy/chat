@@ -26,6 +26,8 @@ import (
 func TestAuthHandler_Integration(t *testing.T) {
 	kp, err := nkeys.CreateAccount()
 	require.NoError(t, err)
+	accPub, err := kp.PublicKey()
+	require.NoError(t, err)
 
 	userKP, err := nkeys.CreateUser()
 	require.NoError(t, err)
@@ -40,7 +42,7 @@ func TestAuthHandler_Integration(t *testing.T) {
 		deptName:    "QA",
 		deptId:      "ABC",
 	}
-	handler := NewAuthHandler(validator, kp, 2*time.Hour, false)
+	handler := NewAuthHandler(validator, kp, accPub, 2*time.Hour, false)
 
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
@@ -61,9 +63,14 @@ func TestAuthHandler_Integration(t *testing.T) {
 	claims, err := jwt.DecodeUserClaims(resp.NATSJWT)
 	require.NoError(t, err)
 
-	// Verify publish permissions contain user namespace.
-	assert.Contains(t, []string(claims.Pub.Allow), "chat.user.testuser.>")
-	assert.Contains(t, []string(claims.Sub.Allow), "chat.room.>")
+	// Perms and limits live on the scoped signing key template; the JWT
+	// only stamps the account tag for {{tag(account)}} substitution and
+	// issuer_account so the NATS resolver can attribute the SK.
+	assert.Contains(t, claims.Tags, "account:testuser")
+	assert.Equal(t, accPub, claims.IssuerAccount)
+	assert.Empty(t, claims.Pub.Allow)
+	assert.Empty(t, claims.Sub.Allow)
+	assert.Equal(t, jwt.UserPermissionLimits{}, claims.UserPermissionLimits)
 }
 
 func TestMain(m *testing.M) { testutil.RunTests(m) }
