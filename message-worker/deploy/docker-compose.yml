@@ -34,6 +34,23 @@ services:
     networks:
       - chat-local
 
+  # Local-dev only: Vault dev mode is in-memory, while MongoDB persists across
+  # Docker Desktop restarts. When Vault recreates the transit key, previously
+  # wrapped room DEKs can no longer be unwrapped, so reset the derivative DEK
+  # cache and let services lazily recreate entries under the fresh key.
+  vault-dek-reset:
+    image: mongo:8.2.9
+    depends_on:
+      vault-bootstrap:
+        condition: service_completed_successfully
+    entrypoint: ["mongosh", "mongodb://mongodb:27017/chat", "--quiet", "--eval"]
+    command:
+      - |
+        const result = db.getCollection('room_data_keys').deleteMany({});
+        printjson({ roomDataKeysDeleted: result.deletedCount });
+    networks:
+      - chat-local
+
   message-worker:
     build:
       context: ../..
@@ -41,6 +58,8 @@ services:
     pull_policy: build
     depends_on:
       vault-bootstrap:
+        condition: service_completed_successfully
+      vault-dek-reset:
         condition: service_completed_successfully
     environment:
       - OTEL_SERVICE_NAME=message-worker
