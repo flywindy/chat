@@ -3,6 +3,7 @@ package msgraph
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,6 +16,15 @@ import (
 // newTestClient wires a graphClient at the given token + graph servers.
 func newTestClient(tokenURL, baseURL string) Client {
 	return New(
+		Config{TenantID: "t", ClientID: "c", ClientSecret: "s"},
+		WithTokenURL(tokenURL),
+		WithBaseURL(baseURL),
+	)
+}
+
+// newTestDirectory wires a DirectoryReader at the given token + graph servers.
+func newTestDirectory(tokenURL, baseURL string) DirectoryReader {
+	return NewDirectoryClient(
 		Config{TenantID: "t", ClientID: "c", ClientSecret: "s"},
 		WithTokenURL(tokenURL),
 		WithBaseURL(baseURL),
@@ -185,7 +195,7 @@ func TestNew_TLSInsecureSkipVerify(t *testing.T) {
 	assert.True(t, tr.TLSClientConfig.InsecureSkipVerify)
 }
 
-func TestGetUserByPrincipalName_Found(t *testing.T) {
+func TestResolveAccountIDs_BatchesAndKeysByAccount(t *testing.T) {
 	tokenSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(tokenResponse{AccessToken: "tok", ExpiresIn: 3600}) // #nosec G117 -- test mock OAuth token
 	}))
@@ -193,50 +203,105 @@ func TestGetUserByPrincipalName_Found(t *testing.T) {
 
 	graphSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "Bearer tok", r.Header.Get("Authorization"))
-		// Targeted single-user path lookup (escaped @), not a tenant-wide list.
-		assert.True(t, strings.Contains(r.URL.Path, "/users/alice%40corp.com") ||
-			strings.Contains(r.URL.Path, "/users/alice@corp.com"), "path %s", r.URL.Path)
-		_ = json.NewEncoder(w).Encode(GraphUser{ID: "ida", Mail: "alice@corp.com", UserPrincipalName: "alice@corp.com"})
+		q := r.URL.Query()
+		// startsWith is served as an advanced query: eventual consistency + $count
+		// satisfy Graph's advanced-query contract. $top stays off; mail is not
+		// selected.
+		assert.Equal(t, "eventual", r.Header.Get("ConsistencyLevel"))
+		assert.Equal(t, "true", q.Get("$count"))
+		assert.Empty(t, q.Get("$top"))
+		assert.Equal(t, "id,userPrincipalName", q.Get("$select"), "mail is not selected")
+		filter := q.Get("$filter")
+		// Domain-agnostic prefix match; both lower- and upper-cased variants OR'd.
+		assert.Contains(t, filter, "startsWith(userPrincipalName,'alice@')")
+		assert.Contains(t, filter, "startsWith(userPrincipalName,'ALICE@')")
+		assert.Contains(t, filter, "startsWith(userPrincipalName,'bob@')")
+		assert.Contains(t, filter, " or ")
+		_ = json.NewEncoder(w).Encode(map[string]any{"value": []GraphUser{
+			{ID: "ida", UserPrincipalName: "Alice@corp.com"}, // mixed-case UPN
+			{ID: "idb", UserPrincipalName: "bob@partner.io"}, // different domain
+		}})
 	}))
 	defer graphSrv.Close()
 
-	c := newTestClient(tokenSrv.URL, graphSrv.URL)
-	u, err := c.GetUserByPrincipalName(context.Background(), "alice@corp.com")
+	c := newTestDirectory(tokenSrv.URL, graphSrv.URL)
+	got, err := c.ResolveAccountIDs(context.Background(), []string{"alice", "bob"})
 	require.NoError(t, err)
-	require.NotNil(t, u)
-	assert.Equal(t, "ida", u.ID)
+	// Keyed by account (lowercased UPN local-part), so mixed-case UPN still maps.
+	assert.Equal(t, map[string]string{"alice": "ida", "bob": "idb"}, got)
 }
 
-func TestGetUserByPrincipalName_NotFound(t *testing.T) {
+func TestResolveAccountIDs_SkipsUnrequestedAndDupes(t *testing.T) {
+	tokenSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(tokenResponse{AccessToken: "tok", ExpiresIn: 3600}) // #nosec G117 -- test mock OAuth token
+	}))
+	defer tokenSrv.Close()
+	graphSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"value": []GraphUser{
+			{ID: "ida1", UserPrincipalName: "alice@corp.com"},
+			{ID: "ida2", UserPrincipalName: "alice@partner.io"}, // same local-part -> first wins
+			{ID: "idx", UserPrincipalName: "stranger@corp.com"}, // not requested -> skipped
+		}})
+	}))
+	defer graphSrv.Close()
+
+	c := newTestDirectory(tokenSrv.URL, graphSrv.URL)
+	got, err := c.ResolveAccountIDs(context.Background(), []string{"alice"})
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"alice": "ida1"}, got)
+}
+
+func TestResolveAccountIDs_ChunksLargeInput(t *testing.T) {
 	tokenSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(tokenResponse{AccessToken: "tok", ExpiresIn: 3600}) // #nosec G117 -- test mock OAuth token
 	}))
 	defer tokenSrv.Close()
 
+	var calls int
 	graphSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusNotFound)
+		calls++
+		_ = json.NewEncoder(w).Encode(map[string]any{"value": []GraphUser{}})
 	}))
 	defer graphSrv.Close()
 
-	c := newTestClient(tokenSrv.URL, graphSrv.URL)
-	u, err := c.GetUserByPrincipalName(context.Background(), "ghost@corp.com")
+	accounts := make([]string, maxAccountsPerQuery+1) // one over a chunk -> 2 requests
+	for i := range accounts {
+		accounts[i] = fmt.Sprintf("u%d", i)
+	}
+	c := newTestDirectory(tokenSrv.URL, graphSrv.URL)
+	_, err := c.ResolveAccountIDs(context.Background(), accounts)
 	require.NoError(t, err)
-	assert.Nil(t, u, "404 -> (nil, nil) so the account is skipped")
+	assert.Equal(t, 2, calls, "accounts beyond one chunk trigger a second query")
 }
 
-func TestGetUserByPrincipalName_Error(t *testing.T) {
-	tokenSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(tokenResponse{AccessToken: "tok", ExpiresIn: 3600}) // #nosec G117 -- test mock OAuth token
-	}))
-	defer tokenSrv.Close()
+func TestResolveAccountIDs_Empty(t *testing.T) {
+	c := NewDirectoryClient(Config{TenantID: "t"})
+	got, err := c.ResolveAccountIDs(context.Background(), nil)
+	require.NoError(t, err)
+	assert.Empty(t, got)
+}
 
-	graphSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusForbidden)
-	}))
-	defer graphSrv.Close()
+func TestCasedVariants(t *testing.T) {
+	assert.Equal(t, []string{"alice", "ALICE"}, casedVariants("alice"))
+	assert.Equal(t, []string{"alice", "ALICE"}, casedVariants("Alice"))
+	assert.Equal(t, []string{"123"}, casedVariants("123"), "caseless value -> single clause")
+}
 
-	c := newTestClient(tokenSrv.URL, graphSrv.URL)
-	_, err := c.GetUserByPrincipalName(context.Background(), "alice@corp.com")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "403")
+func TestLocalPart(t *testing.T) {
+	cases := []struct {
+		name, in, want string
+		ok             bool
+	}{
+		{"upn", "alice@corp.com", "alice", true},
+		{"mixed", "Alice@corp.com", "Alice", true},
+		{"no at", "nodomain", "", false},
+		{"leading at", "@corp.com", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := localPart(tc.in)
+			assert.Equal(t, tc.want, got)
+			assert.Equal(t, tc.ok, ok)
+		})
+	}
 }

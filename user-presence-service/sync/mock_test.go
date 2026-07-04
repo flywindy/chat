@@ -82,19 +82,19 @@ func (m *MockuserResolver) EXPECT() *MockuserResolverMockRecorder {
 	return m.recorder
 }
 
-// GetUserByPrincipalName mocks base method.
-func (m *MockuserResolver) GetUserByPrincipalName(ctx context.Context, upn string) (*msgraph.GraphUser, error) {
+// ResolveAccountIDs mocks base method.
+func (m *MockuserResolver) ResolveAccountIDs(ctx context.Context, accounts []string) (map[string]string, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetUserByPrincipalName", ctx, upn)
-	ret0, _ := ret[0].(*msgraph.GraphUser)
+	ret := m.ctrl.Call(m, "ResolveAccountIDs", ctx, accounts)
+	ret0, _ := ret[0].(map[string]string)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
-// GetUserByPrincipalName indicates an expected call of GetUserByPrincipalName.
-func (mr *MockuserResolverMockRecorder) GetUserByPrincipalName(ctx, upn any) *gomock.Call {
+// ResolveAccountIDs indicates an expected call of ResolveAccountIDs.
+func (mr *MockuserResolverMockRecorder) ResolveAccountIDs(ctx, accounts any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetUserByPrincipalName", reflect.TypeOf((*MockuserResolver)(nil).GetUserByPrincipalName), ctx, upn)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ResolveAccountIDs", reflect.TypeOf((*MockuserResolver)(nil).ResolveAccountIDs), ctx, accounts)
 }
 
 // MockpresenceReader is a mock of presenceReader interface.

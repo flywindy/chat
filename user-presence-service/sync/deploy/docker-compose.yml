@@ -7,7 +7,6 @@ services:
       dockerfile: user-presence-service/sync/deploy/Dockerfile
     environment:
       - SITE_ID=site-local
-      - TEAMS_EMAIL_DOMAIN=dev.local
       - EXTERNAL_TTL=5m
       - NATS_URL=nats://nats:4222
       - NATS_CREDS_FILE=/etc/nats/backend.creds

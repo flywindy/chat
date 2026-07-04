@@ -33,26 +33,6 @@ func TestIsInCall(t *testing.T) {
 	}
 }
 
-func TestAccountFromEmail(t *testing.T) {
-	cases := []struct {
-		name                string
-		email, domain, want string
-		ok                  bool
-	}{
-		{"exact match", "alice@corp.com", "corp.com", "alice", true},
-		{"case-insensitive domain", "Bob@CORP.com", "corp.com", "Bob", true},
-		{"wrong domain", "carol@other.com", "corp.com", "", false},
-		{"no domain", "nodomain", "corp.com", "", false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got, ok := accountFromEmail(tc.email, tc.domain)
-			require.Equal(t, tc.want, got)
-			require.Equal(t, tc.ok, ok)
-		})
-	}
-}
-
 func newTestReconciler(t *testing.T) (*reconciler, *MockactiveLister, *MockuserResolver, *MockpresenceReader, *MockexternalApplier, *MockinCallIndex, *MockidMapStore, *MockstatePublisher) {
 	ctrl := gomock.NewController(t)
 	active := NewMockactiveLister(ctrl)
@@ -62,7 +42,7 @@ func newTestReconciler(t *testing.T) (*reconciler, *MockactiveLister, *MockuserR
 	idx := NewMockinCallIndex(ctrl)
 	idm := NewMockidMapStore(ctrl)
 	pub := NewMockstatePublisher(ctrl)
-	cfg := reconcileConfig{SiteID: "site-a", EmailDomain: "corp.com", ExternalTTL: time.Minute}
+	cfg := reconcileConfig{SiteID: "site-a", ExternalTTL: time.Minute}
 	return newReconciler(active, users, pres, app, idx, idm, pub, cfg), active, users, pres, app, idx, idm, pub
 }
 
@@ -87,7 +67,7 @@ func TestReconcile_CacheHit_SetsAndClears(t *testing.T) {
 	pub.EXPECT().Publish(ctx, "bob", model.StatusOnline)
 
 	// All accounts cached -> no Graph user lookup.
-	users.EXPECT().GetUserByPrincipalName(gomock.Any(), gomock.Any()).Times(0)
+	users.EXPECT().ResolveAccountIDs(gomock.Any(), gomock.Any()).Times(0)
 
 	require.NoError(t, r.run(ctx))
 }
@@ -98,9 +78,10 @@ func TestReconcile_CacheMiss_FillsIdMap(t *testing.T) {
 
 	active.EXPECT().ActiveAccounts(ctx).Return([]string{"alice"}, nil)
 	idm.EXPECT().Resolve(ctx, []string{"alice"}).Return(map[string]string{}, nil) // miss
-	// Targeted per-account lookup, not a tenant-wide list.
-	users.EXPECT().GetUserByPrincipalName(ctx, "alice@corp.com").
-		Return(&msgraph.GraphUser{ID: "ida", Mail: "alice@corp.com"}, nil)
+	// Batched, domain-agnostic prefix lookup; keyed by account (UPN correlation
+	// happens inside the resolver).
+	users.EXPECT().ResolveAccountIDs(ctx, []string{"alice"}).
+		Return(map[string]string{"alice": "ida"}, nil)
 	idm.EXPECT().Store(ctx, map[string]string{"alice": "ida"}).Return(nil) // permanent, no TTL
 	pres.EXPECT().GetPresencesByUserId(ctx, []string{"ida"}).Return([]msgraph.Presence{
 		{ID: "ida", Activity: "InACall"},
@@ -119,7 +100,7 @@ func TestReconcile_CacheMiss_UserNotFound_Skipped(t *testing.T) {
 
 	active.EXPECT().ActiveAccounts(ctx).Return([]string{"ghost"}, nil)
 	idm.EXPECT().Resolve(ctx, []string{"ghost"}).Return(map[string]string{}, nil)
-	users.EXPECT().GetUserByPrincipalName(ctx, "ghost@corp.com").Return(nil, nil) // no AAD user
+	users.EXPECT().ResolveAccountIDs(ctx, []string{"ghost"}).Return(map[string]string{}, nil) // no AAD match
 	// Nothing filled -> no Store, empty id set queried.
 	pres.EXPECT().GetPresencesByUserId(ctx, gomock.Len(0)).Return(nil, nil)
 	idx.EXPECT().Members(ctx).Return(nil, nil)
@@ -171,13 +152,13 @@ func TestReconcile_ResolveError(t *testing.T) {
 	require.Error(t, r.run(ctx))
 }
 
-// A single account's Graph lookup failure is logged and skipped — never fatal.
+// A Graph lookup failure is logged and yields nothing — never fatal.
 func TestReconcile_FillLookupError_Continues(t *testing.T) {
 	r, active, users, pres, _, idx, idm, _ := newTestReconciler(t)
 	ctx := context.Background()
 	active.EXPECT().ActiveAccounts(ctx).Return([]string{"alice"}, nil)
 	idm.EXPECT().Resolve(ctx, []string{"alice"}).Return(map[string]string{}, nil)
-	users.EXPECT().GetUserByPrincipalName(ctx, "alice@corp.com").Return(nil, errBoom) // logged, skipped
+	users.EXPECT().ResolveAccountIDs(ctx, []string{"alice"}).Return(nil, errBoom) // logged, skipped
 	// alice unresolved -> empty id set, run still completes.
 	pres.EXPECT().GetPresencesByUserId(ctx, gomock.Len(0)).Return(nil, nil)
 	idx.EXPECT().Members(ctx).Return(nil, nil)
@@ -191,7 +172,8 @@ func TestReconcile_FillStoreError_NonFatal(t *testing.T) {
 	ctx := context.Background()
 	active.EXPECT().ActiveAccounts(ctx).Return([]string{"alice"}, nil)
 	idm.EXPECT().Resolve(ctx, []string{"alice"}).Return(map[string]string{}, nil)
-	users.EXPECT().GetUserByPrincipalName(ctx, "alice@corp.com").Return(&msgraph.GraphUser{ID: "ida"}, nil)
+	users.EXPECT().ResolveAccountIDs(ctx, []string{"alice"}).
+		Return(map[string]string{"alice": "ida"}, nil)
 	idm.EXPECT().Store(ctx, map[string]string{"alice": "ida"}).Return(errBoom) // logged, non-fatal
 	pres.EXPECT().GetPresencesByUserId(ctx, []string{"ida"}).Return([]msgraph.Presence{{ID: "ida", Activity: "InACall"}}, nil)
 	idx.EXPECT().Members(ctx).Return(nil, nil)

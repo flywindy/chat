@@ -17,10 +17,11 @@ type activeLister interface {
 	ActiveAccounts(ctx context.Context) ([]string, error)
 }
 
-// userResolver resolves a single account's Azure object id by UPN, used to fill
-// cache-missing accounts (no tenant-wide enumeration). Satisfied by msgraph.Client.
+// userResolver resolves accounts to Azure object IDs (batched, prefix match,
+// keyed by account) to fill cache-missing accounts. Satisfied by
+// msgraph.DirectoryReader.
 type userResolver interface {
-	GetUserByPrincipalName(ctx context.Context, upn string) (*msgraph.GraphUser, error)
+	ResolveAccountIDs(ctx context.Context, accounts []string) (map[string]string, error)
 }
 
 // presenceReader reads Teams presence (Graph ROPC). Satisfied by

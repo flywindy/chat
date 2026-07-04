@@ -19,7 +19,6 @@ import (
 // Config is the sync's environment configuration.
 type Config struct {
 	SiteID         string        `env:"SITE_ID,required"`
-	EmailDomain    string        `env:"TEAMS_EMAIL_DOMAIN,required"`
 	ExternalTTL    time.Duration `env:"EXTERNAL_TTL" envDefault:"5m"`
 	RunTimeout     time.Duration `env:"RUN_TIMEOUT" envDefault:"5m"`
 	StaleThreshold time.Duration `env:"PRESENCE_STALE_THRESHOLD" envDefault:"45s"`
@@ -107,7 +106,7 @@ func run() error {
 		ClientSecret:          cfg.GraphClientSecret,
 		TLSInsecureSkipVerify: cfg.GraphTLSInsecureSkipVerify,
 	}
-	users := msgraph.New(graphCfg)
+	users := msgraph.NewDirectoryClient(graphCfg)
 	pres := msgraph.NewPresenceClient(graphCfg, msgraph.ROPCCredentials{Username: cfg.GraphROPCUser, Password: cfg.GraphROPCPassword})
 
 	r := newReconciler(
@@ -115,10 +114,7 @@ func run() error {
 		newValkeyInCallIndex(clusterClient),
 		newValkeyIDMap(clusterClient),
 		natsPublisher{publish: publish, siteID: cfg.SiteID},
-		reconcileConfig{
-			SiteID: cfg.SiteID, EmailDomain: cfg.EmailDomain,
-			ExternalTTL: cfg.ExternalTTL,
-		},
+		reconcileConfig{SiteID: cfg.SiteID, ExternalTTL: cfg.ExternalTTL},
 	)
 
 	if err := r.run(ctx); err != nil {

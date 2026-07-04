@@ -30,7 +30,7 @@ The materialized status is written to `presence:{account}:status` and broadcast 
 - Add a third **external** layer (Teams) to the presence aggregation, stored at `presence:{account}:azure` and read atomically in the recompute Lua (same `{account}` hash-tag → same cluster slot).
 - A new **one-shot cron binary** (`user-presence-service/sync`) reconciles Teams call state into that layer each run, writing directly to Valkey and publishing `PresenceState` changes itself.
 - To let a separate binary share the recompute Lua + key layout, **extract** the Valkey store from the daemon's `package main` into an importable `user-presence-service/presencestore` package, consumed by both the daemon and the sync.
-- Extend `pkg/msgraph` with app-only `GetUserByPrincipalName` (targeted single-user lookup) and an ROPC (delegated) `PresenceClient.GetPresencesByUserId`.
+- Extend `pkg/msgraph` with app-only `GetUsersByAccounts` (batched, domain-agnostic prefix lookup) and an ROPC (delegated) `PresenceClient.GetPresencesByUserId`.
 
 ## 4. Decisions (resolved during brainstorming)
 
@@ -43,10 +43,10 @@ The materialized status is written to `presence:{account}:status` and broadcast 
 | D5 | Runtime | **One-shot** binary, triggered by an external cron (K8s CronJob / pipeline schedule); runs once, exits. |
 | D6 | Teams→in-call mapping | **Call/meeting activities only**: activity ∈ {`InACall`, `InAConferenceCall`, `Presenting`}. |
 | D7 | Graph auth | **ROPC** service account for presence (`Presence.Read.All`, delegated) + **app-only** for `/users` (`User.Read.All`). |
-| D8 | User matching | `account + "@" + TEAMS_EMAIL_DOMAIN` used as the UPN for a targeted `GET /users/{upn}` lookup (case-insensitive in AAD). |
-| D9 | Graph client location | **Extend `pkg/msgraph`** (app-only `GetUserByPrincipalName`; new ROPC `PresenceClient`). |
+| D8 | User matching | Match by `startsWith(userPrincipalName,'account@')` (domain-agnostic — accounts may live under different domains); map results back by UPN local-part, case-insensitively, first match wins. No fixed `TEAMS_EMAIL_DOMAIN`. |
+| D9 | Graph client location | **Extend `pkg/msgraph`** (app-only `GetUsersByAccounts`; new ROPC `PresenceClient`). Hand-rolled `net/http`, no Graph SDK. |
 | D10 | Directory layout | `user-presence-service/presencestore/` (shared) + `user-presence-service/sync/` (`package main` + `deploy/`). |
-| D11 | id→account mapping | **Permanent** `account → azureObjectID` cache in Valkey (`presence:idmap:azure`, no TTL — the mapping is immutable); Graph is queried (targeted `GetUserByPrincipalName` per account) only to fill accounts missing from the cache. |
+| D11 | id→account mapping | **Permanent** `account → azureObjectID` cache in Valkey (`presence:idmap:azure`, no TTL — the mapping is immutable); Graph is queried (batched `GetUsersByAccounts`, chunked ≤15 startsWith clauses/query) only to fill accounts missing from the cache. |
 | D12 | work-list scope | Reconcile only **active** accounts (live connection), sourced from the reused `presence:sweep` zset via `ActiveAccounts()` — not all site users from Mongo. Disconnected users are offline regardless of Teams, so the sync has no Mongo dependency. |
 
 ## 5. Aggregation / precedence (the core change)
@@ -75,7 +75,7 @@ This splits today's single manual overlay into a **high tier** (away / appear_of
 | `presence:{account}:azure` | string | presencestore | External (Teams) status: `"in-call"` or absent. Read as `KEYS[4]` in recompute. Written with a **TTL safety-net** (~`EXTERNAL_TTL`, default 5m) so a dead sync self-heals. |
 | `presence:sweep` | zset | presencestore (daemon) | **Reused, not new.** Members are accounts with ≥1 live connection (an account is `ZREM`'d when it fully disconnects). The sync sources its work-list from here via `ActiveAccounts()` — only connected users can be shown in-call. |
 | `presence:status:index:azure` | set | sync | Accounts currently marked in-call. Lets a run compute `toClear = prev − current`. Single key (own slot); updated in a pipeline (not atomic with per-account keys — acceptable for a reconciler). |
-| `presence:idmap:azure` | hash | sync | **Permanent** `account → azureObjectID` cache (no TTL — the mapping is immutable). Read every run; accounts missing from it are filled lazily via a targeted per-account Graph lookup (see §7). |
+| `presence:idmap:azure` | hash | sync | **Permanent** `account → azureObjectID` cache (no TTL — the mapping is immutable). Read every run; accounts missing from it are filled lazily via a batched Graph prefix lookup (see §7). |
 
 ## 7. The sync service
 
@@ -83,7 +83,7 @@ This splits today's single manual overlay into a **high tier** (away / appear_of
 
 **Reconcile flow (per run):**
 1. **Active accounts:** `ActiveAccounts()` = `ZRANGE presence:sweep` → accounts with a live connection. A disconnected user is offline regardless of Teams (the §5 invariant), so checking them is wasted work — we scope to active users only. No Mongo involved.
-2. **Resolve ids:** `HMGET presence:idmap:azure <active accounts>` → found ids + a not-found list. For each **missing** account, look it up targeted via Graph `GetUserByPrincipalName(account@domain)` (case-insensitive UPN path; no tenant-wide enumeration) and `HSET` the results **permanently**. Steady state with no new users makes zero Graph calls. A single account's lookup failure is logged and skipped.
+2. **Resolve ids:** `HMGET presence:idmap:azure <active accounts>` → found ids + a not-found list. For the **missing** accounts, batch a Graph `GetUsersByAccounts` call — `startsWith(userPrincipalName,'account@')` OR'd across accounts, chunked ≤15/query (Graph rejects overly complex filters), domain-agnostic — map results back by UPN local-part (case-insensitive, first match wins), and `HSET` them **permanently**. Steady state with no new users makes zero Graph calls; a lookup failure is logged and yields nothing (non-fatal).
 3. Graph ROPC `GetPresencesByUserId(ids)` (batched ≤650/req).
 4. `current` = accounts whose presence `isInCall` (activity ∈ {InACall, InAConferenceCall, Presenting}).
 5. `prev` = `SMEMBERS presence:status:index:azure`.
@@ -97,14 +97,14 @@ Full status reconciliation each run means a missed/crashed run self-corrects nex
 
 ## 8. `pkg/msgraph` extensions
 
-- **App-only** (existing client, reuses `accessToken`): `GetUserByPrincipalName(ctx, upn) (*GraphUser, error)` — targeted `/users/{upn}` lookup, `(nil,nil)` on 404; `GraphUser{ID, Mail, UserPrincipalName}`.
+- **App-only** (existing client, reuses `accessToken`): `GetUsersByAccounts(ctx, accounts) ([]GraphUser, error)` — `startsWith(userPrincipalName,'account@')` OR'd + chunked (`ConsistencyLevel: eventual`, `$count=true`); `GraphUser{ID, Mail, UserPrincipalName}`.
 - **ROPC** (new `PresenceClient`, separate token cache, `grant_type=password`): `GetPresencesByUserId(ctx, ids) ([]Presence, error)`; `Presence{ID, Availability, Activity}`; batches at Graph's 650-id cap. Behind a `PresenceReader` interface for mocking.
 
 ## 9. Code structure & impact
 
 ```text
 pkg/model/presence.go            + StatusInCall
-pkg/msgraph/msgraph.go           + GetUserByPrincipalName, GraphUser
+pkg/msgraph/msgraph.go           + GetUsersByAccounts, GraphUser
 pkg/msgraph/presence.go          NEW  ROPC PresenceClient, GetPresencesByUserId
 
 user-presence-service/presencestore/   NEW  (moved from store_valkey.go)
@@ -131,7 +131,7 @@ The daemon's runtime behavior is unchanged except the new precedence in the shar
 
 ## 11. Testing strategy
 
-- **Unit:** model round-trip (`StatusInCall`); `pkg/msgraph` `GetUserByPrincipalName` (found/404/error) + ROPC `GetPresencesByUserId` (httptest, grant-type/username asserted, token never logged); sync `isInCall`/`accountFromEmail` table tests; sync `reconcile.run` with mocked Graph/store/index/publisher (cache hit/miss, set + clear, per-account-failure paths).
+- **Unit:** model round-trip (`StatusInCall`); `pkg/msgraph` `GetUsersByAccounts` (batch/chunk/eventual-header) + ROPC `GetPresencesByUserId` (httptest, grant-type/username asserted, token never logged); sync `isInCall`/`localPart` table tests; sync `reconcile.run` with mocked Graph/store/index/publisher (cache hit/miss, case-insensitive match, set + clear, per-account-failure paths).
 - **Integration (testcontainers Valkey, `pkg/testutil`):** precedence matrix (away/appear_offline beat in-call; in-call beats online/busy; offline invariant; clear restores connection-derived) and `SetExternal` in `presencestore`.
 - **Gates:** `make test`, `make lint`, `make sast` (no medium+), `make test-integration SERVICE=user-presence-service`. ≥80% coverage on new packages.
 

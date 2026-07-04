@@ -28,17 +28,29 @@ type Client interface {
 	// concurrent or repeated calls with the same ExternalID return the same
 	// meeting — Graph itself is the idempotency source of truth.
 	CreateOnlineMeeting(ctx context.Context, req CreateOnlineMeetingRequest) (*OnlineMeeting, error)
-
-	// GetUserByPrincipalName looks up a single user by userPrincipalName
-	// (account@domain). Returns (nil, nil) when no such user exists. App-only
-	// (User.Read.All).
-	GetUserByPrincipalName(ctx context.Context, upn string) (*GraphUser, error)
 }
 
-// GraphUser is the subset of a Graph user resource the presence sync needs.
+// DirectoryReader resolves accounts to Azure object IDs. Kept separate from
+// Client so consumers that only need meetings (room-service) don't depend on
+// the user-lookup surface. App-only (User.Read.All).
+type DirectoryReader interface {
+	// ResolveAccountIDs resolves account local-parts to Azure object IDs by
+	// matching startsWith(userPrincipalName,'account@') — domain-agnostic, so
+	// accounts under different domains still resolve. Accounts must be lowercase;
+	// the result is keyed by account. Batched into chunked $filter queries.
+	ResolveAccountIDs(ctx context.Context, accounts []string) (map[string]string, error)
+}
+
+// NewDirectoryClient returns an app-only directory reader (shares the graph
+// client used for meetings; New always returns a *graphClient).
+func NewDirectoryClient(cfg Config, opts ...Option) DirectoryReader {
+	return New(cfg, opts...).(*graphClient)
+}
+
+// GraphUser is the subset of a Graph user resource we decode when resolving
+// accounts to object IDs.
 type GraphUser struct {
 	ID                string `json:"id"`
-	Mail              string `json:"mail"`
 	UserPrincipalName string `json:"userPrincipalName"`
 }
 
@@ -198,41 +210,126 @@ func (g *graphClient) accessToken(ctx context.Context) (string, error) {
 	return g.token, nil
 }
 
-// GetUserByPrincipalName resolves a single user by userPrincipalName. The
-// /users/{upn} path lookup resolves case-insensitively in Azure AD, so the
-// caller need not try multiple casings. Returns (nil, nil) on 404 so a
-// non-Teams account is simply skipped.
-func (g *graphClient) GetUserByPrincipalName(ctx context.Context, upn string) (*GraphUser, error) {
+// maxUserFilterClauses caps startsWith clauses per $filter query. Microsoft
+// Graph rejects overly complex filters, so accounts are looked up in chunks.
+const maxUserFilterClauses = 15
+
+// maxAccountsPerQuery bounds accounts per query. Each account emits both a
+// lower- and upper-cased startsWith clause (see casedVariants), so up to two
+// clauses each — keep the total within maxUserFilterClauses.
+const maxAccountsPerQuery = maxUserFilterClauses / 2
+
+// ResolveAccountIDs resolves account local-parts to their Azure object IDs,
+// matching startsWith(userPrincipalName,'account@') so any domain resolves. Both
+// the lower- and upper-cased account are matched (rather than relying on Graph's
+// case-insensitivity). Accounts must be lowercase; the result is keyed by
+// account (the returned UPN's local-part, lowercased). Batched into chunked
+// $filter queries; first match wins on a duplicate local-part.
+func (g *graphClient) ResolveAccountIDs(ctx context.Context, accounts []string) (map[string]string, error) {
+	out := make(map[string]string, len(accounts))
+	if len(accounts) == 0 {
+		return out, nil
+	}
 	token, err := g.accessToken(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("acquire graph token: %w", err)
 	}
-	endpoint := g.baseURL + "/users/" + url.PathEscape(upn) + "?$select=id,mail,userPrincipalName"
+	want := make(map[string]struct{}, len(accounts))
+	for _, a := range accounts {
+		want[a] = struct{}{}
+	}
+	for start := 0; start < len(accounts); start += maxAccountsPerQuery {
+		end := min(start+maxAccountsPerQuery, len(accounts))
+		if err := g.resolveChunk(ctx, token, accounts[start:end], want, out); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+// casedVariants returns the lower- and upper-cased forms of s (deduped when the
+// value has no cased letters), so the startsWith filter matches UPNs stored in
+// either case.
+func casedVariants(s string) []string {
+	lower, upper := strings.ToLower(s), strings.ToUpper(s)
+	if lower == upper {
+		return []string{lower}
+	}
+	return []string{lower, upper}
+}
+
+// localPart returns the part before the first '@' in an email/UPN.
+func localPart(email string) (string, bool) {
+	at := strings.Index(email, "@")
+	if at <= 0 {
+		return "", false
+	}
+	return email[:at], true
+}
+
+// resolveChunk queries one chunk of accounts and records the account->id matches
+// (keyed by the lowercased UPN local-part) into out.
+func (g *graphClient) resolveChunk(ctx context.Context, token string, chunk []string, want map[string]struct{}, out map[string]string) error {
+	clauses := make([]string, 0, len(chunk)*2)
+	for _, a := range chunk {
+		for _, variant := range casedVariants(a) {
+			// Escape single quotes for the OData string literal.
+			esc := strings.ReplaceAll(variant, "'", "''")
+			clauses = append(clauses, fmt.Sprintf("startsWith(userPrincipalName,'%s@')", esc))
+		}
+	}
+	q := url.Values{}
+	q.Set("$filter", strings.Join(clauses, " or "))
+	q.Set("$select", "id,userPrincipalName")
+	// $count pairs with ConsistencyLevel: eventual to satisfy Graph's advanced-
+	// query contract for startsWith on userPrincipalName.
+	q.Set("$count", "true")
+	endpoint := g.baseURL + "/users?" + q.Encode()
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return nil, fmt.Errorf("build get-user request: %w", err)
+		return fmt.Errorf("build get-users request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
+	// startsWith on userPrincipalName is served as an advanced query — request
+	// eventual consistency so Graph accepts it regardless of tenant defaults.
+	req.Header.Set("ConsistencyLevel", "eventual")
 	resp, err := g.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("get user: %w", err)
+		return fmt.Errorf("get users: %w", err)
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<22))
 	if err != nil {
-		return nil, fmt.Errorf("read get-user response: %w", err)
-	}
-	if resp.StatusCode == http.StatusNotFound {
-		return nil, nil
+		return fmt.Errorf("read get-users response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("get user: graph returned status %d", resp.StatusCode)
+		return fmt.Errorf("get users: graph returned status %d", resp.StatusCode)
 	}
-	var u GraphUser
-	if err := json.Unmarshal(body, &u); err != nil {
-		return nil, fmt.Errorf("decode get-user response: %w", err)
+	var page struct {
+		Value []GraphUser `json:"value"`
 	}
-	return &u, nil
+	if err := json.Unmarshal(body, &page); err != nil {
+		return fmt.Errorf("decode get-users response: %w", err)
+	}
+	for _, u := range page.Value {
+		if u.ID == "" {
+			continue
+		}
+		local, ok := localPart(u.UserPrincipalName)
+		if !ok {
+			continue
+		}
+		account := strings.ToLower(local)
+		if _, mine := want[account]; !mine {
+			continue
+		}
+		if _, dup := out[account]; dup {
+			continue // first match wins
+		}
+		out[account] = u.ID
+	}
+	return nil
 }
 
 // onlineMeetingPayload is the Graph createOrGet-onlineMeeting request body.

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strings"
 	"time"
 
 	"github.com/hmchangw/chat/pkg/model"
@@ -25,22 +24,8 @@ func isInCall(p msgraph.Presence) bool {
 	return ok
 }
 
-// accountFromEmail returns the local part of an email when its domain matches
-// (case-insensitive on domain); ok=false otherwise.
-func accountFromEmail(email, domain string) (string, bool) {
-	at := strings.LastIndex(email, "@")
-	if at < 0 {
-		return "", false
-	}
-	if !strings.EqualFold(email[at+1:], domain) {
-		return "", false
-	}
-	return email[:at], true
-}
-
 type reconcileConfig struct {
 	SiteID      string
-	EmailDomain string
 	ExternalTTL time.Duration
 }
 
@@ -69,11 +54,13 @@ func (r *reconciler) run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("list active accounts: %w", err)
 	}
+	slog.Info("teams presence: active accounts", "site", r.cfg.SiteID, "count", len(accounts))
 
 	idByAccount, err := r.resolveIDs(ctx, accounts)
 	if err != nil {
 		return err
 	}
+	slog.Info("teams presence: resolved azure ids", "site", r.cfg.SiteID, "count", len(idByAccount))
 	ids := make([]string, 0, len(idByAccount))
 	accountByID := make(map[string]string, len(idByAccount))
 	for account, id := range idByAccount {
@@ -100,12 +87,14 @@ func (r *reconciler) run(ctx context.Context) error {
 		return fmt.Errorf("read in-call index: %w", err)
 	}
 
-	var failures int
+	var setN, clearN, failures int
 	for account := range current {
 		if err := r.apply(ctx, account, model.StatusInCall); err != nil {
 			slog.Error("apply in-call failed", "account", account, "error", err)
 			failures++
+			continue
 		}
+		setN++
 	}
 	for _, account := range prev {
 		if _, still := current[account]; still {
@@ -114,11 +103,16 @@ func (r *reconciler) run(ctx context.Context) error {
 		if err := r.apply(ctx, account, model.StatusNone); err != nil {
 			slog.Error("clear in-call failed", "account", account, "error", err)
 			failures++
+			continue
 		}
+		clearN++
 	}
 
 	slog.Info("teams presence reconcile complete",
-		"site", r.cfg.SiteID, "active", len(accounts), "inCall", len(current), "failures", failures)
+		"site", r.cfg.SiteID,
+		"active", len(accounts), "resolved", len(idByAccount),
+		"setInCall", setN, "cleared", clearN,
+		"remainingInCall", len(current), "failures", failures)
 	return nil
 }
 
@@ -156,25 +150,16 @@ func (r *reconciler) resolveIDs(ctx context.Context, accounts []string) (map[str
 }
 
 // fetchIDs resolves only the cache-missing accounts to Azure object ids via a
-// targeted per-account Graph lookup (account@domain) — no tenant-wide
-// enumeration. A single account's lookup failure is logged and skipped so it
-// never fails the whole job; an account with no Graph user is skipped until it
-// next appears.
+// batched, domain-agnostic Graph prefix lookup (no tenant-wide enumeration),
+// keyed by account. A lookup failure is logged and returns nothing, so it never
+// fails the whole job.
 func (r *reconciler) fetchIDs(ctx context.Context, missing []string) map[string]string {
-	out := make(map[string]string, len(missing))
-	for _, account := range missing {
-		upn := account + "@" + r.cfg.EmailDomain
-		u, err := r.users.GetUserByPrincipalName(ctx, upn)
-		if err != nil {
-			slog.Error("resolve azure id failed", "account", account, "error", err)
-			continue
-		}
-		if u == nil || u.ID == "" {
-			continue
-		}
-		out[account] = u.ID
+	resolved, err := r.users.ResolveAccountIDs(ctx, missing)
+	if err != nil {
+		slog.Error("resolve azure ids failed", "count", len(missing), "error", err)
+		return map[string]string{}
 	}
-	return out
+	return resolved
 }
 
 // apply sets/clears the external status, updates the in-call index, and
