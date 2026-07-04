@@ -64,6 +64,36 @@ func TestHistoryMessageReader_GetMessageRoomAndCreatedAt(t *testing.T) {
 		assert.Equal(t, account, gotSender)
 	})
 
+	// Regression (#440): a message with a reaction still decodes. The reply carries
+	// a non-empty reactions object (Reactions.MarshalJSON), which the old full
+	// cassandra.Message decode rejected (struct-keyed map, no UnmarshalJSON).
+	t.Run("message with reactions still decodes", func(t *testing.T) {
+		nc := startOtelNATS(t)
+		msg := cassandra.Message{
+			MessageID: messageID,
+			RoomID:    roomID,
+			CreatedAt: createdAt,
+			Sender:    cassandra.Participant{ID: "u-alice", Account: account},
+			Reactions: cassandra.Reactions{
+				{Emoji: "smile", UserAccount: "bob"}: {Account: "bob", ReactedAt: createdAt},
+			},
+		}
+		_, err := nc.Subscribe(subject.MsgGet(account, roomID, siteID), func(m otelnats.Msg) {
+			data, _ := json.Marshal(msg)
+			_ = m.Msg.Respond(data)
+		})
+		require.NoError(t, err)
+
+		r := newHistoryMessageReader(nc, siteID)
+		gotRoom, gotCreated, gotSender, found, err := r.GetMessageRoomAndCreatedAt(context.Background(), account, roomID, messageID)
+
+		require.NoError(t, err)
+		assert.True(t, found)
+		assert.Equal(t, roomID, gotRoom)
+		assert.Equal(t, createdAt, gotCreated.UTC())
+		assert.Equal(t, account, gotSender)
+	})
+
 	t.Run("history NotFound maps to found=false with no error", func(t *testing.T) {
 		nc := startOtelNATS(t)
 		_, err := nc.Subscribe(subject.MsgGet(account, roomID, siteID), func(m otelnats.Msg) {

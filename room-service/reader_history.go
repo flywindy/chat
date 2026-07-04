@@ -65,9 +65,19 @@ func (r *historyMessageReader) GetMessageRoomAndCreatedAt(
 		return "", time.Time{}, "", false, ee
 	}
 
-	var m cassandra.Message
+	// Decode a narrow projection, not the full cassandra.Message: that type embeds
+	// the marshal-only Reactions map (struct-keyed, no UnmarshalJSON), so a reacted
+	// message fails to decode. Mirrors message-gatekeeper's quotedParentProjection.
+	var m messageProjection
 	if err := json.Unmarshal(msg.Data, &m); err != nil {
 		return "", time.Time{}, "", false, fmt.Errorf("unmarshal message: %w", err)
 	}
 	return m.RoomID, m.CreatedAt, m.Sender.Account, true, nil
+}
+
+// messageProjection decodes only the fields the read-receipt lookup needs.
+type messageProjection struct {
+	RoomID    string                `json:"roomId"`
+	CreatedAt time.Time             `json:"createdAt"`
+	Sender    cassandra.Participant `json:"sender"`
 }
