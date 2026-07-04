@@ -16,6 +16,7 @@ import (
 	"github.com/hmchangw/chat/user-service/config"
 	"github.com/hmchangw/chat/user-service/historyclient"
 	"github.com/hmchangw/chat/user-service/mongorepo"
+	"github.com/hmchangw/chat/user-service/presenceclient"
 	"github.com/hmchangw/chat/user-service/publisher"
 	"github.com/hmchangw/chat/user-service/roomclient"
 	"github.com/hmchangw/chat/user-service/service"
@@ -29,6 +30,7 @@ var (
 	_ service.ThreadSubscriptionRepository = (*mongorepo.ThreadSubscriptionRepo)(nil)
 	_ service.RoomClient                   = (*roomclient.Client)(nil)
 	_ service.HistoryClient                = (*historyclient.Client)(nil)
+	_ service.PresenceClient               = (*presenceclient.Client)(nil)
 	_ service.EventPublisher               = (*publisher.Publisher)(nil)
 )
 
@@ -89,7 +91,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	svc := service.New(subRepo, userRepo, appRepo, threadSubRepo, roomclient.New(nc, cfg.SiteID), historyclient.New(nc), publisher.New(js), &cfg)
+	svc := service.New(subRepo, userRepo, appRepo, threadSubRepo, roomclient.New(nc, cfg.SiteID), historyclient.New(nc), presenceclient.New(nc), publisher.New(js), &cfg)
 
 	router := natsrouter.New(nc, "user-service")
 	router.Use(natsrouter.Recovery())

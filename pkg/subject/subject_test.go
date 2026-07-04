@@ -526,6 +526,7 @@ func TestUserServiceBuilders(t *testing.T) {
 		{"subscription.list", subject.UserSubscriptionList("alice", "s1"), "chat.user.alice.request.user.s1.subscription.list"},
 		{"subscription.setAppSubscription", subject.UserSubscriptionSetAppSubscription("alice", "s1"), "chat.user.alice.request.user.s1.subscription.setAppSubscription"},
 		{"subscription.getByRoomID", subject.UserSubscriptionGetByRoomID("alice", "s1"), "chat.user.alice.request.user.s1.subscription.getByRoomID"},
+		{"me", subject.UserMe("alice", "s1"), "chat.user.alice.request.user.s1.me"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -687,6 +688,7 @@ func TestUserServiceBuildersRejectWildcardAccounts(t *testing.T) {
 		{"UserSubscriptionList", func() { subject.UserSubscriptionList("*", "s1") }},
 		{"UserSubscriptionSetAppSubscription", func() { subject.UserSubscriptionSetAppSubscription("*", "s1") }},
 		{"UserSubscriptionGetByRoomID", func() { subject.UserSubscriptionGetByRoomID(">", "s1") }},
+		{"UserMe", func() { subject.UserMe("*", "s1") }},
 	}
 	for _, b := range builders {
 		t.Run(b.name, func(t *testing.T) {
@@ -787,6 +789,7 @@ func TestUserServicePatternBuilders(t *testing.T) {
 		{"subscription.list", subject.UserSubscriptionListPattern("s1"), "chat.user.{account}.request.user.s1.subscription.list"},
 		{"subscription.setAppSubscription", subject.UserSubscriptionSetAppSubscriptionPattern("s1"), "chat.user.{account}.request.user.s1.subscription.setAppSubscription"},
 		{"subscription.getByRoomID", subject.UserSubscriptionGetByRoomIDPattern("s1"), "chat.user.{account}.request.user.s1.subscription.getByRoomID"},
+		{"me", subject.UserMePattern("s1"), "chat.user.{account}.request.user.s1.me"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

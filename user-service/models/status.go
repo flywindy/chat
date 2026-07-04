@@ -11,9 +11,9 @@ type StatusSetRequest struct {
 	IsShow *bool  `json:"isShow,omitempty"`
 }
 
-// StatusView is the response of status.getByName / status.set.
+// UserStatusView is the response of status.getByName / status.set.
 // StatusIsShow is always present (no omitempty) — never-set users decode to false.
-type StatusView struct {
+type UserStatusView struct {
 	Account      string `json:"account"`
 	StatusText   string `json:"statusText"`
 	StatusIsShow bool   `json:"statusIsShow"`

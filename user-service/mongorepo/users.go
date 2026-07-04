@@ -55,7 +55,7 @@ func activeUserFilter(account string) bson.M {
 }
 
 // GetUserStatus returns the user for account (missing `active` counts as active),
-// or (nil, nil). Projected to the StatusView fields; all others are zero-valued.
+// or (nil, nil). Projected to the UserStatusView fields; all others are zero-valued.
 func (r *UserRepo) GetUserStatus(ctx context.Context, account string) (*model.User, error) {
 	return r.users.FindOne(ctx, activeUserFilter(account),
 		mongoutil.WithProjection(bson.M{
@@ -95,7 +95,7 @@ func (r *UserRepo) GetHRInfoByAccounts(ctx context.Context, accounts []string) (
 
 // SetUserStatus updates status fields (isShow only written when non-nil) and
 // returns the updated user in one round-trip via FindOneAndUpdate(After),
-// projected to the StatusView fields; returns (nil, nil) when no active user matched.
+// projected to the UserStatusView fields; returns (nil, nil) when no active user matched.
 func (r *UserRepo) SetUserStatus(ctx context.Context, account, text string, isShow *bool) (*model.User, error) {
 	set := bson.M{"statusText": text}
 	if isShow != nil {

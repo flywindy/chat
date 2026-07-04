@@ -9,19 +9,19 @@ import (
 
 func ptrBool(b bool) *bool { return &b }
 
-func TestStatusView_RoundTrip(t *testing.T) {
-	in := StatusView{Account: "bob", StatusText: "hi", StatusIsShow: true, ChineseName: "鮑勃", EngName: "Bob"}
+func TestUserStatusView_RoundTrip(t *testing.T) {
+	in := UserStatusView{Account: "bob", StatusText: "hi", StatusIsShow: true, ChineseName: "鮑勃", EngName: "Bob"}
 	b, err := json.Marshal(in)
 	require.NoError(t, err)
-	var out StatusView
+	var out UserStatusView
 	require.NoError(t, json.Unmarshal(b, &out))
 	require.Equal(t, in, out)
 }
 
-func TestStatusView_FalseIsShow_AlwaysPresent(t *testing.T) {
+func TestUserStatusView_FalseIsShow_AlwaysPresent(t *testing.T) {
 	// StatusIsShow is a plain bool: false must serialize as "statusIsShow":false
 	// (always present), matching the model.User contract for never-set users.
-	in := StatusView{Account: "alice", StatusText: "away", StatusIsShow: false}
+	in := UserStatusView{Account: "alice", StatusText: "away", StatusIsShow: false}
 	b, err := json.Marshal(in)
 	require.NoError(t, err)
 	var raw map[string]any
@@ -29,7 +29,7 @@ func TestStatusView_FalseIsShow_AlwaysPresent(t *testing.T) {
 	v, present := raw["statusIsShow"]
 	require.True(t, present, "statusIsShow must always be present")
 	require.Equal(t, false, v)
-	var out StatusView
+	var out UserStatusView
 	require.NoError(t, json.Unmarshal(b, &out))
 	require.False(t, out.StatusIsShow)
 }

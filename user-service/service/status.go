@@ -16,7 +16,7 @@ import (
 
 const maxStatusBytes = 512
 
-func (s *UserService) GetStatusByName(c *natsrouter.Context, req models.StatusGetByNameRequest) (*models.StatusView, error) {
+func (s *UserService) GetStatusByName(c *natsrouter.Context, req models.StatusGetByNameRequest) (*models.UserStatusView, error) {
 	c.WithLogValues("account", c.Param("account"), "target", req.Name)
 	if req.Name == "" {
 		return nil, errcode.BadRequest("name required")
@@ -28,7 +28,7 @@ func (s *UserService) GetStatusByName(c *natsrouter.Context, req models.StatusGe
 	if u == nil {
 		return nil, errcode.NotFound("user not found")
 	}
-	return &models.StatusView{
+	return &models.UserStatusView{
 		Account:      u.Account,
 		StatusText:   u.StatusText,
 		StatusIsShow: u.StatusIsShow,
@@ -41,7 +41,7 @@ func (s *UserService) GetStatusByName(c *natsrouter.Context, req models.StatusGe
 // GetStatusByName and currently shares its logic, but is its own handler so
 // the profile path can later diverge (e.g. enrich from an HR directory)
 // without touching status.
-func (s *UserService) GetProfileByName(c *natsrouter.Context, req models.StatusGetByNameRequest) (*models.StatusView, error) {
+func (s *UserService) GetProfileByName(c *natsrouter.Context, req models.StatusGetByNameRequest) (*models.UserStatusView, error) {
 	c.WithLogValues("account", c.Param("account"), "target", req.Name)
 	if req.Name == "" {
 		return nil, errcode.BadRequest("name required")
@@ -53,7 +53,7 @@ func (s *UserService) GetProfileByName(c *natsrouter.Context, req models.StatusG
 	if u == nil {
 		return nil, errcode.NotFound("user not found")
 	}
-	return &models.StatusView{
+	return &models.UserStatusView{
 		Account:      u.Account,
 		StatusText:   u.StatusText,
 		StatusIsShow: u.StatusIsShow,
@@ -62,7 +62,7 @@ func (s *UserService) GetProfileByName(c *natsrouter.Context, req models.StatusG
 	}, nil
 }
 
-func (s *UserService) SetStatus(c *natsrouter.Context, req models.StatusSetRequest) (*models.StatusView, error) {
+func (s *UserService) SetStatus(c *natsrouter.Context, req models.StatusSetRequest) (*models.UserStatusView, error) {
 	account := c.Param("account")
 	c.WithLogValues("account", account)
 	if len(req.Text) > maxStatusBytes {
@@ -78,7 +78,7 @@ func (s *UserService) SetStatus(c *natsrouter.Context, req models.StatusSetReque
 	}
 	s.publishStatus(c, account, req.Text, req.IsShow)
 	// The FindOneAndUpdate already returned the updated doc — no second read.
-	return &models.StatusView{
+	return &models.UserStatusView{
 		Account:      u.Account,
 		StatusText:   u.StatusText,
 		StatusIsShow: u.StatusIsShow,

@@ -11,7 +11,7 @@ import (
 	"github.com/hmchangw/chat/user-service/models"
 )
 
-//go:generate mockgen -destination=mocks/mock_repository.go -package=mocks . SubscriptionRepository,UserRepository,AppRepository,RoomClient,HistoryClient,EventPublisher,ThreadSubscriptionRepository
+//go:generate mockgen -destination=mocks/mock_repository.go -package=mocks . SubscriptionRepository,UserRepository,AppRepository,RoomClient,HistoryClient,PresenceClient,EventPublisher,ThreadSubscriptionRepository
 
 // SubscriptionRepository is the consumer-defined interface for subscription persistence (botDM app-subscription rows included).
 type SubscriptionRepository interface {
@@ -58,6 +58,11 @@ type HistoryClient interface {
 	GetThreadList(ctx context.Context, siteID string, req model.ThreadSubscriptionListRequest) (model.ThreadSubscriptionListResponse, error)
 }
 
+// PresenceClient is the consumer-defined interface for user-presence-service RPC calls.
+type PresenceClient interface {
+	QueryPresence(ctx context.Context, siteID string, accounts []string) ([]model.PresenceState, error)
+}
+
 // EventPublisher is the consumer-defined interface for fire-and-forget
 // federation publishing — a JetStream publish directly into the destination
 // site's INBOX stream. Status is last-write-wins and idempotent, so no
@@ -74,6 +79,7 @@ type UserService struct {
 	threadSubs      ThreadSubscriptionRepository
 	rooms           RoomClient
 	history         HistoryClient
+	presence        PresenceClient
 	pub             EventPublisher
 	siteID          string
 	allSiteIDs      []string
@@ -85,7 +91,7 @@ type UserService struct {
 }
 
 // New constructs a UserService with the given dependencies and configuration.
-func New(subs SubscriptionRepository, users UserRepository, apps AppRepository, threadSubs ThreadSubscriptionRepository, rooms RoomClient, history HistoryClient, pub EventPublisher, cfg *config.Config) *UserService {
+func New(subs SubscriptionRepository, users UserRepository, apps AppRepository, threadSubs ThreadSubscriptionRepository, rooms RoomClient, history HistoryClient, presence PresenceClient, pub EventPublisher, cfg *config.Config) *UserService {
 	return &UserService{
 		subs:            subs,
 		users:           users,
@@ -93,6 +99,7 @@ func New(subs SubscriptionRepository, users UserRepository, apps AppRepository, 
 		threadSubs:      threadSubs,
 		rooms:           rooms,
 		history:         history,
+		presence:        presence,
 		pub:             pub,
 		siteID:          cfg.SiteID,
 		allSiteIDs:      cfg.AllSiteIDs,
@@ -107,6 +114,7 @@ func New(subs SubscriptionRepository, users UserRepository, apps AppRepository, 
 // RegisterHandlers wires all UserService endpoints onto the router.
 // siteID is a literal token in each pattern — this instance only subscribes to its own siteID subjects.
 func (s *UserService) RegisterHandlers(r *natsrouter.Router) {
+	natsrouter.RegisterNoBody(r, subject.UserMePattern(s.siteID), s.Me)
 	natsrouter.Register(r, subject.UserStatusGetByNamePattern(s.siteID), s.GetStatusByName)
 	natsrouter.Register(r, subject.UserProfileGetByNamePattern(s.siteID), s.GetProfileByName)
 	natsrouter.Register(r, subject.UserStatusSetPattern(s.siteID), s.SetStatus)

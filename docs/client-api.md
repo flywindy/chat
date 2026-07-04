@@ -57,7 +57,7 @@ paths.
    - [3.3 search-service](#33-search-service)
      - [`search.messages`](#searchmessages--full-text-message-search) · [Search Rooms](#search-rooms) · [Search Apps](#search-apps) · [Search Users](#search-users)
    - [3.4 user-service](#34-user-service)
-     - [`status.getByName`](#statusgetbyname) · [`profile.getByName`](#profilegetbyname) · [`status.set`](#statusset) · [`subscription.list`](#subscriptionlist) · [`subscription.getChannels`](#subscriptiongetchannels)
+     - [`me`](#me) · [`status.getByName`](#statusgetbyname) · [`profile.getByName`](#profilegetbyname) · [`status.set`](#statusset) · [`subscription.list`](#subscriptionlist) · [`subscription.getChannels`](#subscriptiongetchannels)
      - [`subscription.getDM`](#subscriptiongetdm) · [`subscription.getByRoomID`](#subscriptiongetbyroomid) · [`subscription.count`](#subscriptioncount) · [`subscription.setAppSubscription`](#subscriptionsetappsubscription) · [`apps.list`](#appslist)
 4. [Message Send](#4-message-send)
 5. [Room Encryption](#5-room-encryption)
@@ -3766,12 +3766,13 @@ Additional legacy fields may be present, mirroring the `GET /api/v3/users` respo
 
 ### 3.4 user-service
 
-`user-service` exposes 11 NATS request/reply endpoints over **core NATS** (no JetStream consumers). All subjects follow the pattern `chat.user.{account}.request.user.{siteID}.<area>.<action>`.
+`user-service` exposes 13 NATS request/reply endpoints over **core NATS** (no JetStream consumers). Subjects follow the pattern `chat.user.{account}.request.user.{siteID}.<area>.<action>`, except `me`, which is a single-token self-lookup (`chat.user.{account}.request.user.{siteID}.me`).
 
 > **Events:** these endpoints emit no client-facing events. (`status.set` triggers a server-side cross-site federation update, which is internal and not delivered to clients.)
 
 | RPC subject | Method |
 |---|---|
+| `chat.user.{account}.request.user.{siteID}.me` | [`me`](#me) |
 | `chat.user.{account}.request.user.{siteID}.status.getByName` | [`status.getByName`](#statusgetbyname) |
 | `chat.user.{account}.request.user.{siteID}.profile.getByName` | [`profile.getByName`](#profilegetbyname) |
 | `chat.user.{account}.request.user.{siteID}.status.set` | [`status.set`](#statusset) |
@@ -3784,6 +3785,52 @@ Additional legacy fields may be present, mirroring the `GET /api/v3/users` respo
 | `chat.user.{account}.request.user.{siteID}.apps.list` | [`apps.list`](#appslist) |
 | `chat.user.{account}.request.user.{siteID}.thread.list` | [List User Threads](#list-user-threads) |
 | `chat.user.{account}.request.user.{siteID}.thread.unread.summary` | [Get Thread Unread Summary](#get-thread-unread-summary) |
+
+#### me
+
+**Subject:** `chat.user.{account}.request.user.{siteID}.me`
+**Reply subject:** auto-generated `_INBOX.>` (NATS request/reply)
+
+Returns the **calling** user's own status view plus their effective presence. The
+target is the `{account}` in the subject (the requester) — there is no request
+body. Presence is resolved from `user-presence-service`; if that lookup fails,
+`presence` degrades to `offline` (best-effort display data) rather than failing
+the request.
+
+##### Request body
+
+None. Any payload is ignored.
+
+##### Success response
+
+| Field          | Type    | Notes |
+|----------------|---------|-------|
+| `account`      | string  | The calling user's account. |
+| `statusText`   | string  | Current status message (empty if not set). |
+| `statusIsShow` | boolean | Always present. Whether the status is displayed; `false` when never set. |
+| `chineseName`  | string  | Optional — **omitted** when the user record has no Chinese name (never sent as an empty string). |
+| `engName`      | string  | Optional — **omitted** when the user record has no English name (never sent as an empty string). |
+| `presence`     | string  | Effective presence: one of `online`, `away`, `busy`, `offline`, `appear_offline`, `in-call`. `offline` when unknown or on a degraded presence lookup. |
+
+```json
+{
+  "account": "alice",
+  "statusText": "In a meeting",
+  "statusIsShow": true,
+  "chineseName": "愛麗絲",
+  "engName": "Alice",
+  "presence": "online"
+}
+```
+
+##### Error response
+
+| Condition | `code` | `reason` | Notes |
+|-----------|--------|----------|-------|
+| User not found | `not_found` | — | `{ "code": "not_found", "error": "user not found" }` |
+| Internal failure | `internal` | — | The user-status read failed — the **only** source of `internal` on this endpoint. A failed presence lookup never errors; it degrades to `presence: "offline"` in a success response. |
+
+---
 
 #### status.getByName
 

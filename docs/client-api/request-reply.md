@@ -1215,11 +1215,13 @@ Top-level JSON array of `SearchUser` (`account`, `engName`?, `chineseName`?).
 
 ## user-service
 
-All user-service subjects: `chat.user.{account}.request.user.{siteID}.<area>.<action>`.
+All user-service subjects: `chat.user.{account}.request.user.{siteID}.<area>.<action>`,
+except `me` — a single-token self-lookup (`chat.user.{account}.request.user.{siteID}.me`).
 No client-facing events are emitted.
 
 | RPC subject | Method |
 |---|---|
+| `chat.user.{account}.request.user.{siteID}.me` | [me](#me) |
 | `chat.user.{account}.request.user.{siteID}.status.getByName` | [status.getByName](#statusgetbyname) |
 | `chat.user.{account}.request.user.{siteID}.profile.getByName` | [profile.getByName](#profilegetbyname) |
 | `chat.user.{account}.request.user.{siteID}.status.set` | [status.set](#statusset) |
@@ -1232,6 +1234,36 @@ No client-facing events are emitted.
 | `chat.user.{account}.request.user.{siteID}.apps.list` | [apps.list](#appslist) |
 | `chat.user.{account}.request.user.{siteID}.thread.list` | [List User Threads](#list-user-threads) |
 | `chat.user.{account}.request.user.{siteID}.thread.unread.summary` | [Get Thread Unread Summary](#get-thread-unread-summary) |
+
+---
+
+### me
+
+**Subject:** `chat.user.{account}.request.user.{siteID}.me`
+
+Returns the **calling** user's own status view plus effective presence
+(resolved from user-presence-service; degrades to `offline` on lookup failure
+rather than erroring).
+
+#### Request body
+
+None. Any payload is ignored.
+
+#### Success response
+
+`{ "account", "statusText", "statusIsShow", "chineseName"?, "engName"?, "presence" }`
+
+`chineseName`/`engName` are **omitted** when the user record has no value (never
+empty strings). `presence` is one of `online` / `away` / `busy` / `offline` /
+`appear_offline` / `in-call`; `offline` when unknown or degraded.
+
+#### Errors
+
+`not_found` (user not found), `internal` (user-status read failed — the only
+`internal` source). A failed presence lookup never errors; it degrades to
+`presence: "offline"` in a success response.
+
+**Emits:** None.
 
 ---
 

@@ -941,6 +941,20 @@ func UserAppsListPattern(siteID string) string {
 	return fmt.Sprintf("chat.user.{account}.request.user.%s.apps.list", siteID)
 }
 
+// UserMe is the concrete subject for the /me self-info endpoint — a deliberate
+// single-token action ("me"), not the {area}.{action} shape of its siblings.
+func UserMe(account, siteID string) string {
+	if !isValidAccountToken(account) {
+		panic("invalid account token: contains NATS wildcard characters")
+	}
+	return fmt.Sprintf("chat.user.%s.request.user.%s.me", account, siteID)
+}
+
+// UserMePattern is the natsrouter pattern for the /me endpoint.
+func UserMePattern(siteID string) string {
+	return fmt.Sprintf("chat.user.{account}.request.user.%s.me", siteID)
+}
+
 func UserSubscriptionList(account, siteID string) string {
 	if !isValidAccountToken(account) {
 		panic("invalid account token: contains NATS wildcard characters")

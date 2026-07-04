@@ -32,6 +32,7 @@ func newThreadSvc(t *testing.T) (*UserService, *mocks.MockHistoryClient, *mocks.
 		mocks.NewMockThreadSubscriptionRepository(ctrl),
 		mocks.NewMockRoomClient(ctrl),
 		history,
+		mocks.NewMockPresenceClient(ctrl),
 		mocks.NewMockEventPublisher(ctrl),
 		cfg,
 	)
