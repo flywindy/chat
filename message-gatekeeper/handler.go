@@ -433,7 +433,7 @@ func (h *Handler) resolveQuoteSnapshot(ctx context.Context, account, roomID, sit
 			"request_id", natsutil.RequestIDFromContext(ctx), "quoted_id", quotedParentMessageID, "error", err)
 		return ph, true, nil
 	}
-	if cerr := checkQuoteThreadContext(snap, quotedParentMessageID, newMessageThreadID); cerr != nil {
+	if cerr := checkQuoteThreadContext(snap, quotedParentMessageID, newMessageThreadID, roomID); cerr != nil {
 		return nil, false, cerr
 	}
 	return snap, false, nil
@@ -478,11 +478,16 @@ func (h *Handler) placeholderQuoteSnapshot(roomID, messageID, newMessageThreadID
 }
 
 // checkQuoteThreadContext enforces the same-conversation rule between the quoted
-// parent and the quoting message.
-func checkQuoteThreadContext(snap *cassandra.QuotedParentMessage, quotedParentMessageID, newMessageThreadID string) error {
+// parent and the quoting message. newMessageRoomID is the quoting message's own
+// room, needed for the TShow carve-out below.
+func checkQuoteThreadContext(snap *cassandra.QuotedParentMessage, quotedParentMessageID, newMessageThreadID, newMessageRoomID string) error {
+	// TShow ("also send to channel") carve-out: the parent also lives in its channel
+	// room, so quoting it from that room (a main-room message) is legitimate.
+	tshowChannelQuote := snap.TShow && newMessageThreadID == "" && snap.RoomID == newMessageRoomID
 	if snap.ThreadParentID != newMessageThreadID &&
 		// Thread-root quote: starter is a main-room msg (ThreadParentID=="") whose ID is the thread parent — allowed.
-		(snap.ThreadParentID != "" || quotedParentMessageID != newMessageThreadID) {
+		(snap.ThreadParentID != "" || quotedParentMessageID != newMessageThreadID) &&
+		!tshowChannelQuote {
 		return errcode.BadRequest(fmt.Sprintf("quoted parent %s thread context mismatch: parent thread %q, new message thread %q",
 			quotedParentMessageID, snap.ThreadParentID, newMessageThreadID))
 	}

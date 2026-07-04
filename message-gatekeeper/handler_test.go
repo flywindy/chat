@@ -1498,6 +1498,64 @@ func TestHandler_resolveQuoteSnapshot(t *testing.T) {
 				assert.Equal(t, errcode.CodeForbidden, ee.Code)
 			},
 		},
+		{
+			// chat#432: a TShow ("also send to channel") thread reply is visible in
+			// its parent channel room, so quoting it from that room (threadID=="")
+			// must be allowed even though the parent's own ThreadParentID is set.
+			name:     "tshow parent quoted from its parent channel room — allowed",
+			quotedID: quotedID,
+			threadID: "",
+			setupFetcher: func(f *MockParentMessageFetcher) {
+				f.EXPECT().FetchQuotedParent(gomock.Any(), account, roomID, siteID, quotedID).
+					Return(&cassandra.QuotedParentMessage{MessageID: quotedID, RoomID: roomID, ThreadParentID: "thread-X", TShow: true, Msg: "tshow msg"}, nil)
+			},
+			wantSnap: true,
+			assertSnap: func(t *testing.T, snap *cassandra.QuotedParentMessage) {
+				assert.Equal(t, "tshow msg", snap.Msg)
+			},
+		},
+		{
+			name:     "non-tshow thread reply quoted from the channel — still rejected",
+			quotedID: quotedID,
+			threadID: "",
+			setupFetcher: func(f *MockParentMessageFetcher) {
+				f.EXPECT().FetchQuotedParent(gomock.Any(), account, roomID, siteID, quotedID).
+					Return(&cassandra.QuotedParentMessage{MessageID: quotedID, RoomID: roomID, ThreadParentID: "thread-X", TShow: false, Msg: "thread-only msg"}, nil)
+			},
+			wantErr: true,
+			assertErr: func(t *testing.T, err error) {
+				var ee *errcode.Error
+				require.True(t, errors.As(err, &ee))
+				assert.Equal(t, errcode.CodeBadRequest, ee.Code)
+			},
+		},
+		{
+			// The carve-out is gated on the quoter being in the parent's own room —
+			// a TShow parent shown in room A must not be quotable from unrelated room B.
+			name:     "tshow parent from a different room — still rejected",
+			quotedID: quotedID,
+			threadID: "",
+			setupFetcher: func(f *MockParentMessageFetcher) {
+				f.EXPECT().FetchQuotedParent(gomock.Any(), account, roomID, siteID, quotedID).
+					Return(&cassandra.QuotedParentMessage{MessageID: quotedID, RoomID: "some-other-room", ThreadParentID: "thread-X", TShow: true, Msg: "tshow msg"}, nil)
+			},
+			wantErr: true,
+			assertErr: func(t *testing.T, err error) {
+				var ee *errcode.Error
+				require.True(t, errors.As(err, &ee))
+				assert.Equal(t, errcode.CodeBadRequest, ee.Code)
+			},
+		},
+		{
+			name:     "tshow parent quoted from within its own thread — allowed",
+			quotedID: quotedID,
+			threadID: "thread-X",
+			setupFetcher: func(f *MockParentMessageFetcher) {
+				f.EXPECT().FetchQuotedParent(gomock.Any(), account, roomID, siteID, quotedID).
+					Return(&cassandra.QuotedParentMessage{MessageID: quotedID, RoomID: roomID, ThreadParentID: "thread-X", TShow: true, Msg: "tshow msg"}, nil)
+			},
+			wantSnap: true,
+		},
 	}
 
 	for _, tc := range tests {

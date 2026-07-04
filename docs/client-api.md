@@ -2390,6 +2390,7 @@ Embedded snapshot of the quoted message at the time of quoting.
 | `messageLink` | string | Optional. |
 | `threadParentId` | string | Optional. Set if the quoted message itself is a thread reply. |
 | `threadParentCreatedAt` | string | Optional. RFC 3339. |
+| `tshow` | boolean | Optional. Mirrors the quoted message's own `tshow` — set when the quoted message is a thread reply also shown in its parent channel room. |
 
 When the reader is in a restricted access window and the quoted parent falls outside it, the embedded snapshot is redacted to `{ "msg": "This message is unavailable" }` — all other quote fields are dropped.
 
@@ -4709,7 +4710,7 @@ Delivered on `chat.user.{account}.response.{requestId}`. See [Error envelope](#6
 | `not subscribed` | `forbidden` | `not_subscribed` | Sender is not a member of the room. |
 | `posting is restricted to owners and admins in this room` | `forbidden` | `large_room_post_restricted` | Non-owner/admin/bot posting a top-level message in a room above the large-room threshold (thread replies are exempt). |
 | `quoted parent {id} not found` | `not_found` | — | The quoted message lookup failed (deleted, cross-room, …). |
-| `quoted parent {id} thread context mismatch: …` | `bad_request` | — | A quoted message must be in the same thread context (main-room or the same thread) as the new message. |
+| `quoted parent {id} thread context mismatch: …` | `bad_request` | — | A quoted message must be in the same thread context (main-room or the same thread) as the new message — except a `tshow: true` thread reply, which may also be quoted from its parent channel room. |
 
 **Delivery guarantee:** every validation/authorization failure — including a `siteID` mismatch and a malformed `msg.send` subject — is replied to the client on the response subject and the JetStream message is acked (not retried). The error reply requires a routable response subject, so it can only be sent when the `{account}` segment is recoverable from the subject and the payload carries a valid hyphenated-UUID `requestId`; if neither is recoverable (a truly malformed subject or missing/invalid `requestId`) no reply is possible and the client falls back to a request timeout. **Only infrastructure failures** (store/publish errors) are nak'd and **redelivered by JetStream** — these produce no immediate reply.
 

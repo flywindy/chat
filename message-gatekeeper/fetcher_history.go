@@ -54,6 +54,7 @@ type quotedParentProjection struct {
 	DecodedAttachments    []cassandra.Attachment  `json:"attachments"`
 	ThreadParentID        string                  `json:"threadParentId"`
 	ThreadParentCreatedAt *time.Time              `json:"threadParentCreatedAt"`
+	TShow                 bool                    `json:"tshow"`
 }
 
 // FetchQuotedParent issues a NATS request to history-service's GetMessageByID
@@ -101,5 +102,6 @@ func (f *historyParentFetcher) FetchQuotedParent(
 		MessageLink:           messageLink(f.chatBaseURL, parent.RoomID, messageID),
 		ThreadParentID:        parent.ThreadParentID,
 		ThreadParentCreatedAt: parent.ThreadParentCreatedAt,
+		TShow:                 parent.TShow,
 	}, nil
 }

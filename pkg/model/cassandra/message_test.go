@@ -124,6 +124,20 @@ func TestQuotedParentMessage_JSON_WithThreadParent(t *testing.T) {
 	assert.Equal(t, parentAt, *got.ThreadParentCreatedAt)
 }
 
+func TestQuotedParentMessage_JSON_TShow(t *testing.T) {
+	q := QuotedParentMessage{MessageID: "m1", RoomID: "r1", Sender: Participant{ID: "u1"}, CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), TShow: true}
+	b, err := json.Marshal(q)
+	require.NoError(t, err)
+	assert.Contains(t, string(b), `"tshow":true`)
+	assert.True(t, roundTrip(t, q).TShow)
+
+	q.TShow = false // omitempty ⇒ absent when false
+	b, err = json.Marshal(q)
+	require.NoError(t, err)
+	assert.NotContains(t, string(b), "tshow")
+	assert.False(t, roundTrip(t, q).TShow)
+}
+
 func TestMessage_JSON(t *testing.T) {
 	now := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
 	edited := now.Add(5 * time.Minute)

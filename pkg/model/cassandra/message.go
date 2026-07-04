@@ -56,6 +56,11 @@ type QuotedParentMessage struct {
 	// embedding the parent's identity so history-service can enforce access-window checks without an extra read.
 	ThreadParentID        string     `json:"threadParentId,omitempty"        cql:"thread_parent_id"`
 	ThreadParentCreatedAt *time.Time `json:"threadParentCreatedAt,omitempty" cql:"thread_parent_created_at"`
+	// TShow mirrors the quoted message's own flag: an "also send to channel" thread
+	// reply, quotable from its parent channel room (see checkQuoteThreadContext).
+	// Transient (cql:"-") — resolved per-request from history's reply, never persisted
+	// into the quoted_parent_message UDT.
+	TShow bool `json:"tshow,omitempty" cql:"-"`
 }
 
 // Message represents a message row in the Cassandra message tables
