@@ -961,3 +961,56 @@ func TestHandleUploadFile_MissingFile(t *testing.T) {
 	fileHandler(store, okFileDrive()).HandleUploadFile(c)
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
+
+func TestHandler_HandleSetCookie_SetsCookieAttributes(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h := &Handler{}
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/setCookie", nil)
+	c.Request.Header.Set("ssoToken", "jwt-abc")
+
+	h.HandleSetCookie(c)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.JSONEq(t, `{"success":true}`, w.Body.String())
+
+	setCookie := w.Header().Get("Set-Cookie")
+	require.NotEmpty(t, setCookie)
+	assert.Contains(t, setCookie, "ssoToken=jwt-abc")
+	assert.Contains(t, setCookie, "Path=/")
+	assert.Contains(t, setCookie, "HttpOnly")
+	assert.Contains(t, setCookie, "Secure")
+	assert.Contains(t, setCookie, "SameSite=None")
+	assert.Contains(t, setCookie, "Partitioned")
+}
+
+func TestHandler_HandleSetCookie_FallsBackToCookie(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h := &Handler{}
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/setCookie", nil)
+	c.Request.Header.Set("Cookie", "ssoToken=cookie-jwt")
+
+	h.HandleSetCookie(c)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Header().Get("Set-Cookie"), "ssoToken=cookie-jwt")
+}
+
+// HandleSetCookie does no validation of its own — authMiddleware gates the route and
+// rejects a missing token before this runs. Called with neither header nor cookie it
+// still returns 200 and sets an empty-valued cookie; lock in that passthrough behavior.
+func TestHandler_HandleSetCookie_NoToken(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h := &Handler{}
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/setCookie", nil)
+
+	h.HandleSetCookie(c)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Header().Get("Set-Cookie"), "ssoToken=;")
+}

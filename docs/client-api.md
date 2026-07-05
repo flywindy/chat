@@ -310,9 +310,69 @@ See [Error envelope](#6-error-envelope-reference). HTTP statuses:
 ### 2.4 HTTP — Protected file/image upload/download
 
 HTTP endpoints on `upload-service` for protected file uploads and downloads,
-proxied to/from an internal Drive. All require the `ssoToken` header (validated
-via OIDC) and that the caller is a member (has a subscription) of `:roomId`. Errors
-use the standard [§6](#6-error-envelope-reference) envelope `{ code, reason?, error }`.
+proxied to/from an internal Drive. All require an OIDC-validated `ssoToken` — sent
+as the `ssoToken` header, or (for browser `<img>` downloads that cannot set headers)
+as an `ssoToken` cookie obtained from `POST /api/v1/setCookie` below; the header takes
+precedence. Room-scoped endpoints also require that the caller is a member (has a
+subscription) of `:roomId`. Cross-origin browsers are served credentialed CORS headers
+only when their `Origin` is in the server's `CORS_ALLOWED_ORIGINS` allowlist. Errors use
+the standard [§6](#6-error-envelope-reference) envelope `{ code, reason?, error }`.
+
+#### POST /api/v1/setCookie
+
+**Endpoint:** `POST /api/v1/setCookie`
+**Reply:** synchronous HTTP response
+
+Exchanges the `ssoToken` header for an `ssoToken` cookie so the browser can then load
+protected files via `<img src>` (which cannot send headers). The token is validated
+before the cookie is issued. Call this once after login. The cookie is a session cookie
+and the token can expire, so when downloads start returning `401`, re-call this endpoint
+with a **fresh** valid `ssoToken` — this endpoint re-authenticates on every call and
+cannot refresh the cookie from an already-expired token.
+
+#### Request
+
+| Field | Source | Type | Required | Notes |
+|---|---|---|---|---|
+| `ssoToken` | header | string | yes | OIDC-issued SSO token; validated before the cookie is set. |
+
+Cross-origin callers must send the request with credentials (e.g. `fetch(..., { credentials: "include" })`) and be served from an origin in `CORS_ALLOWED_ORIGINS`.
+
+#### Success response
+
+`HTTP 200`
+
+| Field | Type | Notes |
+|---|---|---|
+| `success` | boolean | Always `true` on a 200. |
+
+Response header:
+
+```
+Set-Cookie: ssoToken=<token>; Path=/; HttpOnly; Secure; SameSite=None; Partitioned
+```
+
+```json
+{ "success": true }
+```
+
+#### Error response
+
+Uses the [§6](#6-error-envelope-reference) envelope. HTTP statuses:
+
+| Status | `code` | `reason` | Example body |
+|---|---|---|---|
+| 401 | `unauthenticated` | `invalid_sso_token` / `sso_token_expired` / `missing_fields` | `{ "code": "unauthenticated", "reason": "invalid_sso_token", "error": "invalid sso token" }` |
+
+#### Triggered events — success path
+
+`None — HTTP-only.`
+
+#### Triggered events — error path
+
+`None.`
+
+---
 
 #### POST /api/v1/file/rooms/:roomId/upload/images
 
@@ -465,7 +525,7 @@ or `titleLink` (file upload) returned by the upload endpoints.
 
 | Field | Source | Type | Required | Notes |
 |---|---|---|---|---|
-| `ssoToken` | header | string | yes | OIDC-issued SSO token. |
+| `ssoToken` | header/cookie | string | yes | OIDC-issued SSO token. Sent as the `ssoToken` header, or as the `ssoToken` cookie from `POST /api/v1/setCookie` (browser `<img>` downloads); header wins. |
 | `roomId` | path | string | yes | Room the image belongs to; the caller must be a member. |
 | `fileId` | path | string | yes | Drive file ID (from the upload response). |
 | `drive_host` | query | string | yes | Drive base URL (from the upload response). |
@@ -510,7 +570,7 @@ The response is always served as an attachment.
 
 | Field | Source | Type | Required | Notes |
 |---|---|---|---|---|
-| `ssoToken` | header | string | yes | OIDC-issued SSO token. |
+| `ssoToken` | header/cookie | string | yes | OIDC-issued SSO token. Sent as the `ssoToken` header, or as the `ssoToken` cookie from `POST /api/v1/setCookie` (browser `<img>` downloads); header wins. |
 | `fileId` | path | string | yes | Upload ID (the `uploads._id`); used for the metadata lookup. |
 | `fileName` | path | string | yes | Cosmetic — accepted but ignored; the served filename comes from the stored metadata. |
 

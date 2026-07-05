@@ -24,6 +24,7 @@ services:
       - OIDC_ISSUER_URL=http://keycloak:8080/realms/chatapp
       - OIDC_AUDIENCES=nats-chat
       - TLS_SKIP_VERIFY=false
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-}
       - DRIVE_URL=${DRIVE_URL:-http://drive-mock:9000}
       - DRIVE_API_TOKEN=${DRIVE_API_TOKEN:-dev-token}
       - DRIVE_BASE_URL_CONFIG_PATH=/etc/config/baseurls.json

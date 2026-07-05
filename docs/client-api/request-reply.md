@@ -20,6 +20,7 @@ For connection, auth, shared schemas, and error reference, see [../client-api.md
 1. [HTTP — Connection & Auth](#http--connection--auth)
    - [POST /api/v1/auth](#post-apiv1auth)
    - [GET /api/userInfo](#get-apiuserinfo)
+   - [POST /api/v1/setCookie](#post-apiv1setcookie)
    - [POST /api/v1/file/rooms/:roomId/upload/images](#post-apiv1fileroomsroomiduploadimages)
    - [POST /api/v1/file/rooms/:roomId/upload/file](#post-apiv1fileroomsroomiduploadfile)
    - [GET /api/v1/file/rooms/:roomId/file/:fileId](#get-apiv1fileroomsroomidfilefileid)
@@ -64,6 +65,21 @@ and auth-service connection coordinates. See
 
 ---
 
+### POST /api/v1/setCookie
+
+**Endpoint:** `POST /api/v1/setCookie`
+**Reply:** synchronous HTTP response
+
+Exchanges the `ssoToken` header for an `ssoToken` cookie so the browser can load
+protected files via `<img src>` (which cannot send headers). Token is validated before
+the cookie is issued. Credentialed request; caller's `Origin` must be in the server's
+`CORS_ALLOWED_ORIGINS` allowlist. See
+[../client-api.md §2.4](../client-api.md#post-apiv1setcookie).
+
+**Emits:** `None — HTTP-only.`
+
+---
+
 ### POST /api/v1/file/rooms/:roomId/upload/images
 
 **Endpoint:** `POST /api/v1/file/rooms/:roomId/upload/images`
@@ -98,8 +114,9 @@ multipart/form-data`. `ssoToken` header required; caller must be a room member. 
 **Endpoint:** `GET /api/v1/file/rooms/:roomId/file/:fileId`
 **Reply:** synchronous HTTP response (raw file bytes, any type)
 
-Downloads a protected file (image/audio/video/document). `ssoToken` header
-required; caller must be a room member. `drive_host` query param required.
+Downloads a protected file (image/audio/video/document). `ssoToken` required (header,
+or the `ssoToken` cookie from `POST /api/v1/setCookie` for browser `<img>` downloads;
+header wins); caller must be a room member. `drive_host` query param required.
 Called with the `relativePath` (image upload) or `titleLink` (file upload)
 returned by the upload endpoints. See
 [../client-api.md §2.4](../client-api.md#get-apiv1fileroomsroomidfilefileid).
@@ -114,8 +131,9 @@ returned by the upload endpoints. See
 **Reply:** synchronous HTTP response (raw file bytes, not JSON)
 
 Downloads a previously-uploaded file by `fileId` (resolved via the `uploads`
-collection, streamed from MinIO/S3); `fileName` is cosmetic. `ssoToken` header
-required; caller must be a member of the file's room. See
+collection, streamed from MinIO/S3); `fileName` is cosmetic. `ssoToken` required
+(header, or the `ssoToken` cookie from `POST /api/v1/setCookie` for browser `<img>`
+downloads; header wins); caller must be a member of the file's room. See
 [../client-api.md §2.4](../client-api.md#get-apiv1file-uploadfileidfilename).
 
 **Emits:** `None — HTTP-only.`

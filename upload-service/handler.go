@@ -95,6 +95,24 @@ func (h *Handler) HandleHealth(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
+// HandleSetCookie issues the (already auth-validated) ssoToken as a cross-site session
+// cookie so the browser can authenticate <img>-driven downloads that cannot send headers.
+// SameSite=None + Partitioned require the hand-built http.Cookie; c.SetCookie cannot set them.
+func (h *Handler) HandleSetCookie(c *gin.Context) {
+	token := tokenFromRequest(c)
+	// #nosec G124 -- SameSite=None is required for the cross-site <img> download flow; it is mitigated by Secure + HttpOnly + Partitioned.
+	http.SetCookie(c.Writer, &http.Cookie{
+		Name:        ssoTokenName,
+		Value:       token,
+		Path:        "/",
+		HttpOnly:    true,
+		Secure:      true,
+		SameSite:    http.SameSiteNoneMode,
+		Partitioned: true,
+	})
+	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
 // HandleUploadImages uploads one or more images for a room on behalf of the
 // authenticated user, returning per-file success/failure in a single 200.
 func (h *Handler) HandleUploadImages(c *gin.Context) {

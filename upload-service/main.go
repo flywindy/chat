@@ -24,6 +24,10 @@ type config struct {
 	DevMode bool   `env:"DEV_MODE"  envDefault:"false"`
 	SiteID  string `env:"SITE_ID,required"`
 
+	// CORSAllowedOrigins is the credentialed-CORS allowlist. Empty (default) emits no
+	// CORS headers. Comma-separated exact origins, e.g. "https://app.example.com".
+	CORSAllowedOrigins []string `env:"CORS_ALLOWED_ORIGINS" envSeparator:"," envDefault:""`
+
 	MongoURI      string `env:"MONGO_URI,required"`
 	MongoDB       string `env:"MONGO_DB"        envDefault:"chat"`
 	MongoUsername string `env:"MONGO_USERNAME"  envDefault:""`
@@ -122,6 +126,7 @@ func run() error {
 	r.Use(gin.Recovery())
 	r.Use(requestIDMiddleware())
 	r.Use(accessLogMiddleware())
+	r.Use(corsMiddleware(cfg.CORSAllowedOrigins))
 	registerRoutes(r, handler, validator, cfg.DevMode)
 
 	addr := fmt.Sprintf(":%s", cfg.Port)

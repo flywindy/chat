@@ -9,6 +9,7 @@ func registerRoutes(r *gin.Engine, h *Handler, v TokenValidator, devMode bool) {
 	api := r.Group("/api/v1")
 	api.Use(otelMiddleware())
 	api.Use(authMiddleware(v, devMode))
+	api.POST("/setCookie", h.HandleSetCookie)
 	api.POST("/file/rooms/:roomId/upload/images", h.HandleUploadImages)
 	api.POST("/file/rooms/:roomId/upload/file", h.HandleUploadFile)
 	api.GET("/file/rooms/:roomId/file/:fileId", h.HandleDownloadFile)
