@@ -13,9 +13,9 @@ import (
 	"github.com/hmchangw/chat/pkg/subject"
 )
 
-// presenceRPCTimeout is tighter than the sibling clients' 5s: presence is a
-// degradable hot-path field, so a slow lookup should fail fast to offline.
-const presenceRPCTimeout = time.Second
+// presenceRPCTimeout matches the sibling clients' 5s: presence degrades to
+// offline on timeout, so allow a normal round trip before giving up.
+const presenceRPCTimeout = time.Second * 5
 
 // Client implements service.PresenceClient via NATS request/reply over the
 // server-to-server lane; the passed siteID must be the accounts' home site.

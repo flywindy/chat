@@ -3916,7 +3916,7 @@ None. Any payload is ignored.
 | `statusIsShow` | boolean | Always present. Whether the status is displayed; `false` when never set. |
 | `chineseName`  | string  | Optional — **omitted** when the user record has no Chinese name (never sent as an empty string). |
 | `engName`      | string  | Optional — **omitted** when the user record has no English name (never sent as an empty string). |
-| `presence`     | string  | Effective presence: one of `online`, `away`, `busy`, `offline`, `appear_offline`, `in-call`. `offline` when unknown or on a degraded presence lookup. |
+| `presence`     | string  | Effective presence: one of `online`, `away`, `busy`, `offline`, `in-call`. `offline` when unknown or on a degraded presence lookup. |
 
 ```json
 {
