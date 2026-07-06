@@ -2391,13 +2391,59 @@ Used by every history-service method that returns messages. Mirrors the Cassandr
 | `reactions` | map<emoji, [ReactionUser](#reactionuser)[]> | Optional. Omitted when absent; `{}` when present but empty. |
 | `deleted` | boolean | Optional. `true` for tombstoned messages. |
 | `type` | string | Optional. System-message type when set; regular messages omit it. Known values: `"room_created"`, `"members_added"`, `"member_removed"`, `"member_left"`, `"room_renamed"`, `"room_restricted"`. For all six, `msg` is populated with a server-rendered human-readable body and `sender.account` is the responsible actor (the requester for adds/removes-by-other / room-creates / renames / restricted changes, the leaving user for self-leave). |
-| `sysMsgData` | string | Optional. Base64-encoded raw JSON payload for system messages. |
+| `sysMsgData` | string | Optional. Base64-encoded JSON payload for system messages; shape depends on `type` (see [System-message `sysMsgData` payloads](#system-message-sysmsgdata-payloads)). |
 | `siteId` | string | Optional. The site that owns the message. |
 | `editedAt` | string | Optional. RFC 3339. Set after an edit. |
 | `updatedAt` | string | Optional. RFC 3339. Mirrors `editedAt` for edits, set on delete to record the deletion time. |
 | `threadRoomId` | string | Optional. The thread room ID when this is a thread message. |
 | `pinnedAt` | string | Optional. RFC 3339. With the `messages_by_room` `pinned_at` mirror, room-timeline history loads now return this on pinned rows too (previously only `pin.list` and point lookups carried it). |
 | `pinnedBy` | [MessageParticipant](#messageparticipant) | Optional. |
+
+##### System-message `sysMsgData` payloads
+
+`sysMsgData` is base64-encoded JSON whose shape depends on `type`.
+
+`members_added` (also emitted on room creation):
+
+| field | type | description |
+|-------|------|-------------|
+| `individuals` | string[] | Accounts of the individuals in the request (direct + channel-expanded, deduped; excludes organization members and the requester). May include accounts already in the room. Empty `[]`, never `null`. The "n people" count is `individuals.length`; clients may render it as a clickable list. |
+| `orgs` | string[] | Organization IDs in the request (direct + channel-expanded, deduped). Empty `[]`, never `null`. The "m organizations" count is `orgs.length`; clients may render it as a clickable list. |
+| `channels` | [ChannelRef](#channelref)[] | Source channels whose members were copied in (provenance). Empty `[]`, never `null`. |
+| `addedUsersCount` | number | New subscriptions created by the operation, including organization-expanded members; may differ from `individuals.length`. |
+
+```json
+{ "individuals": ["alice", "bob"], "orgs": ["eng"], "channels": [], "addedUsersCount": 12 }
+```
+
+`member_removed`:
+
+| field | type | description |
+|-------|------|-------------|
+| `user` | [SysMsgUser](#sysmsguser) | Set when an individual was removed. |
+| `orgId` | string | Set when an organization was removed. |
+| `sectName` | string | Display name of the removed organization (set with `orgId`). |
+| `removedUsersCount` | number | Number of underlying accounts whose subscription was removed. |
+
+```json
+{ "user": { "account": "bob", "engName": "Bob", "chineseName": "鮑勃" }, "removedUsersCount": 1 }
+```
+
+`member_left` — `{ "user": SysMsgUser }` for the user who left:
+
+```json
+{ "user": { "account": "bob", "engName": "Bob", "chineseName": "鮑勃" } }
+```
+
+##### SysMsgUser
+
+A user referenced by a system-message payload.
+
+| field | type | description |
+|-------|------|-------------|
+| `account` | string | The user's account. |
+| `engName` | string | English display name; may be empty. |
+| `chineseName` | string | Chinese display name; may be empty. |
 
 ##### MessageParticipant
 
@@ -4873,7 +4919,7 @@ The canonical broadcast message (distinct from the history [Message schema](#mes
 | `threadParentMessageId` | string | Optional. Set for a thread reply. |
 | `tshow` | boolean | Optional. Whether a thread reply is also shown in the parent room. |
 | `type` | string | Optional. System-message type when set. |
-| `sysMsgData` | string | Optional. Base64-encoded raw JSON payload for system messages. |
+| `sysMsgData` | string | Optional. Base64-encoded JSON payload for system messages; shape depends on `type` (see [System-message `sysMsgData` payloads](#system-message-sysmsgdata-payloads)). |
 | `quotedParentMessage` | [QuotedParentMessage](#quotedparentmessage) | Optional. |
 | `pinnedAt` | string | Optional. RFC 3339. |
 | `pinnedBy` | [Participant](#participant) | Optional. |

@@ -453,7 +453,7 @@ func (h *Handler) processRemoveIndividual(ctx context.Context, req *model.Remove
 	if isSelfLeave {
 		content = formatLeft(&user.User)
 	} else {
-		content = formatRemovedUser(&user.User)
+		content = formatRemovedUser(requester, &user.User)
 	}
 	sysMsg := model.Message{
 		ID:          idgen.MessageIDFromRequestID(seed, "rmindiv"),
@@ -656,7 +656,7 @@ func (h *Handler) processRemoveOrg(ctx context.Context, req *model.RemoveMemberR
 		UserID:      requester.ID,
 		UserAccount: requester.Account,
 		Type:        model.MessageTypeMemberRemoved,
-		Content:     formatRemovedOrg(name, tcName, req.OrgID),
+		Content:     formatRemovedOrg(requester, name, tcName, req.OrgID),
 		SysMsgData:  sysMsgPayload,
 		CreatedAt:   now,
 	}
@@ -1063,8 +1063,8 @@ func (h *Handler) processAddMembers(ctx context.Context, data []byte) (err error
 	// (actualAccounts) or new org rows (req.Orgs). The org→individual upgrade
 	// path (only needIRM populated) writes the missing individual room_members
 	// row silently — no membership state changed for the room itself, so
-	// emitting an empty MemberAddEvent and a "added members to the channel"
-	// sys-msg with no actual members listed would mislead end users.
+	// emitting an empty MemberAddEvent and a members_added sys-msg with no
+	// actual members listed would mislead end users.
 	historySharedSince := historySharedSincePtr(req.History, req.Timestamp, req.RoomID)
 	if len(actualAccounts) > 0 || len(req.Orgs) > 0 {
 		memberAddEvt := model.MemberAddEvent{
@@ -1107,21 +1107,24 @@ func (h *Handler) processAddMembers(ctx context.Context, data []byte) (err error
 			}
 		}
 
+		// Individuals = req.Users (direct + channel individuals, merged by
+		// room-service) minus the requester — mirrors create's creator strip.
+		sysIndividuals := withoutAccount(req.Users, req.RequesterAccount)
 		membersAdded := model.MembersAdded{
-			Individuals:     actualAccounts,
-			Orgs:            req.Orgs,
-			Channels:        req.Channels,
+			Individuals:     sysIndividuals,
+			Orgs:            nonNil(req.Orgs),
+			Channels:        nonNil(req.Channels),
 			AddedUsersCount: len(subs),
 		}
 		sysMsgData, _ := json.Marshal(membersAdded)
 		seed := messageDedupSeed(ctx, "processAddMembers", req.RoomID,
 			fmt.Sprintf("%s:%s:%d", req.RoomID, req.RequesterAccount, req.Timestamp))
-		// Single form only for direct 1-user adds; org-bearing adds always use multi.
-		content := formatAddedMulti(requester)
-		if len(subs) == 1 && len(req.Orgs) == 0 {
-			onlyUser := userMap[subs[0].User.Account]
-			content = formatAddedSingle(requester, &onlyUser)
-		}
+		content := addedContent(requester, sysIndividuals, req.Orgs, func(a string) *model.User {
+			if u, ok := userMap[a]; ok {
+				return &u
+			}
+			return nil
+		})
 		sysMsg := model.Message{
 			ID:          idgen.MessageIDFromRequestID(seed, "addmembers"),
 			RoomID:      req.RoomID,
@@ -1586,7 +1589,7 @@ func (h *Handler) finishCreateRoom(ctx context.Context, req *model.CreateRoomReq
 
 	// Task 36: channel-only sys-messages
 	if room.Type == model.RoomTypeChannel {
-		if err := h.publishChannelSysMessages(ctx, req, room, requester, len(subs)-1, requestID, now); err != nil {
+		if err := h.publishChannelSysMessages(ctx, req, room, requester, userByAccount, len(subs)-1, requestID, now); err != nil {
 			return fmt.Errorf("publish sys messages: %w", err)
 		}
 	}
@@ -1672,7 +1675,7 @@ func (h *Handler) finishCreateRoom(ctx context.Context, req *model.CreateRoomReq
 	return nil
 }
 
-func (h *Handler) publishChannelSysMessages(ctx context.Context, req *model.CreateRoomRequest, room *model.Room, requester *model.User, addedUsersCount int, requestID string, now time.Time) error {
+func (h *Handler) publishChannelSysMessages(ctx context.Context, req *model.CreateRoomRequest, room *model.Room, requester *model.User, userByAccount map[string]*model.User, addedUsersCount int, requestID string, now time.Time) error {
 	acceptedAt := time.UnixMilli(req.Timestamp).UTC()
 
 	sysData1, err := json.Marshal(model.RoomCreated{
@@ -1699,22 +1702,32 @@ func (h *Handler) publishChannelSysMessages(ctx context.Context, req *model.Crea
 		return fmt.Errorf("publish room_created: %w", err)
 	}
 
+	// ResolvedUsers = resolved individuals, already creator-stripped and
+	// org-member-free by room-service; Orgs counted as orgs, not expanded.
+	if len(req.ResolvedUsers) == 0 && len(req.ResolvedOrgs) == 0 {
+		// Nothing added beyond the creator (e.g. an empty channel); room_created
+		// already fired, so do not emit a degenerate "added 0 people" message.
+		return nil
+	}
 	sysData2, err := json.Marshal(model.MembersAdded{
-		Individuals:     req.Users,
-		Orgs:            req.Orgs,
-		Channels:        req.Channels,
+		Individuals:     nonNil(req.ResolvedUsers),
+		Orgs:            nonNil(req.ResolvedOrgs),
+		Channels:        nonNil(req.Channels),
 		AddedUsersCount: addedUsersCount,
 	})
 	if err != nil {
 		return fmt.Errorf("marshal members_added sys data: %w", err)
 	}
+	content := addedContent(requester, req.ResolvedUsers, req.ResolvedOrgs, func(a string) *model.User {
+		return userByAccount[a]
+	})
 	msg2 := model.Message{
 		ID:          idgen.MessageIDFromRequestID(requestID, "members_added"),
 		RoomID:      room.ID,
 		UserID:      requester.ID,
 		UserAccount: requester.Account,
 		Type:        model.MessageTypeMembersAdded,
-		Content:     formatAddedMulti(requester),
+		Content:     content,
 		SysMsgData:  sysData2,
 		CreatedAt:   acceptedAt.Add(time.Millisecond),
 	}

@@ -912,7 +912,7 @@ func TestHandler_ProcessRemoveMember_OwnerRemovesOrg(t *testing.T) {
 	sysMsg := findSysMsg(t, published, siteID, model.MessageTypeMemberRemoved)
 	assert.Equal(t, requester, sysMsg.UserAccount, "sender envelope must be set to requester")
 	assert.Equal(t, "u_alice", sysMsg.UserID, "UserID set to requester so message-worker can populate Cassandra sender column")
-	assert.Equal(t, `"Engineering" has been removed from the channel`, sysMsg.Content)
+	assert.Equal(t, `"Alice 愛" removed "Engineering" from the chatroom`, sysMsg.Content)
 }
 
 func TestHandler_ProcessRemoveMember_CrossSiteInbox(t *testing.T) {
@@ -1203,7 +1203,7 @@ func TestHandler_ProcessAddMembers_OrgToIndividualUpgrade(t *testing.T) {
 
 	// No membership state changed for the room (only a silent individual-row
 	// backfill); the worker MUST NOT emit a sys-msg or member-add event that
-	// would render "added members to the channel" with an empty member list.
+	// would render a members_added sys-msg with an empty member list.
 	memberEventSubj := subject.RoomMemberEvent(roomID)
 	sysMsgSubj := subject.MsgCanonicalCreated("site-a")
 	for _, p := range published {
@@ -2417,15 +2417,13 @@ func TestProcessCreateRoom_Channel_EmitsSysMessages(t *testing.T) {
 	assert.Equal(t, expectedID2, evt2.Message.ID)
 }
 
-// Sys-message payloads must carry the LITERAL request (Users/Orgs/Channels), not the
-// post-expansion resolved set. This guards against drift if someone later changes the
-// worker to use ResolvedUsers/ResolvedOrgs in the sys-msg path.
-func TestProcessCreateRoom_Channel_SysMsgUsesLiteralRequest(t *testing.T) {
+// room_created keeps the LITERAL request; members_added uses the RESOLVED set
+// (direct + channel individuals, never org members) for the clickable counts.
+func TestProcessCreateRoom_Channel_MembersAddedUsesResolvedSet(t *testing.T) {
 	h, mockStore, getPublished := newCreateRoomTestHandler(t)
 	ctx := natsutil.WithRequestID(context.Background(), testRequestID)
 
 	requester := &model.User{ID: "u_alice", Account: "alice", EngName: "Alice A", ChineseName: "艾麗斯", SiteID: "site-A"}
-	// Resolved set expands org1 → [bob, carol, dave] but the literal request only named [bob] + [org1].
 	invited := []model.User{
 		{ID: "u_bob", Account: "bob", EngName: "Bob B", ChineseName: "鮑伯", SiteID: "site-A"},
 		{ID: "u_carol", Account: "carol", EngName: "Carol C", ChineseName: "卡羅", SiteID: "site-A"},
@@ -2440,10 +2438,12 @@ func TestProcessCreateRoom_Channel_SysMsgUsesLiteralRequest(t *testing.T) {
 	mockStore.EXPECT().BulkCreateRoomMembers(gomock.Any(), gomock.Any()).Return(nil)
 	mockStore.EXPECT().ReconcileMemberCounts(gomock.Any(), "room-ch-lit").Return(nil)
 
+	// Resolved set = direct user bob + channel individual carol (org members are
+	// NOT in ResolvedUsers); ResolvedOrgs = org1.
 	body := makeCreateRoomBody(t, &model.CreateRoomRequest{
 		RoomID: "room-ch-lit", Name: "Literal Test", RequesterAccount: "alice",
 		Users: []string{"bob"}, Orgs: []string{"org1"},
-		ResolvedUsers: []string{"bob", "carol", "dave"}, ResolvedOrgs: []string{"org1"},
+		ResolvedUsers: []string{"bob", "carol"}, ResolvedOrgs: []string{"org1"},
 		Timestamp: time.Now().UnixMilli(),
 	})
 	require.NoError(t, h.processCreateRoom(ctx, body))
@@ -2451,21 +2451,22 @@ func TestProcessCreateRoom_Channel_SysMsgUsesLiteralRequest(t *testing.T) {
 	canonical := messagesCanonical(getPublished(), "site-A")
 	require.Len(t, canonical, 2)
 
-	// room_created sys-msg payload
+	// room_created sys-msg payload: still the literal request.
 	var evt1 model.MessageEvent
 	require.NoError(t, json.Unmarshal(canonical[0].data, &evt1))
 	var rc model.RoomCreated
 	require.NoError(t, json.Unmarshal(evt1.Message.SysMsgData, &rc))
-	assert.Equal(t, []string{"bob"}, rc.Users, "RoomCreated.Users must be the literal request, not the resolved set")
-	assert.Equal(t, []string{"org1"}, rc.Orgs, "RoomCreated.Orgs must be the literal request")
+	assert.Equal(t, []string{"bob"}, rc.Users, "RoomCreated.Users stays the literal request")
+	assert.Equal(t, []string{"org1"}, rc.Orgs)
 
-	// members_added sys-msg payload
+	// members_added sys-msg payload: the resolved set + count-based Content.
 	var evt2 model.MessageEvent
 	require.NoError(t, json.Unmarshal(canonical[1].data, &evt2))
 	var ma model.MembersAdded
 	require.NoError(t, json.Unmarshal(evt2.Message.SysMsgData, &ma))
-	assert.Equal(t, []string{"bob"}, ma.Individuals, "MembersAdded.Individuals must be the literal request")
-	assert.Equal(t, []string{"org1"}, ma.Orgs, "MembersAdded.Orgs must be the literal request")
+	assert.Equal(t, []string{"bob", "carol"}, ma.Individuals, "MembersAdded.Individuals = resolved individuals")
+	assert.Equal(t, []string{"org1"}, ma.Orgs)
+	assert.Equal(t, `"Alice A 艾麗斯" added 2 people and 1 organization to the chatroom`, evt2.Message.Content)
 }
 
 // ---- Task 37: inbox + async-job ----
@@ -4188,7 +4189,7 @@ func TestHandler_ProcessAddMembers_Content_Single(t *testing.T) {
 	require.NoError(t, h.processAddMembers(ctx, data))
 
 	sysMsg := findSysMsg(t, published, "site-a", "members_added")
-	assert.Equal(t, `"Alice 愛" added "U1 一" to the channel`, sysMsg.Content)
+	assert.Equal(t, `"Alice 愛" added "U1 一" to the chatroom`, sysMsg.Content)
 }
 
 // B2: len(subs)>=2 → multi form.
@@ -4227,10 +4228,102 @@ func TestHandler_ProcessAddMembers_Content_Multi(t *testing.T) {
 	require.NoError(t, h.processAddMembers(ctx, data))
 
 	sysMsg := findSysMsg(t, published, "site-a", "members_added")
-	assert.Equal(t, `"Alice 愛" added members to the channel`, sysMsg.Content)
+	assert.Equal(t, `"Alice 愛" added 2 people to the chatroom`, sysMsg.Content)
 }
 
-// B3: create-room channel publishes members_added with always-multi form.
+// Requester riding into req.Users via channel expansion is excluded from the
+// sys-msg payload and count (mirrors create, which strips the creator).
+func TestHandler_ProcessAddMembers_RequesterExcludedFromSysMsg(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	store := NewMockSubscriptionStore(ctrl)
+
+	roomID := "r1"
+	store.EXPECT().GetRoomMeta(gomock.Any(), roomID).
+		Return(&model.Room{ID: roomID, Name: "Chan", SiteID: "site-a", Type: model.RoomTypeChannel}, nil)
+	store.EXPECT().ListAddMemberCandidates(gomock.Any(), []string(nil), []string{"alice", "u1", "u2"}, roomID).
+		Return([]AddMemberCandidate{
+			{Account: "alice", HasSubscription: true},
+			{Account: "u1"},
+			{Account: "u2"},
+		}, nil)
+	store.EXPECT().FindUsersByAccounts(gomock.Any(), []string{"u1", "u2"}).
+		Return([]model.User{
+			{ID: "u1_id", Account: "u1", SiteID: "site-a", EngName: "U1", ChineseName: "一"},
+			{ID: "u2_id", Account: "u2", SiteID: "site-a", EngName: "U2", ChineseName: "二"},
+		}, nil)
+	store.EXPECT().GetUser(gomock.Any(), "alice").
+		Return(&model.User{ID: "u_a", Account: "alice", SiteID: "site-a", EngName: "Alice", ChineseName: "愛"}, nil)
+	store.EXPECT().HasOrgRoomMembers(gomock.Any(), roomID).Return(false, nil)
+	store.EXPECT().BulkCreateSubscriptions(gomock.Any(), gomock.Any()).Return(nil)
+	store.EXPECT().ApplyMemberCountDelta(gomock.Any(), roomID, gomock.Any(), gomock.Any(), gomock.Any()).Return(false, nil)
+
+	var published []publishedMsg
+	h := &Handler{store: store, siteID: "site-a", publish: func(_ context.Context, subj string, data []byte, _ string) error {
+		published = append(published, publishedMsg{subj: subj, data: data})
+		return nil
+	}, keyStore: testKeyStore, keySender: testKeySender}
+
+	req := model.AddMembersRequest{
+		RoomID: roomID, RequesterID: "u_a", RequesterAccount: "alice",
+		Users: []string{"alice", "u1", "u2"}, Timestamp: 1,
+	}
+	data, _ := json.Marshal(req)
+	ctx := natsutil.WithRequestID(context.Background(), testRequestID)
+	require.NoError(t, h.processAddMembers(ctx, data))
+
+	sysMsg := findSysMsg(t, published, "site-a", "members_added")
+	assert.Equal(t, `"Alice 愛" added 2 people to the chatroom`, sysMsg.Content)
+
+	var payload model.MembersAdded
+	require.NoError(t, json.Unmarshal(sysMsg.SysMsgData, &payload))
+	assert.Equal(t, []string{"u1", "u2"}, payload.Individuals)
+	assert.Equal(t, 2, payload.AddedUsersCount)
+	require.NotNil(t, payload.Channels, "absent channels must serialize as [] not null")
+	assert.Empty(t, payload.Channels)
+	require.NotNil(t, payload.Orgs, "empty orgs must serialize as [] not null")
+	assert.Empty(t, payload.Orgs)
+}
+
+// Requester + one new user → strip leaves a lone individual → named form.
+func TestHandler_ProcessAddMembers_RequesterExcluded_SingleNamed(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	store := NewMockSubscriptionStore(ctrl)
+
+	roomID := "r1"
+	store.EXPECT().GetRoomMeta(gomock.Any(), roomID).
+		Return(&model.Room{ID: roomID, Name: "Chan", SiteID: "site-a", Type: model.RoomTypeChannel}, nil)
+	store.EXPECT().ListAddMemberCandidates(gomock.Any(), []string(nil), []string{"alice", "u1"}, roomID).
+		Return([]AddMemberCandidate{
+			{Account: "alice", HasSubscription: true},
+			{Account: "u1"},
+		}, nil)
+	store.EXPECT().FindUsersByAccounts(gomock.Any(), []string{"u1"}).
+		Return([]model.User{{ID: "u1_id", Account: "u1", SiteID: "site-a", EngName: "U1", ChineseName: "一"}}, nil)
+	store.EXPECT().GetUser(gomock.Any(), "alice").
+		Return(&model.User{ID: "u_a", Account: "alice", SiteID: "site-a", EngName: "Alice", ChineseName: "愛"}, nil)
+	store.EXPECT().HasOrgRoomMembers(gomock.Any(), roomID).Return(false, nil)
+	store.EXPECT().BulkCreateSubscriptions(gomock.Any(), gomock.Any()).Return(nil)
+	store.EXPECT().ApplyMemberCountDelta(gomock.Any(), roomID, gomock.Any(), gomock.Any(), gomock.Any()).Return(false, nil)
+
+	var published []publishedMsg
+	h := &Handler{store: store, siteID: "site-a", publish: func(_ context.Context, subj string, data []byte, _ string) error {
+		published = append(published, publishedMsg{subj: subj, data: data})
+		return nil
+	}, keyStore: testKeyStore, keySender: testKeySender}
+
+	req := model.AddMembersRequest{
+		RoomID: roomID, RequesterID: "u_a", RequesterAccount: "alice",
+		Users: []string{"alice", "u1"}, Timestamp: 1,
+	}
+	data, _ := json.Marshal(req)
+	ctx := natsutil.WithRequestID(context.Background(), testRequestID)
+	require.NoError(t, h.processAddMembers(ctx, data))
+
+	sysMsg := findSysMsg(t, published, "site-a", "members_added")
+	assert.Equal(t, `"Alice 愛" added "U1 一" to the chatroom`, sysMsg.Content)
+}
+
+// B3: create-room channel publishes members_added in count form from ResolvedUsers.
 func TestHandler_PublishChannelSysMessages_MembersAddedContent(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	store := NewMockSubscriptionStore(ctrl)
@@ -4243,12 +4336,103 @@ func TestHandler_PublishChannelSysMessages_MembersAddedContent(t *testing.T) {
 
 	room := &model.Room{ID: "r1", Name: "Chan", SiteID: "site-a", Type: model.RoomTypeChannel}
 	requester := &model.User{ID: "u_a", Account: "alice", SiteID: "site-a", EngName: "Alice", ChineseName: "愛"}
-	req := &model.CreateRoomRequest{RoomID: "r1", Users: []string{"u1", "u2"}}
+	req := &model.CreateRoomRequest{RoomID: "r1", RequesterAccount: "alice", ResolvedUsers: []string{"u1", "u2"}}
+	userByAccount := map[string]*model.User{
+		"u1": {Account: "u1", EngName: "U1", ChineseName: "一"},
+		"u2": {Account: "u2", EngName: "U2", ChineseName: "二"},
+	}
 
-	require.NoError(t, h.publishChannelSysMessages(context.Background(), req, room, requester, 2, "req-1", time.UnixMilli(1).UTC()))
+	require.NoError(t, h.publishChannelSysMessages(context.Background(), req, room, requester, userByAccount, 2, "req-1", time.UnixMilli(1).UTC()))
 
 	sysMsg := findSysMsg(t, published, "site-a", model.MessageTypeMembersAdded)
-	assert.Equal(t, `"Alice 愛" added members to the channel`, sysMsg.Content)
+	assert.Equal(t, `"Alice 愛" added 2 people to the chatroom`, sysMsg.Content)
+
+	var payload model.MembersAdded
+	require.NoError(t, json.Unmarshal(sysMsg.SysMsgData, &payload))
+	assert.Equal(t, []string{"u1", "u2"}, payload.Individuals)
+	require.NotNil(t, payload.Orgs, "empty orgs must serialize as [] not null")
+	assert.Empty(t, payload.Orgs)
+	require.NotNil(t, payload.Channels, "absent channels must serialize as [] not null")
+	assert.Empty(t, payload.Channels)
+}
+
+// Create-room single individual (no orgs) → named form.
+func TestHandler_PublishChannelSysMessages_SingleNamed(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	store := NewMockSubscriptionStore(ctrl)
+	var published []publishedMsg
+	h := &Handler{store: store, siteID: "site-a", publish: func(_ context.Context, subj string, data []byte, _ string) error {
+		published = append(published, publishedMsg{subj: subj, data: data})
+		return nil
+	}, keyStore: testKeyStore, keySender: testKeySender}
+
+	room := &model.Room{ID: "r1", Name: "Chan", SiteID: "site-a", Type: model.RoomTypeChannel}
+	requester := &model.User{ID: "u_a", Account: "alice", EngName: "Alice", ChineseName: "愛"}
+	req := &model.CreateRoomRequest{RoomID: "r1", RequesterAccount: "alice", ResolvedUsers: []string{"u1"}}
+	userByAccount := map[string]*model.User{"u1": {Account: "u1", EngName: "U1", ChineseName: "一"}}
+
+	require.NoError(t, h.publishChannelSysMessages(context.Background(), req, room, requester, userByAccount, 1, "req-1", time.UnixMilli(1).UTC()))
+
+	sysMsg := findSysMsg(t, published, "site-a", model.MessageTypeMembersAdded)
+	assert.Equal(t, `"Alice 愛" added "U1 一" to the chatroom`, sysMsg.Content)
+}
+
+// Create-room orgs only → org count form.
+func TestHandler_PublishChannelSysMessages_OrgsOnly(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	store := NewMockSubscriptionStore(ctrl)
+	var published []publishedMsg
+	h := &Handler{store: store, siteID: "site-a", publish: func(_ context.Context, subj string, data []byte, _ string) error {
+		published = append(published, publishedMsg{subj: subj, data: data})
+		return nil
+	}, keyStore: testKeyStore, keySender: testKeySender}
+
+	room := &model.Room{ID: "r1", Name: "Chan", SiteID: "site-a", Type: model.RoomTypeChannel}
+	requester := &model.User{ID: "u_a", Account: "alice", EngName: "Alice", ChineseName: "愛"}
+	req := &model.CreateRoomRequest{RoomID: "r1", RequesterAccount: "alice", ResolvedOrgs: []string{"o1", "o2"}}
+
+	require.NoError(t, h.publishChannelSysMessages(context.Background(), req, room, requester, nil, 5, "req-1", time.UnixMilli(1).UTC()))
+
+	sysMsg := findSysMsg(t, published, "site-a", model.MessageTypeMembersAdded)
+	assert.Equal(t, `"Alice 愛" added 2 organizations to the chatroom`, sysMsg.Content)
+
+	var payload model.MembersAdded
+	require.NoError(t, json.Unmarshal(sysMsg.SysMsgData, &payload))
+	require.NotNil(t, payload.Individuals, "empty individuals must serialize as [] not null")
+	assert.Empty(t, payload.Individuals)
+	assert.Equal(t, []string{"o1", "o2"}, payload.Orgs)
+	assert.Equal(t, 5, payload.AddedUsersCount, "count passed to publishChannelSysMessages must reach the payload")
+}
+
+// Create-room with no members beyond creator → no members_added emitted (room_created still fires).
+func TestHandler_PublishChannelSysMessages_EmptySkipsMembersAdded(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	store := NewMockSubscriptionStore(ctrl)
+	var published []publishedMsg
+	h := &Handler{store: store, siteID: "site-a", publish: func(_ context.Context, subj string, data []byte, _ string) error {
+		published = append(published, publishedMsg{subj: subj, data: data})
+		return nil
+	}, keyStore: testKeyStore, keySender: testKeySender}
+
+	room := &model.Room{ID: "r1", Name: "Chan", SiteID: "site-a", Type: model.RoomTypeChannel}
+	requester := &model.User{ID: "u_a", Account: "alice", EngName: "Alice", ChineseName: "愛"}
+	req := &model.CreateRoomRequest{RoomID: "r1", RequesterAccount: "alice"}
+
+	require.NoError(t, h.publishChannelSysMessages(context.Background(), req, room, requester, nil, 0, "req-1", time.UnixMilli(1).UTC()))
+
+	var roomCreated, membersAdded int
+	for _, p := range published {
+		var evt model.MessageEvent
+		require.NoError(t, json.Unmarshal(p.data, &evt))
+		switch evt.Message.Type {
+		case model.MessageTypeRoomCreated:
+			roomCreated++
+		case model.MessageTypeMembersAdded:
+			membersAdded++
+		}
+	}
+	assert.Equal(t, 1, roomCreated, "room_created must still be published")
+	assert.Zero(t, membersAdded, "members_added must be skipped when nothing added")
 }
 
 // C1: self-leave full removal → member_left with sender + Content.
@@ -4280,7 +4464,7 @@ func TestHandler_ProcessRemoveIndividual_SelfLeave_Content(t *testing.T) {
 	sysMsg := findSysMsg(t, published, "site-a", "member_left")
 	assert.Equal(t, "bob", sysMsg.UserAccount)
 	assert.Equal(t, "u_b", sysMsg.UserID, "self-leave reuses leaving-user's ID as sender")
-	assert.Equal(t, `"Bob 鮑" left the channel`, sysMsg.Content)
+	assert.Equal(t, `"Bob 鮑" left the chatroom`, sysMsg.Content)
 }
 
 // C2: removed-by-other full removal → member_removed with sender + Content.
@@ -4312,7 +4496,7 @@ func TestHandler_ProcessRemoveIndividual_RemovedByOther_Content(t *testing.T) {
 	sysMsg := findSysMsg(t, published, "site-a", "member_removed")
 	assert.Equal(t, "alice", sysMsg.UserAccount)
 	assert.Equal(t, "u_a", sysMsg.UserID, "forced removal sets sender to requester")
-	assert.Equal(t, `"Bob 鮑" has been removed from the channel`, sysMsg.Content)
+	assert.Equal(t, `"Alice 愛" removed "Bob 鮑" from the chatroom`, sysMsg.Content)
 }
 
 // C3: org remove with every member also having individual subs (toRemove empty)
@@ -4345,7 +4529,7 @@ func TestHandler_ProcessRemoveOrg_AllOverlap_SectNameFromUnfiltered(t *testing.T
 	sysMsg := findSysMsg(t, published, "site-a", "member_removed")
 	assert.Equal(t, "alice", sysMsg.UserAccount)
 	assert.Equal(t, "u_a", sysMsg.UserID, "org removal sets sender to requester")
-	assert.Equal(t, `"Engineering" has been removed from the channel`, sysMsg.Content)
+	assert.Equal(t, `"Alice 愛" removed "Engineering" from the chatroom`, sysMsg.Content)
 }
 
 // D5: every member SectName empty → no permanent error. The orgID fallback
@@ -4378,7 +4562,7 @@ func TestHandler_ProcessRemoveOrg_AllSectNamesEmpty(t *testing.T) {
 	require.NoError(t, h.processRemoveOrg(ctx, &req, nil))
 
 	sysMsg := findSysMsg(t, published, "site-a", "member_removed")
-	assert.Equal(t, `"o1" has been removed from the channel`, sysMsg.Content)
+	assert.Equal(t, `"Alice 愛" removed "o1" from the chatroom`, sysMsg.Content)
 	var payload model.MemberRemoved
 	require.NoError(t, json.Unmarshal(sysMsg.SysMsgData, &payload))
 	assert.Equal(t, "o1", payload.SectName)
@@ -4617,8 +4801,8 @@ func TestHandler_ProcessAddMembers_Content_OrgAddWithOneMember_UsesMulti(t *test
 	require.NoError(t, h.processAddMembers(ctx, data))
 
 	sysMsg := findSysMsg(t, published, "site-a", "members_added")
-	assert.Equal(t, `"Alice 愛" added members to the channel`, sysMsg.Content,
-		"org-add must use multi form even when org expands to a single user")
+	assert.Equal(t, `"Alice 愛" added 1 organization to the chatroom`, sysMsg.Content,
+		"an org's expanded member is counted as an org, not as a person")
 }
 
 // HasOrgRoomMembers error must surface as non-permanent so JetStream retries.
@@ -4721,14 +4905,14 @@ func TestHandler_ProcessRemoveOrg_DeptFirstTiebreak(t *testing.T) {
 				{Account: "u1", SiteID: "site-a", Name: "Sect", TCName: "組", IsDept: false, HasIndividualMembership: true},
 				{Account: "u2", SiteID: "site-a", Name: "Sect", TCName: "組", IsDept: false, HasIndividualMembership: true},
 			},
-			wantSect: "Sect 組", wantContent: `"Sect 組" has been removed from the channel`,
+			wantSect: "Sect 組", wantContent: `"Alice 愛" removed "Sect 組" from the chatroom`,
 		},
 		{
 			name: "all dept users",
 			members: []OrgMemberStatus{
 				{Account: "u1", SiteID: "site-a", Name: "Dept", TCName: "部", IsDept: true, HasIndividualMembership: true},
 			},
-			wantSect: "Dept 部", wantContent: `"Dept 部" has been removed from the channel`,
+			wantSect: "Dept 部", wantContent: `"Alice 愛" removed "Dept 部" from the chatroom`,
 		},
 		{
 			name: "mixed — dept wins",
@@ -4736,14 +4920,14 @@ func TestHandler_ProcessRemoveOrg_DeptFirstTiebreak(t *testing.T) {
 				{Account: "u1", SiteID: "site-a", Name: "Sect", TCName: "組", IsDept: false, HasIndividualMembership: true},
 				{Account: "u2", SiteID: "site-a", Name: "Dept", TCName: "部", IsDept: true, HasIndividualMembership: true},
 			},
-			wantSect: "Dept 部", wantContent: `"Dept 部" has been removed from the channel`,
+			wantSect: "Dept 部", wantContent: `"Alice 愛" removed "Dept 部" from the chatroom`,
 		},
 		{
 			name: "all names empty — fall back to orgID",
 			members: []OrgMemberStatus{
 				{Account: "u1", SiteID: "site-a", Name: "", TCName: "", IsDept: false, HasIndividualMembership: true},
 			},
-			wantSect: "o1", wantContent: `"o1" has been removed from the channel`,
+			wantSect: "o1", wantContent: `"Alice 愛" removed "o1" from the chatroom`,
 		},
 	}
 	for _, tc := range cases {

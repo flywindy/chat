@@ -332,8 +332,8 @@ func (h *Handler) handleCreateRoomChannel(ctx context.Context, req *model.Create
 		)
 	}
 
-	// Preserve req.Users / req.Orgs as the literal client request for sys-message payloads.
-	// The worker uses ResolvedUsers / ResolvedOrgs for capacity and member materialization.
+	// Preserve req.Users / req.Orgs as the literal request for room_created; the worker
+	// uses ResolvedUsers / ResolvedOrgs for materialization and the members_added sys-msg.
 	req.ResolvedUsers = allUsers
 	req.ResolvedOrgs = allOrgs
 	req.RoomID = idgen.GenerateID()

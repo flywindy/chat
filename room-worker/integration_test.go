@@ -1081,8 +1081,8 @@ func TestProcessAddMembers_PublishesLocalInbox_Integration(t *testing.T) {
 	require.NoError(t, json.Unmarshal(sysPubs[0].data, &sysEvt))
 	assert.Equal(t, model.MessageTypeMembersAdded, sysEvt.Message.Type)
 	assert.Equal(t, "alice", sysEvt.Message.UserAccount, "sender is the requester")
-	assert.Equal(t, `"Alice 爱丽丝" added members to the channel`, sysEvt.Message.Content,
-		"multi-add Content uses formatAddedMulti(requester)")
+	assert.Equal(t, `"Alice 爱丽丝" added 2 people to the chatroom`, sysEvt.Message.Content,
+		"multi-add Content uses formatAddedCounts(requester, 2, 0)")
 }
 
 func TestProcessRemoveIndividual_PublishesLocalInbox_Integration(t *testing.T) {
@@ -1147,8 +1147,10 @@ func TestProcessRemoveIndividual_PublishesLocalInbox_Integration(t *testing.T) {
 	require.NoError(t, json.Unmarshal(sysPubs[0].data, &sysEvt))
 	assert.Equal(t, model.MessageTypeMemberRemoved, sysEvt.Message.Type)
 	assert.Equal(t, "alice", sysEvt.Message.UserAccount, "sender is the requester, not the removed user")
-	assert.Equal(t, `"Bob 鲍勃" has been removed from the channel`, sysEvt.Message.Content,
-		"forced-remove Content uses formatRemovedUser(user)")
+	// requester "alice" has no EngName/ChineseName set above, so displayName
+	// falls back to the account → "alice" (also exercises the fallback path).
+	assert.Equal(t, `"alice" removed "Bob 鲍勃" from the chatroom`, sysEvt.Message.Content,
+		"forced-remove Content names actor then target")
 }
 
 // --- Sync DM endpoint integration tests ---
