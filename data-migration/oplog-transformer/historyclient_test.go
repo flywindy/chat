@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/hmchangw/chat/pkg/errcode"
+	"github.com/hmchangw/chat/pkg/migration"
 	"github.com/hmchangw/chat/pkg/model"
 )
 
@@ -113,8 +114,8 @@ func TestClassifyHistoryReply(t *testing.T) {
 				return
 			}
 			require.Error(t, err)
-			assert.Equal(t, tc.wantPoison, errors.Is(err, errPoison),
-				"errPoison membership drives Term vs Nak")
+			assert.Equal(t, tc.wantPoison, errors.Is(err, migration.ErrPoison),
+				"migration.ErrPoison membership drives Term vs Nak")
 			assert.Equal(t, tc.wantTermCode, termCode)
 		})
 	}

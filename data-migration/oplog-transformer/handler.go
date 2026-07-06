@@ -7,9 +7,15 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/hmchangw/chat/pkg/migration"
 	"github.com/hmchangw/chat/pkg/model"
 	"github.com/hmchangw/chat/pkg/natsutil"
 )
+
+// sourceLookup fetches the current full message doc from the source by _id.
+type sourceLookup interface {
+	FindByID(ctx context.Context, id string) ([]byte, error)
+}
 
 // oplogEvent mirrors model.OplogEvent's wire shape (decoded from the consumed message).
 type oplogEvent struct {
@@ -41,30 +47,30 @@ type handler struct {
 }
 
 // skipSystem skips a system/event message (not user content, deferred from migration), records a
-// skip metric, and returns errSkipped so the caller Acks without counting it as processed.
+// skip metric, and returns migration.ErrSkipped so the caller Acks without counting it as processed.
 func (h *handler) skipSystem(ctx context.Context, t, eventID string) error {
 	slog.Info("skipping system message", "t", t, "eventId", eventID, "request_id", natsutil.RequestIDFromContext(ctx))
 	h.metrics.onSkipped(ctx, "system_message")
-	return errSkipped
+	return migration.ErrSkipped
 }
 
 // skipForeign skips a message authored at a remote site (federation.origin set) — foreign copies
-// arrive via the new app's own federation. origin is a site id, safe to log. Returns errSkipped.
+// arrive via the new app's own federation. origin is a site id, safe to log. Returns migration.ErrSkipped.
 func (h *handler) skipForeign(ctx context.Context, origin, eventID string) error {
 	slog.Info("skipping foreign-origin message", "origin", origin, "eventId", eventID, "request_id", natsutil.RequestIDFromContext(ctx))
 	h.metrics.onSkipped(ctx, "foreign_origin")
-	return errSkipped
+	return migration.ErrSkipped
 }
 
-// handle processes one decoded oplog event. nil = ack+count; errSkipped = ack-without-counting
-// (deliberate drop, already metered); errPoison => Term; any other error => Nak (transient).
+// handle processes one decoded oplog event. nil = ack+count; migration.ErrSkipped = ack-without-counting
+// (deliberate drop, already metered); migration.ErrPoison => Term; any other error => Nak (transient).
 //
 //nolint:gocritic // ev passed by value: it's the decoded event the consume loop hands off, one per message off the hot path.
 func (h *handler) handle(ctx context.Context, ev oplogEvent) error {
 	if ev.Collection != h.collection {
 		slog.Debug("skip non-message collection", "collection", ev.Collection, "request_id", natsutil.RequestIDFromContext(ctx))
 		h.metrics.onSkipped(ctx, "other_collection")
-		return errSkipped
+		return migration.ErrSkipped
 	}
 	switch ev.Op {
 	case "insert":
@@ -78,7 +84,7 @@ func (h *handler) handle(ctx context.Context, ev oplogEvent) error {
 	default:
 		slog.Warn("unknown op skipped", "op", ev.Op, "eventId", ev.EventID, "request_id", natsutil.RequestIDFromContext(ctx))
 		h.metrics.onSkipped(ctx, "unknown_op")
-		return errSkipped
+		return migration.ErrSkipped
 	}
 }
 
@@ -89,7 +95,7 @@ func (h *handler) handleInsert(ctx context.Context, ev oplogEvent) error {
 		if !ev.Degraded {
 			// A non-degraded insert with no fullDocument is a contract violation — the connector
 			// always carries the doc for inserts unless it degraded it. Poison.
-			return fmt.Errorf("%w: insert without fullDocument", errPoison)
+			return fmt.Errorf("%w: insert without fullDocument", migration.ErrPoison)
 		}
 		recovered, err := h.recoverDegradedDoc(ctx, ev)
 		if err != nil {
@@ -99,9 +105,9 @@ func (h *handler) handleInsert(ctx context.Context, ev oplogEvent) error {
 	}
 	rc, err := decodeRocketchatMessage(doc)
 	if err != nil {
-		// Single %w keeps errPoison matchable; the decode error is folded in with %v (nothing checks
+		// Single %w keeps migration.ErrPoison matchable; the decode error is folded in with %v (nothing checks
 		// errors.Is on it, and one sentinel per chain satisfies the semgrep multi-wrap guard).
-		return fmt.Errorf("%w: %v", errPoison, err) //nolint:errorlint // intentional single-%w sentinel wrap; decode err is informational only
+		return fmt.Errorf("%w: %v", migration.ErrPoison, err) //nolint:errorlint // intentional single-%w sentinel wrap; decode err is informational only
 	}
 	// Foreign-origin messages are migrated by their home site, not here — the connector's $match
 	// drops them at the source; this is defense-in-depth in case one slips through.
@@ -151,13 +157,13 @@ func (h *handler) resolveParentCreatedAt(ctx context.Context, parentID, eventID 
 	return &ts, nil
 }
 
-// documentKeyID decodes documentKey → _id. Returns errPoison when missing/malformed.
+// documentKeyID decodes documentKey → _id. Returns migration.ErrPoison when missing/malformed.
 func documentKeyID(documentKey json.RawMessage) (string, error) {
 	var key struct {
 		ID string `json:"_id"`
 	}
 	if err := json.Unmarshal(documentKey, &key); err != nil || key.ID == "" {
-		return "", fmt.Errorf("%w: bad documentKey", errPoison)
+		return "", fmt.Errorf("%w: bad documentKey", migration.ErrPoison)
 	}
 	return key.ID, nil
 }
@@ -212,7 +218,7 @@ func (h *handler) handleUpdate(ctx context.Context, ev oplogEvent) error {
 		// from the recover Nak (own live doc must exist) and thread-parent miss (best-effort publish).
 		slog.Warn("update lookup miss — skipping", "id", id, "request_id", natsutil.RequestIDFromContext(ctx))
 		h.metrics.onSkipped(ctx, "update_lookup_miss")
-		return errSkipped
+		return migration.ErrSkipped
 	}
 	return h.applyUpdate(ctx, ev, id, doc)
 }
@@ -226,7 +232,7 @@ func (h *handler) handleReplace(ctx context.Context, ev oplogEvent) error {
 	doc := ev.FullDocument
 	if len(doc) == 0 {
 		if !ev.Degraded {
-			return fmt.Errorf("%w: replace without fullDocument", errPoison)
+			return fmt.Errorf("%w: replace without fullDocument", migration.ErrPoison)
 		}
 		recovered, rerr := h.recoverDegradedDoc(ctx, ev)
 		if rerr != nil {
@@ -269,7 +275,7 @@ func deleteTime(clusterTime int64) time.Time {
 func (h *handler) applyUpdate(ctx context.Context, ev oplogEvent, id string, doc []byte) error {
 	rc, err := decodeRocketchatMessage(doc)
 	if err != nil {
-		return fmt.Errorf("%w: %v", errPoison, err) //nolint:errorlint // intentional single-%w sentinel wrap; decode err is informational only
+		return fmt.Errorf("%w: %v", migration.ErrPoison, err) //nolint:errorlint // intentional single-%w sentinel wrap; decode err is informational only
 	}
 	// Foreign-origin filter for update/replace: the connector's $match can't drop these (no
 	// fullDocument on update events), so the resolved doc is where we catch them, before classifying.

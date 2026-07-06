@@ -20,6 +20,7 @@ import (
 
 	"github.com/Marz32onE/instrumentation-go/otel-nats/oteljetstream"
 
+	"github.com/hmchangw/chat/pkg/migration"
 	"github.com/hmchangw/chat/pkg/model"
 	"github.com/hmchangw/chat/pkg/mongoutil"
 	"github.com/hmchangw/chat/pkg/natsutil"
@@ -82,7 +83,7 @@ func TestTransformer_InsertToCanonical(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	lookup := newMongoSourceLookup(source)
+	lookup := migration.NewMongoSourceLookup(source)
 	fullDoc, err := lookup.FindByID(ctx, msgID)
 	require.NoError(t, err)
 	require.NotEmpty(t, fullDoc)
@@ -211,7 +212,7 @@ func TestTransformer_SoftDeleteToHistory(t *testing.T) {
 		softDeleteType: "rm",
 		publisher:      &canonicalPublisher{siteID: site, publish: nil, now: nowMs}, // unused on delete path
 		history:        &natsHistoryClient{nc: nc.NatsConn(), siteID: site, timeout: 5 * time.Second},
-		lookup:         newMongoSourceLookup(source),
+		lookup:         migration.NewMongoSourceLookup(source),
 	}
 
 	require.NoError(t, h.handle(ctx, oplogEvent{

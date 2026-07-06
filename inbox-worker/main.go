@@ -105,9 +105,17 @@ func (s *mongoInboxStore) UpdateSubscriptionRoles(ctx context.Context, account, 
 	if err != nil {
 		return fmt.Errorf("update subscription roles for %q in room %q: %w", account, roomID, err)
 	}
-	if res.MatchedCount > 0 {
-		return nil
+	if res.MatchedCount == 0 {
+		return s.naksIfSubscriptionMissing(ctx, account, roomID)
 	}
+	return nil
+}
+
+// naksIfSubscriptionMissing disambiguates a MatchedCount==0 guarded subscription write. A genuinely
+// missing subscription returns an error (Nak → redelivered until member_added lands, the
+// federation/migration race where field events can race ahead of member_added); a stale event the
+// high-water guard rejected is a silent no-op (the sub exists with a newer-or-equal value).
+func (s *mongoInboxStore) naksIfSubscriptionMissing(ctx context.Context, account, roomID string) error {
 	exists, err := s.subscriptionExists(ctx, account, roomID)
 	if err != nil {
 		return fmt.Errorf("check subscription exists for %q in room %q: %w", account, roomID, err)
@@ -161,17 +169,32 @@ func (s *mongoInboxStore) FindUsersByAccounts(ctx context.Context, accounts []st
 // keyed by account. statusIsShow is written only when non-nil so a text-only
 // update cannot clobber the stored flag. A missing user (no doc on this site)
 // is a silent no-op — the event is for an account that doesn't live here.
-func (s *mongoInboxStore) UpdateUserStatus(ctx context.Context, account, statusText string, statusIsShow *bool) error {
-	set := bson.M{"statusText": statusText}
+func (s *mongoInboxStore) UpdateUserStatus(ctx context.Context, account, statusText string, statusIsShow *bool, statusUpdatedAt time.Time) error {
+	set := bson.M{"statusText": statusText, "statusUpdatedAt": statusUpdatedAt}
 	if statusIsShow != nil {
 		set["statusIsShow"] = *statusIsShow
 	}
-	res, err := s.userCol.UpdateOne(ctx, bson.M{"account": account}, bson.M{"$set": set})
+	// Guard on the statusUpdatedAt high-water mark so an out-of-order or duplicate event
+	// (the status fans to all sites) can't regress to an older status.
+	filter := bson.M{"account": account, "$or": bson.A{
+		bson.M{"statusUpdatedAt": bson.M{"$exists": false}},
+		bson.M{"statusUpdatedAt": bson.M{"$lt": statusUpdatedAt}},
+	}}
+	res, err := s.userCol.UpdateOne(ctx, filter, bson.M{"$set": set})
 	if err != nil {
 		return fmt.Errorf("update user status for %q: %w", account, err)
 	}
 	if res.MatchedCount == 0 {
-		slog.WarnContext(ctx, "user_status_updated for unknown account, skipping", "account", account)
+		// The UpdateOne above already committed; MatchedCount==0 is a correct no-op (account not on
+		// this site, or a stale event the guard rejected). CountDocuments only picks the warn
+		// message, so a failure here must not Nak/retry an already-applied write — log and move on.
+		count, cerr := s.userCol.CountDocuments(ctx, bson.M{"account": account})
+		switch {
+		case cerr != nil:
+			slog.WarnContext(ctx, "user existence check failed, skipping unknown-account log", "account", account, "error", cerr)
+		case count == 0:
+			slog.WarnContext(ctx, "user_status_updated for unknown account, skipping", "account", account)
+		}
 	}
 	return nil
 }
@@ -212,8 +235,12 @@ func (s *mongoInboxStore) UpdateSubscriptionMute(ctx context.Context, roomID, ac
 		},
 	}
 	update := bson.M{"$set": bson.M{"muted": muted, "muteUpdatedAt": muteUpdatedAt}}
-	if _, err := s.subCol.UpdateOne(ctx, filter, update); err != nil {
+	res, err := s.subCol.UpdateOne(ctx, filter, update)
+	if err != nil {
 		return fmt.Errorf("update subscription mute for %q in room %q: %w", account, roomID, err)
+	}
+	if res.MatchedCount == 0 {
+		return s.naksIfSubscriptionMissing(ctx, account, roomID)
 	}
 	return nil
 }
@@ -232,8 +259,12 @@ func (s *mongoInboxStore) UpdateSubscriptionFavorite(ctx context.Context, roomID
 		},
 	}
 	update := bson.M{"$set": bson.M{"favorite": favorite, "favoriteUpdatedAt": favoriteUpdatedAt}}
-	if _, err := s.subCol.UpdateOne(ctx, filter, update); err != nil {
+	res, err := s.subCol.UpdateOne(ctx, filter, update)
+	if err != nil {
 		return fmt.Errorf("update subscription favorite for %q in room %q: %w", account, roomID, err)
+	}
+	if res.MatchedCount == 0 {
+		return s.naksIfSubscriptionMissing(ctx, account, roomID)
 	}
 	return nil
 }
@@ -248,8 +279,12 @@ func (s *mongoInboxStore) UpdateSubscriptionRead(ctx context.Context, roomID, ac
 		},
 	}
 	update := bson.M{"$set": bson.M{"lastSeenAt": lastSeenAt, "alert": alert}}
-	if _, err := s.subCol.UpdateOne(ctx, filter, update); err != nil {
+	res, err := s.subCol.UpdateOne(ctx, filter, update)
+	if err != nil {
 		return fmt.Errorf("update subscription read for %q in room %q: %w", account, roomID, err)
+	}
+	if res.MatchedCount == 0 {
+		return s.naksIfSubscriptionMissing(ctx, account, roomID)
 	}
 	return nil
 }

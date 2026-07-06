@@ -34,19 +34,19 @@ type InboxStore interface {
 	// UpdateSubscriptionRead sets lastSeenAt and alert on the subscription
 	// keyed by (roomID, account). Idempotent and order-safe: the write
 	// only applies when the stored lastSeenAt is missing or strictly
-	// earlier than the supplied value. Older or duplicate events are
-	// silent no-ops. Missing-subscription is also a silent no-op.
+	// earlier than the supplied value. Older or duplicate events are silent no-ops.
+	// A genuinely missing sub returns an error (Nak) so the event redelivers until member_added lands.
 	UpdateSubscriptionRead(ctx context.Context, roomID, account string, lastSeenAt time.Time, alert bool) error
 	UpsertThreadSubscription(ctx context.Context, sub *model.ThreadSubscription) error
 	// ApplyThreadRead writes ThreadSubscription under a $lt lastSeenAt guard, then the Subscription only if the guard accepted.
 	ApplyThreadRead(ctx context.Context, roomID, threadRoomID, account string, newThreadUnread []string, alert bool, lastSeenAt time.Time) error
 	// UpdateSubscriptionMute sets muted by (roomID, account), guarded by
 	// muteUpdatedAt (the source event's publish time): older/duplicate events
-	// are silent no-ops. Missing-sub is also a silent no-op for federation races.
+	// are silent no-ops. A genuinely missing sub returns an error (Nak) so the event redelivers until member_added lands.
 	UpdateSubscriptionMute(ctx context.Context, roomID, account string, muted bool, muteUpdatedAt time.Time) error
 	// UpdateSubscriptionFavorite sets favorite by (roomID, account), guarded by
 	// favoriteUpdatedAt (the source event's publish time): older/duplicate events
-	// are silent no-ops. Missing-sub is also a silent no-op for federation races.
+	// are silent no-ops. A genuinely missing sub returns an error (Nak) so the event redelivers until member_added lands.
 	UpdateSubscriptionFavorite(ctx context.Context, roomID, account string, favorite bool, favoriteUpdatedAt time.Time) error
 	// UpdateSubscriptionNamesForRoom sets name on every subscription in the room,
 	// each guarded by its own nameUpdatedAt so an out-of-order rename cannot regress
@@ -59,11 +59,11 @@ type InboxStore interface {
 	// ownerAccount is non-empty, a $cond pipeline demotes all accounts except
 	// ownerAccount to RoleMember.
 	ApplySubscriptionVisibility(ctx context.Context, roomID string, restricted, externalAccess bool, ownerAccount string, visibilityUpdatedAt time.Time) error
-	// UpdateUserStatus replicates a cross-site status change onto the local
-	// users doc keyed by account. statusIsShow is written only when non-nil so a
-	// text-only update cannot clobber the stored flag. A missing user (no doc on
-	// this site) is a silent no-op.
-	UpdateUserStatus(ctx context.Context, account, statusText string, statusIsShow *bool) error
+	// UpdateUserStatus replicates a cross-site status change onto the local users doc keyed by
+	// account, guarded by statusUpdatedAt (the event publish time): an older/equal high-water
+	// mark is a no-op so out-of-order multi-site delivery can't regress the status. statusIsShow
+	// is written only when non-nil. A missing user (no doc on this site) is a logged no-op.
+	UpdateUserStatus(ctx context.Context, account, statusText string, statusIsShow *bool, statusUpdatedAt time.Time) error
 }
 
 // Handler processes cross-site InboxEvent messages; replicates only subscription/room metadata, never room keys.
@@ -142,10 +142,11 @@ func (h *Handler) handleMemberAdded(ctx context.Context, evt *model.InboxEvent) 
 	}
 
 	subs := make([]*model.Subscription, 0, len(event.Accounts))
+	var missing []string
 	for _, account := range event.Accounts {
 		user, ok := userMap[account]
 		if !ok {
-			slog.Warn("user not found for account", "account", account)
+			missing = append(missing, account)
 			continue
 		}
 		sub := &model.Subscription{
@@ -163,13 +164,20 @@ func (h *Handler) handleMemberAdded(ctx context.Context, evt *model.InboxEvent) 
 		subs = append(subs, sub)
 	}
 
-	if len(subs) == 0 {
-		return nil
-	}
-	if err := h.store.BulkCreateSubscriptions(ctx, subs); err != nil {
-		if !mongo.IsDuplicateKeyError(err) {
-			return fmt.Errorf("bulk create subscriptions: %w", err)
+	if len(subs) > 0 {
+		if err := h.store.BulkCreateSubscriptions(ctx, subs); err != nil {
+			if !mongo.IsDuplicateKeyError(err) {
+				return fmt.Errorf("bulk create subscriptions: %w", err)
+			}
 		}
+	}
+
+	// A referenced user that isn't present yet is a federation/migration race, not a
+	// permanent failure: return a (transient) error so JetStream redelivers the event
+	// until the user lands. The resolvable subscriptions above are created first to make
+	// progress; redelivery re-upserts them idempotently (guarded by the unique index).
+	if len(missing) > 0 {
+		return fmt.Errorf("member_added references unknown users %v in room %s", missing, event.RoomID)
 	}
 
 	// No SubscriptionUpdateEvent is published here — room-worker already publishes
@@ -325,14 +333,14 @@ func (h *Handler) handleRoomVisibilityChanged(ctx context.Context, evt *model.In
 	return nil
 }
 
-// handleUserStatusUpdated mirrors a cross-site status change onto the local
-// users doc. Status is last-write-wins, so no timestamp guard is applied.
+// handleUserStatusUpdated mirrors a cross-site status change onto the local users doc, guarded by
+// the event Timestamp so an out-of-order or duplicate fan-out delivery can't regress the status.
 func (h *Handler) handleUserStatusUpdated(ctx context.Context, evt *model.InboxEvent) error {
 	var e model.UserStatusUpdated
 	if err := json.Unmarshal(evt.Payload, &e); err != nil {
 		return fmt.Errorf("unmarshal user_status_updated payload: %w", err)
 	}
-	if err := h.store.UpdateUserStatus(ctx, e.Account, e.StatusText, e.StatusIsShow); err != nil {
+	if err := h.store.UpdateUserStatus(ctx, e.Account, e.StatusText, e.StatusIsShow, time.UnixMilli(e.Timestamp).UTC()); err != nil {
 		return fmt.Errorf("update user status for %q: %w", e.Account, err)
 	}
 	return nil

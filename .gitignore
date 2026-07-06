@@ -70,6 +70,7 @@ tmp/
 # stray local builds of the data-migration services
 /oplog-connector
 /oplog-transformer
+/oplog-collections-transformer
 
 # Captured pprof profiles from `make profile`.
 profiles/

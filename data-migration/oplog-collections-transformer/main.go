@@ -37,14 +37,21 @@ func main() {
 	}
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: parseLevel(cfg.LogLevel)})))
 
+	// Surface an empty ALL_SITE_IDS once at startup: user statusText changes won't propagate
+	// (publishUserStatus skips with a per-event metric). Legitimate for a rooms/subs-only partial
+	// deployment; a misconfig otherwise. (Future: promote to a hard-fail once the modes are known.)
+	if !hasDestinationSite(cfg.AllSiteIDs) {
+		slog.Warn("ALL_SITE_IDS is empty — user status fan-out is disabled (intentional only for a partial deployment)")
+	}
+
 	ctx := context.Background()
 
-	tracerShutdown, err := otelutil.InitTracer(ctx, "oplog-transformer")
+	tracerShutdown, err := otelutil.InitTracer(ctx, "oplog-collections-transformer")
 	if err != nil {
 		slog.Error("init tracer failed", "error", err)
 		os.Exit(1)
 	}
-	meterShutdown, err := otelutil.InitMeter("oplog-transformer")
+	meterShutdown, err := otelutil.InitMeter("oplog-collections-transformer")
 	if err != nil {
 		slog.Error("init meter failed", "error", err)
 		os.Exit(1)
@@ -70,42 +77,77 @@ func main() {
 		}
 	}()
 
-	client, err := mongoutil.Connect(ctx, cfg.SourceMongoURI, cfg.SourceUsername, cfg.SourcePassword)
+	// Source legacy Mongo: re-read full current docs by _id on update events.
+	source, err := mongoutil.Connect(ctx, cfg.SourceMongoURI, cfg.SourceUsername, cfg.SourcePassword)
 	if err != nil {
 		slog.Error("source mongo connect failed", "error", err)
 		os.Exit(1)
 	}
-
 	rp, err := readPreference(cfg.SourceReadPreference)
 	if err != nil {
 		slog.Error("read preference invalid", "error", err)
-		mongoutil.Disconnect(ctx, client)
+		mongoutil.Disconnect(ctx, source)
 		os.Exit(1)
 	}
-	sourceColl := client.Database(cfg.SourceDB).
-		Collection(cfg.SourceMessageCollection, options.Collection().SetReadPreference(rp))
+	sourceDB := source.Database(cfg.SourceDB)
+	lookups := map[string]migration.SourceLookup{
+		cfg.RoomsCollection:         migration.NewMongoSourceLookup(sourceDB.Collection(cfg.RoomsCollection, options.Collection().SetReadPreference(rp))),
+		cfg.SubscriptionsCollection: migration.NewMongoSourceLookup(sourceDB.Collection(cfg.SubscriptionsCollection, options.Collection().SetReadPreference(rp))),
+		cfg.ThreadSubsCollection:    migration.NewMongoSourceLookup(sourceDB.Collection(cfg.ThreadSubsCollection, options.Collection().SetReadPreference(rp))),
+		cfg.UsersCollection:         migration.NewMongoSourceLookup(sourceDB.Collection(cfg.UsersCollection, options.Collection().SetReadPreference(rp))),
+	}
+
+	// Target new-stack per-site Mongo: user insert-if-absent + thread_room/user FK resolution.
+	targetClient, err := mongoutil.Connect(ctx, cfg.TargetMongoURI, cfg.TargetUsername, cfg.TargetPassword)
+	if err != nil {
+		slog.Error("target mongo connect failed", "error", err)
+		mongoutil.Disconnect(ctx, source)
+		os.Exit(1)
+	}
+	target := NewMongoTargetStore(targetClient.Database(cfg.TargetDB))
+	if err := target.EnsureIndexes(ctx); err != nil {
+		slog.Error("ensure target indexes failed", "error", err)
+		mongoutil.Disconnect(ctx, targetClient)
+		mongoutil.Disconnect(ctx, source)
+		os.Exit(1)
+	}
 
 	nc, err := natsutil.Connect(cfg.NatsURL, cfg.NatsCredsFile)
 	if err != nil {
 		slog.Error("nats connect failed", "error", err)
-		mongoutil.Disconnect(ctx, client)
+		mongoutil.Disconnect(ctx, targetClient)
+		mongoutil.Disconnect(ctx, source)
 		os.Exit(1)
 	}
 	js, err := oteljetstream.New(nc)
 	if err != nil {
 		slog.Error("jetstream init failed", "error", err)
 		_ = nc.Drain()
-		mongoutil.Disconnect(ctx, client)
+		mongoutil.Disconnect(ctx, targetClient)
+		mongoutil.Disconnect(ctx, source)
+		os.Exit(1)
+	}
+
+	if err := bootstrapStreams(ctx, js, cfg.SiteID, cfg.Bootstrap.Enabled); err != nil {
+		slog.Error("bootstrap streams failed", "error", err)
+		_ = nc.Drain()
+		mongoutil.Disconnect(ctx, targetClient)
+		mongoutil.Disconnect(ctx, source)
 		os.Exit(1)
 	}
 
 	h := &handler{
-		collection:     cfg.SourceMessageCollection,
-		softDeleteType: cfg.SoftDeleteType,
-		publisher:      &canonicalPublisher{siteID: cfg.SiteID, publish: js.PublishMsg, now: nowMs},
-		history:        &natsHistoryClient{nc: nc.NatsConn(), siteID: cfg.SiteID, timeout: cfg.HistoryRequestTimeout, metrics: m},
-		lookup:         migration.NewMongoSourceLookup(sourceColl),
+		siteID:         cfg.SiteID,
+		allSiteIDs:     cfg.AllSiteIDs,
+		roomsColl:      cfg.RoomsCollection,
+		subsColl:       cfg.SubscriptionsCollection,
+		threadSubsColl: cfg.ThreadSubsCollection,
+		usersColl:      cfg.UsersCollection,
+		pub:            &jetstreamPublisher{publish: js.PublishMsg},
+		target:         target,
+		lookups:        lookups,
 		metrics:        m,
+		now:            nowMs,
 	}
 
 	streamName := stream.MigrationOplog(cfg.SiteID).Name
@@ -116,12 +158,18 @@ func main() {
 		AckPolicy:     jetstream.AckExplicitPolicy,
 		DeliverPolicy: jetstream.DeliverAllPolicy,
 		MaxDeliver:    cfg.MaxDeliver,
-		FilterSubject: subject.MigrationOplog(cfg.SiteID, cfg.SourceMessageCollection, "*"),
+		FilterSubjects: []string{
+			subject.MigrationOplog(cfg.SiteID, cfg.RoomsCollection, "*"),
+			subject.MigrationOplog(cfg.SiteID, cfg.SubscriptionsCollection, "*"),
+			subject.MigrationOplog(cfg.SiteID, cfg.ThreadSubsCollection, "*"),
+			subject.MigrationOplog(cfg.SiteID, cfg.UsersCollection, "*"),
+		},
 	})
 	if err != nil {
 		slog.Error("create consumer failed", "stream", streamName, "error", err)
 		_ = nc.Drain()
-		mongoutil.Disconnect(ctx, client)
+		mongoutil.Disconnect(ctx, targetClient)
+		mongoutil.Disconnect(ctx, source)
 		os.Exit(1)
 	}
 
@@ -131,31 +179,31 @@ func main() {
 	if err != nil {
 		slog.Error("consume failed", "stream", streamName, "error", err)
 		_ = nc.Drain()
-		mongoutil.Disconnect(ctx, client)
+		mongoutil.Disconnect(ctx, targetClient)
+		mongoutil.Disconnect(ctx, source)
 		os.Exit(1)
 	}
 
-	slog.Info("oplog-transformer started",
-		"site", cfg.SiteID, "stream", streamName, "collection", cfg.SourceMessageCollection)
+	slog.Info("oplog-collections-transformer started", "site", cfg.SiteID, "stream", streamName)
 
 	// Ordered, timeout-bounded cleanup:
-	// stop consume → metrics/health → observability → NATS drain → Mongo.
+	// stop consume → metrics/health → observability → NATS drain → Mongo (target then source).
 	shutdown.Wait(ctx, 25*time.Second,
 		func(context.Context) error { cc.Stop(); return nil },
 		func(ctx context.Context) error { return metricsServer.Shutdown(ctx) },
 		func(ctx context.Context) error { return tracerShutdown(ctx) },
 		func(ctx context.Context) error { return meterShutdown(ctx) },
 		func(context.Context) error { return nc.Drain() },
-		func(ctx context.Context) error { mongoutil.Disconnect(ctx, client); return nil },
+		func(ctx context.Context) error { mongoutil.Disconnect(ctx, targetClient); return nil },
+		func(ctx context.Context) error { mongoutil.Disconnect(ctx, source); return nil },
 	)
 }
 
-// processOne decodes one event and dispatches it, mapping the outcome to a JetStream disposition:
-// Ack on success, Term on poison (never redelivered), Nak-with-delay on transient up to maxDeliver
-// — then Termed with a distinct metric instead of JetStream's silent drop (see migration.IsFinalDelivery).
+// processOne decodes one event and maps its outcome to a JetStream disposition: Ack on success,
+// Term on poison, Nak-with-delay on transient up to maxDeliver, then Term-with-metric (not silent drop).
 func processOne(ctx context.Context, h *handler, m jetstream.Msg, mtr *metrics, maxDeliver, deleteMaxDeliver int) {
-	// Stamp a correlation id once at entry; it flows via ctx into the history RPC and canonical publish
-	// (both read it from ctx through natsutil.NewMsg), so transformer→history→worker shares one request_id.
+	// Stamp a correlation id once at entry; it flows via ctx into the inbox publish
+	// (read from ctx through natsutil.NewMsg), so transformer→inbox-worker shares one request_id.
 	ctx, reqID := natsutil.StampRequestID(ctx, m.Headers(), m.Subject())
 	// dispose runs a JetStream ack/term/nak and logs (rather than silently drops) any failure —
 	// the message will redeliver, but a failing disposition signals a NATS-health problem worth seeing.
@@ -167,7 +215,7 @@ func processOne(ctx context.Context, h *handler, m jetstream.Msg, mtr *metrics, 
 	var ev oplogEvent
 	if err := json.Unmarshal(m.Data(), &ev); err != nil {
 		slog.Error("decode oplog event — term", "error", err, "request_id", reqID)
-		mtr.onTerm(ctx, "unknown")
+		mtr.onTerm(ctx, "unknown", "unknown")
 		dispose("term", m.Term)
 		return
 	}
@@ -186,11 +234,11 @@ func processOne(ctx context.Context, h *handler, m jetstream.Msg, mtr *metrics, 
 	err := h.handle(ctx, ev)
 	switch migration.Classify(err, isFinal) {
 	case migration.ActionAck:
-		mtr.onProcessed(ctx, ev.Op)
+		mtr.onProcessed(ctx, ev.Op, ev.Collection)
 		dispose("ack", m.Ack)
 	case migration.ActionTerm:
 		slog.Error("poison event — term (skipping)", "eventId", ev.EventID, "error", err, "request_id", reqID)
-		mtr.onTerm(ctx, ev.Op)
+		mtr.onTerm(ctx, ev.Op, ev.Collection)
 		dispose("term", m.Term)
 	case migration.ActionAckSkip:
 		// A deliberate skip — already metered via onSkipped by the handler. Ack but DON'T count
@@ -200,16 +248,26 @@ func processOne(ctx context.Context, h *handler, m jetstream.Msg, mtr *metrics, 
 		// A further Nak would hit the cap and be silently dropped by JetStream.
 		// Term it explicitly so the give-up is logged + metered instead of vanishing.
 		slog.Error("delivery limit reached — terming (dropping)", "eventId", ev.EventID, "op", ev.Op, "cap", deliverCap, "error", err, "request_id", reqID)
-		mtr.onExhausted(ctx, ev.Op)
+		mtr.onExhausted(ctx, ev.Op, ev.Collection)
 		dispose("term", m.Term)
 	default:
 		slog.Error("transient failure — nak", "eventId", ev.EventID, "error", err, "request_id", reqID)
-		mtr.onNak(ctx, ev.Op)
+		mtr.onNak(ctx, ev.Op, ev.Collection)
 		dispose("nak", func() error { return m.NakWithDelay(2 * time.Second) })
 	}
 }
 
 func nowMs() int64 { return time.Now().UTC().UnixMilli() }
+
+// hasDestinationSite reports whether sites has at least one non-empty entry (a real fan-out target).
+func hasDestinationSite(sites []string) bool {
+	for _, s := range sites {
+		if s != "" {
+			return true
+		}
+	}
+	return false
+}
 
 // streamWaitTimeout bounds how long startup waits for the connector to bootstrap MIGRATION_OPLOG.
 const streamWaitTimeout = 60 * time.Second

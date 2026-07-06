@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/hmchangw/chat/pkg/migration"
 	"github.com/hmchangw/chat/pkg/model"
 )
 
@@ -204,9 +205,12 @@ func TestProcessOne_Dispositions(t *testing.T) {
 }
 
 func TestIsFinalDelivery(t *testing.T) {
-	assert.True(t, isFinalDelivery(&fakeJSMsg{numDelivered: 1000}, 1000), "at the cap")
-	assert.True(t, isFinalDelivery(&fakeJSMsg{numDelivered: 1001}, 1000), "past the cap")
-	assert.False(t, isFinalDelivery(&fakeJSMsg{numDelivered: 999}, 1000), "below the cap")
-	assert.False(t, isFinalDelivery(&fakeJSMsg{numDelivered: 5000}, 0), "maxDeliver<=0 means unlimited")
-	assert.False(t, isFinalDelivery(&fakeJSMsg{metaErr: errors.New("no metadata")}, 1000), "metadata error → prefer Nak")
+	// migration.IsFinalDelivery takes (numDelivered uint64, maxDeliver int) directly;
+	// metadata extraction (and the error-tolerant fallback to 0) now lives in processOne.
+	assert.True(t, migration.IsFinalDelivery(1000, 1000), "at the cap")
+	assert.True(t, migration.IsFinalDelivery(1001, 1000), "past the cap")
+	assert.False(t, migration.IsFinalDelivery(999, 1000), "below the cap")
+	assert.False(t, migration.IsFinalDelivery(5000, 0), "maxDeliver<=0 means unlimited")
+	// A metadata error makes processOne pass numDelivered=0, which is never ≥ maxDeliver > 0 → not final.
+	assert.False(t, migration.IsFinalDelivery(0, 1000), "metadata error → processOne passes 0 → prefer Nak")
 }

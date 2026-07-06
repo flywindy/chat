@@ -95,6 +95,7 @@ type userStatusUpdate struct {
 	account    string
 	statusText string
 	isShow     *bool
+	updatedAt  time.Time
 }
 
 func (s *stubInboxStore) CreateSubscription(ctx context.Context, sub *model.Subscription) error {
@@ -336,14 +337,14 @@ func (s *stubInboxStore) getThreadSubs() []model.ThreadSubscription {
 	return cp
 }
 
-func (s *stubInboxStore) UpdateUserStatus(_ context.Context, account, statusText string, statusIsShow *bool) error {
+func (s *stubInboxStore) UpdateUserStatus(_ context.Context, account, statusText string, statusIsShow *bool, statusUpdatedAt time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.userStatusErr != nil {
 		return s.userStatusErr
 	}
 	s.userStatusUpdates = append(s.userStatusUpdates, userStatusUpdate{
-		account: account, statusText: statusText, isShow: statusIsShow,
+		account: account, statusText: statusText, isShow: statusIsShow, updatedAt: statusUpdatedAt,
 	})
 	return nil
 }
@@ -1191,6 +1192,68 @@ func (s *errorThreadSubStore) UpsertThreadSubscription(_ context.Context, _ *mod
 	return fmt.Errorf("boom")
 }
 
+func TestHandleEvent_MemberAdded_UnknownUser_ReturnsError(t *testing.T) {
+	// Store has NO users, so the referenced account cannot resolve.
+	store := &stubInboxStore{}
+	h := NewHandler(store)
+
+	change := model.MemberAddEvent{
+		Type:     "member_added",
+		RoomID:   "room-1",
+		Accounts: []string{"ghost"},
+		SiteID:   "site-b",
+		JoinedAt: time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC).UnixMilli(),
+	}
+	changeData, err := json.Marshal(change)
+	require.NoError(t, err)
+
+	evt := model.InboxEvent{Type: "member_added", SiteID: "site-b", DestSiteID: "site-a", Payload: changeData}
+	evtData, err := json.Marshal(evt)
+	require.NoError(t, err)
+
+	err = h.HandleEvent(context.Background(), evtData)
+
+	// Returns an error (→ Nak/redeliver) naming the missing account.
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ghost")
+	// A plain fmt.Errorf can never be permanent (IsPermanent requires *errcode.Error wrapping),
+	// but assert explicitly so a future refactor that adds wrapping trips this guard.
+	_, isPermanent := errcode.IsPermanent(err)
+	assert.False(t, isPermanent, "missing-user error must be transient so the event redelivers")
+	// No subscription was created.
+	assert.Empty(t, store.getSubscriptions())
+}
+
+func TestHandleEvent_MemberAdded_PartialUsers_CreatesPresentAndErrors(t *testing.T) {
+	// "bob" resolves; "ghost" does not.
+	store := &stubInboxStore{users: []model.User{{ID: "uid-bob", Account: "bob", SiteID: "site-a"}}}
+	h := NewHandler(store)
+
+	change := model.MemberAddEvent{
+		Type:     "member_added",
+		RoomID:   "room-1",
+		Accounts: []string{"bob", "ghost"},
+		SiteID:   "site-b",
+		JoinedAt: time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC).UnixMilli(),
+	}
+	changeData, err := json.Marshal(change)
+	require.NoError(t, err)
+
+	evt := model.InboxEvent{Type: "member_added", SiteID: "site-b", DestSiteID: "site-a", Payload: changeData}
+	evtData, err := json.Marshal(evt)
+	require.NoError(t, err)
+
+	err = h.HandleEvent(context.Background(), evtData)
+
+	// Errors so the whole event redelivers...
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ghost")
+	// ...but the resolvable subscription was still created (progress; redelivery re-upserts idempotently).
+	subs := store.getSubscriptions()
+	require.Len(t, subs, 1)
+	assert.Equal(t, "bob", subs[0].User.Account)
+}
+
 func TestRolesForType(t *testing.T) {
 	assert.Equal(t, []model.Role{model.RoleMember}, rolesForType(model.RoomTypeChannel))
 	assert.Nil(t, rolesForType(model.RoomTypeDM))
@@ -1481,12 +1544,12 @@ func TestHandler_SubscriptionMuteToggled(t *testing.T) {
 	assert.Equal(t, int64(12345), updates[0].updatedAt.UnixMilli())
 }
 
-func TestHandler_SubscriptionMuteToggled_MissingSubscriptionNoOp(t *testing.T) {
+func TestHandler_SubscriptionMuteToggled_Forwarded(t *testing.T) {
 	store := &stubInboxStore{}
 	h := NewHandler(store)
 
 	payload, err := json.Marshal(model.SubscriptionMuteToggledEvent{
-		Account: "ghost", RoomID: "r1", Muted: true, Timestamp: 12345,
+		Account: "alice", RoomID: "r1", Muted: true, Timestamp: 12345,
 	})
 	require.NoError(t, err)
 	evt, err := json.Marshal(model.InboxEvent{
@@ -1496,6 +1559,10 @@ func TestHandler_SubscriptionMuteToggled_MissingSubscriptionNoOp(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NoError(t, h.HandleEvent(context.Background(), evt))
+	updates := store.getMuteUpdates()
+	require.Len(t, updates, 1)
+	assert.Equal(t, "alice", updates[0].account)
+	assert.True(t, updates[0].muted)
 }
 
 func TestHandler_SubscriptionMuteToggled_MalformedPayload(t *testing.T) {
@@ -1546,12 +1613,12 @@ func TestHandler_SubscriptionFavoriteToggled(t *testing.T) {
 	assert.Equal(t, int64(12345), updates[0].updatedAt.UnixMilli())
 }
 
-func TestHandler_SubscriptionFavoriteToggled_MissingSubscriptionNoOp(t *testing.T) {
+func TestHandler_SubscriptionFavoriteToggled_Forwarded(t *testing.T) {
 	store := &stubInboxStore{}
 	h := NewHandler(store)
 
 	payload, err := json.Marshal(model.SubscriptionFavoriteToggledEvent{
-		Account: "ghost", RoomID: "r1", Favorite: true, Timestamp: 12345,
+		Account: "alice", RoomID: "r1", Favorite: true, Timestamp: 12345,
 	})
 	require.NoError(t, err)
 	evt, err := json.Marshal(model.InboxEvent{
@@ -1561,6 +1628,10 @@ func TestHandler_SubscriptionFavoriteToggled_MissingSubscriptionNoOp(t *testing.
 	require.NoError(t, err)
 
 	require.NoError(t, h.HandleEvent(context.Background(), evt))
+	updates := store.getFavoriteUpdates()
+	require.Len(t, updates, 1)
+	assert.Equal(t, "alice", updates[0].account)
+	assert.True(t, updates[0].favorite)
 }
 
 func TestHandler_SubscriptionFavoriteToggled_MalformedPayload(t *testing.T) {
@@ -1645,6 +1716,8 @@ func TestHandler_UserStatusUpdated(t *testing.T) {
 	assert.Equal(t, "out to lunch", updates[0].statusText)
 	require.NotNil(t, updates[0].isShow)
 	assert.True(t, *updates[0].isShow)
+	// The handler threads the event Timestamp through as the order-guard high-water mark.
+	assert.Equal(t, time.UnixMilli(12345).UTC(), updates[0].updatedAt)
 }
 
 func TestHandler_UserStatusUpdated_IsShowOmittedStaysNil(t *testing.T) {

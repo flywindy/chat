@@ -11,6 +11,7 @@ import (
 	"go.opentelemetry.io/otel/codes"
 
 	"github.com/hmchangw/chat/pkg/errcode"
+	"github.com/hmchangw/chat/pkg/migration"
 	"github.com/hmchangw/chat/pkg/model"
 	"github.com/hmchangw/chat/pkg/natsutil"
 	"github.com/hmchangw/chat/pkg/subject"
@@ -60,7 +61,7 @@ func (c *natsHistoryClient) request(ctx context.Context, subj string, payload an
 	}
 	termCode, derr := classifyHistoryReply(subj, reply.Data)
 	if termCode != "" {
-		// A permanent history rejection — the transformer will Term (errPoison). Record the
+		// A permanent history rejection — the transformer will Term (migration.ErrPoison). Record the
 		// rejecting category so a genuine permanent failure is visible, not buried in generic terms.
 		c.metrics.onHistoryRejected(ctx, string(termCode))
 	}
@@ -78,13 +79,13 @@ func permanentHistoryRejection(code errcode.Code) bool {
 	}
 }
 
-// classifyHistoryReply maps a history reply to a disposition error: nil → Ack; errPoison-wrapped
+// classifyHistoryReply maps a history reply to a disposition error: nil → Ack; migration.ErrPoison-wrapped
 // (permanent rejection) → Term; plain error (retryable/unknown/not-ok ack/undecodable) → Nak.
 // termCode is the rejecting category only for a permanent rejection (Term metric), else "".
 func classifyHistoryReply(subj string, data []byte) (termCode errcode.Code, err error) {
 	if ec, ok := errcode.Parse(data); ok {
 		if permanentHistoryRejection(ec.Code) {
-			return ec.Code, fmt.Errorf("%w: history permanently rejected %q (%s): %s", errPoison, subj, ec.Code, ec.Message)
+			return ec.Code, fmt.Errorf("%w: history permanently rejected %q (%s): %s", migration.ErrPoison, subj, ec.Code, ec.Message)
 		}
 		return "", fmt.Errorf("history rejected %q (retryable %s): %s", subj, ec.Code, ec.Message)
 	}

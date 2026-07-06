@@ -1,4 +1,4 @@
-package main
+package migration
 
 import (
 	"context"
@@ -11,24 +11,28 @@ import (
 	"go.opentelemetry.io/otel/codes"
 )
 
-// sourceLookup fetches the current full message doc from the source by _id.
-type sourceLookup interface {
-	// FindByID returns the raw BSON-extended-JSON document, or (nil, nil) if absent.
+// SourceLookup fetches the current full source doc by _id, as relaxed extended JSON
+// (the same shape the connector emits). Used on the update path, where the connector
+// forwards only the change delta and the full current doc must be re-read.
+type SourceLookup interface {
+	// FindByID returns the raw relaxed-extJSON document, or (nil, nil) if absent.
 	FindByID(ctx context.Context, id string) ([]byte, error)
 }
 
-type mongoSourceLookup struct {
+// MongoSourceLookup is a SourceLookup backed by a source Mongo collection.
+type MongoSourceLookup struct {
 	coll *mongo.Collection
 }
 
-func newMongoSourceLookup(coll *mongo.Collection) *mongoSourceLookup {
-	return &mongoSourceLookup{coll: coll}
+// NewMongoSourceLookup returns a MongoSourceLookup over the given source collection.
+func NewMongoSourceLookup(coll *mongo.Collection) *MongoSourceLookup {
+	return &MongoSourceLookup{coll: coll}
 }
 
 // FindByID reads the doc and re-encodes it as relaxed extended JSON, matching the shape
-// messagemap expects (same as the connector emits).
-func (m *mongoSourceLookup) FindByID(ctx context.Context, id string) (out []byte, err error) {
-	ctx, span := otel.Tracer("oplog-transformer").Start(ctx, "source.findByID")
+// the connector emits. A missing document returns (nil, nil), not an error.
+func (m *MongoSourceLookup) FindByID(ctx context.Context, id string) (out []byte, err error) {
+	ctx, span := otel.Tracer("migration").Start(ctx, "source.findByID")
 	defer func() {
 		if err != nil {
 			span.SetStatus(codes.Error, err.Error())
