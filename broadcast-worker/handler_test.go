@@ -40,6 +40,30 @@ func (m *mockPublisher) Publish(_ context.Context, subj string, data []byte) err
 	return nil
 }
 
+// stubParentFetcher is a ParentFetcher test double: FetchParent returns a fixed
+// parent (or error) regardless of arguments. The zero value returns an empty
+// ParentMessageInfo — fine for tests that exercise only the follower/sender
+// fan-out and never the history-visibility gate or parent-sender inclusion.
+type stubParentFetcher struct {
+	info *ParentMessageInfo
+	err  error
+}
+
+func (s stubParentFetcher) FetchParent(context.Context, string, string, string, string) (*ParentMessageInfo, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	if s.info != nil {
+		return s.info, nil
+	}
+	return &ParentMessageInfo{}, nil
+}
+
+// defaultParentFetcher is the no-op fetcher passed to handlers whose test does
+// not traverse the channel thread fan-out path (or does but ignores the parent's
+// author/createdAt).
+var defaultParentFetcher = stubParentFetcher{}
+
 func decodeRoomEvent(t *testing.T, data []byte) model.RoomEvent {
 	t.Helper()
 	var e model.RoomEvent
@@ -147,7 +171,7 @@ func TestHandleMessage_DispatchesByEvent(t *testing.T) {
 				us.EXPECT().FindUsersByAccounts(gomock.Any(), []string{"sender"}).Return(nil, nil)
 			}
 
-			h := NewHandler(store, us, pub, keyStore, true)
+			h := NewHandler(store, us, pub, keyStore, defaultParentFetcher, true)
 			err = h.HandleMessage(context.Background(), data)
 
 			if tc.wantErr {
@@ -235,7 +259,7 @@ func TestHandler_HandleMessage_ChannelRoom(t *testing.T) {
 					Return([]model.User{senderUser}, nil)
 			}
 
-			h := NewHandler(store, us, pub, keyStore, true)
+			h := NewHandler(store, us, pub, keyStore, defaultParentFetcher, true)
 			err := h.HandleMessage(context.Background(), makeMessageEvent("room-1", tc.content, msgTime))
 			require.NoError(t, err)
 
@@ -340,7 +364,7 @@ func TestHandler_HandleMessage_DMRoom(t *testing.T) {
 			}
 
 			keyStore := NewMockRoomKeyProvider(ctrl)
-			h := NewHandler(store, us, pub, keyStore, true)
+			h := NewHandler(store, us, pub, keyStore, defaultParentFetcher, true)
 			err := h.HandleMessage(context.Background(), data)
 			require.NoError(t, err)
 
@@ -382,7 +406,7 @@ func TestHandler_HandleMessage_Errors(t *testing.T) {
 		us := NewMockUserStore(ctrl)
 		pub := &mockPublisher{}
 		keyStore := NewMockRoomKeyProvider(ctrl)
-		h := NewHandler(store, us, pub, keyStore, true)
+		h := NewHandler(store, us, pub, keyStore, defaultParentFetcher, true)
 
 		err := h.HandleMessage(context.Background(), []byte("not json"))
 		require.Error(t, err)
@@ -401,7 +425,7 @@ func TestHandler_HandleMessage_Errors(t *testing.T) {
 		store.EXPECT().UpdateRoomLastMessage(gomock.Any(), "room-1", "msg-1", msgTime, false).Return(errors.New("not found"))
 
 		keyStore := NewMockRoomKeyProvider(ctrl)
-		h := NewHandler(store, us, pub, keyStore, true)
+		h := NewHandler(store, us, pub, keyStore, defaultParentFetcher, true)
 		err := h.HandleMessage(context.Background(), makeMessageEvent("room-1", "hello", msgTime))
 		require.Error(t, err)
 		assert.Empty(t, pub.records)
@@ -417,7 +441,7 @@ func TestHandler_HandleMessage_Errors(t *testing.T) {
 		store.EXPECT().UpdateRoomLastMessage(gomock.Any(), "room-1", "msg-1", msgTime, false).Return(errors.New("db error"))
 
 		keyStore := NewMockRoomKeyProvider(ctrl)
-		h := NewHandler(store, us, pub, keyStore, true)
+		h := NewHandler(store, us, pub, keyStore, defaultParentFetcher, true)
 		err := h.HandleMessage(context.Background(), makeMessageEvent("room-1", "hello", msgTime))
 		require.Error(t, err)
 		assert.Empty(t, pub.records)
@@ -436,7 +460,7 @@ func TestHandler_HandleMessage_Errors(t *testing.T) {
 		store.EXPECT().SetSubscriptionMentions(gomock.Any(), "room-1", gomock.Any()).Return(errors.New("db error"))
 
 		keyStore := NewMockRoomKeyProvider(ctrl)
-		h := NewHandler(store, us, pub, keyStore, true)
+		h := NewHandler(store, us, pub, keyStore, defaultParentFetcher, true)
 		err := h.HandleMessage(context.Background(), makeMessageEvent("room-1", "hey @alice", msgTime))
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "set subscription mentions")
@@ -459,7 +483,7 @@ func TestHandler_HandleMessage_Errors(t *testing.T) {
 		us.EXPECT().FindUsersByAccounts(gomock.Any(), []string{"sender"}).Return(nil, nil) // sender lookup
 
 		keyStore := NewMockRoomKeyProvider(ctrl)
-		h := NewHandler(store, us, pub, keyStore, true)
+		h := NewHandler(store, us, pub, keyStore, defaultParentFetcher, true)
 		err := h.HandleMessage(context.Background(), makeMessageEvent("room-1", "hello", msgTime))
 		require.NoError(t, err)
 		assert.Empty(t, pub.records)
@@ -478,7 +502,7 @@ func TestHandler_HandleMessage_Errors(t *testing.T) {
 		store.EXPECT().ListSubscriptions(gomock.Any(), "dm-1").Return(nil, errors.New("db error"))
 
 		keyStore := NewMockRoomKeyProvider(ctrl)
-		h := NewHandler(store, us, pub, keyStore, true)
+		h := NewHandler(store, us, pub, keyStore, defaultParentFetcher, true)
 		evt := model.MessageEvent{
 			Event:  model.EventCreated,
 			SiteID: "site-a",
@@ -512,7 +536,7 @@ func TestHandler_HandleMessage_Errors(t *testing.T) {
 		// Single lookup: sender is both the message author and the mentioned account, so the deduped list is just ["sender"].
 		us.EXPECT().FindUsersByAccounts(gomock.Any(), []string{"sender"}).Return([]model.User{senderUser}, nil)
 
-		h := NewHandler(store, us, pub, keyStore, true)
+		h := NewHandler(store, us, pub, keyStore, defaultParentFetcher, true)
 		err := h.HandleMessage(context.Background(), makeMessageEvent("room-1", "hey @sender", msgTime))
 		require.NoError(t, err)
 
@@ -539,7 +563,7 @@ func TestHandler_HandleMessage_Errors(t *testing.T) {
 		store.EXPECT().GetRoomMeta(gomock.Any(), "room-1").Return(metaOf(testChannelRoom), nil)
 		us.EXPECT().FindUsersByAccounts(gomock.Any(), []string{"sender"}).Return(nil, errors.New("db error")) // sender lookup
 
-		h := NewHandler(store, us, pub, keyStore, true)
+		h := NewHandler(store, us, pub, keyStore, defaultParentFetcher, true)
 		err := h.HandleMessage(context.Background(), makeMessageEvent("room-1", "hello", msgTime))
 		require.NoError(t, err)
 
@@ -585,7 +609,7 @@ func TestHandler_HandleMessage_DMRoom_PublishError(t *testing.T) {
 	us.EXPECT().FindUsersByAccounts(gomock.Any(), []string{"alice"}).Return([]model.User{testUsers[0]}, nil) // sender lookup
 
 	keyStore := NewMockRoomKeyProvider(ctrl)
-	h := NewHandler(store, us, pub, keyStore, true)
+	h := NewHandler(store, us, pub, keyStore, defaultParentFetcher, true)
 	evt := model.MessageEvent{
 		Event:  model.EventCreated,
 		SiteID: "site-a",
@@ -618,7 +642,7 @@ func TestHandler_HandleMessage_ChannelRoom_Encryption(t *testing.T) {
 		store.EXPECT().GetRoomMeta(gomock.Any(), "room-1").Return(metaOf(testChannelRoom), nil)
 		us.EXPECT().FindUsersByAccounts(gomock.Any(), []string{"sender"}).Return(nil, nil)
 
-		h := NewHandler(store, us, pub, keyStore, true)
+		h := NewHandler(store, us, pub, keyStore, defaultParentFetcher, true)
 		err := h.HandleMessage(context.Background(), makeMessageEvent("room-1", "hello", msgTime))
 		require.Error(t, err)
 		assert.ErrorIs(t, err, errNoCurrentKey)
@@ -639,7 +663,7 @@ func TestHandler_HandleMessage_ChannelRoom_Encryption(t *testing.T) {
 		store.EXPECT().GetRoomMeta(gomock.Any(), "room-1").Return(metaOf(testChannelRoom), nil)
 		us.EXPECT().FindUsersByAccounts(gomock.Any(), []string{"sender"}).Return(nil, nil)
 
-		h := NewHandler(store, us, pub, keyStore, true)
+		h := NewHandler(store, us, pub, keyStore, defaultParentFetcher, true)
 		err := h.HandleMessage(context.Background(), makeMessageEvent("room-1", "hello", msgTime))
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "get room key")
@@ -662,7 +686,7 @@ func TestHandler_HandleMessage_ChannelRoom_Encryption(t *testing.T) {
 		store.EXPECT().GetRoomMeta(gomock.Any(), "room-1").Return(metaOf(testChannelRoom), nil)
 		us.EXPECT().FindUsersByAccounts(gomock.Any(), []string{"sender"}).Return([]model.User{{ID: "u-sender", Account: "sender", EngName: "Sender Lin", ChineseName: "寄件者", SiteID: "site-a"}}, nil)
 
-		h := NewHandler(store, us, pub, keyStore, true)
+		h := NewHandler(store, us, pub, keyStore, defaultParentFetcher, true)
 		err := h.HandleMessage(context.Background(), makeMessageEvent("room-1", "hello", msgTime))
 		require.NoError(t, err)
 
@@ -743,7 +767,7 @@ func TestHandler_FetchAndUpdateRoom_Missing(t *testing.T) {
 		Return(fmt.Errorf("update room last message ghost-room: %w", mongo.ErrNoDocuments))
 
 	keyStore := NewMockRoomKeyProvider(ctrl)
-	h := NewHandler(store, us, pub, keyStore, true)
+	h := NewHandler(store, us, pub, keyStore, defaultParentFetcher, true)
 
 	err := h.HandleMessage(context.Background(), makeMessageEvent("ghost-room", "hello", msgTime))
 	require.Error(t, err)
@@ -781,7 +805,7 @@ func TestHandleUpdated_ChannelRoomScopedPublish(t *testing.T) {
 	data, err := json.Marshal(&evt)
 	require.NoError(t, err)
 
-	h := NewHandler(store, us, pub, keyStore, false)
+	h := NewHandler(store, us, pub, keyStore, defaultParentFetcher, false)
 	require.NoError(t, h.HandleMessage(context.Background(), data))
 
 	require.Len(t, pub.records, 1, "channel: single room-scoped publish")
@@ -828,7 +852,7 @@ func TestHandleUpdated_EncryptedChannel_EncryptsContent(t *testing.T) {
 	data, err := json.Marshal(&evt)
 	require.NoError(t, err)
 
-	h := NewHandler(store, us, pub, keyStore, true)
+	h := NewHandler(store, us, pub, keyStore, defaultParentFetcher, true)
 	require.NoError(t, h.HandleMessage(context.Background(), data))
 
 	require.Len(t, pub.records, 1, "channel: single room-scoped publish")
@@ -863,7 +887,7 @@ func TestHandleUpdated_MissingEditedAt_ReturnsError(t *testing.T) {
 	data, err := json.Marshal(&evt)
 	require.NoError(t, err)
 
-	h := NewHandler(store, us, pub, keyStore, true)
+	h := NewHandler(store, us, pub, keyStore, defaultParentFetcher, true)
 	err = h.HandleMessage(context.Background(), data)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "missing EditedAt")
@@ -898,7 +922,7 @@ func TestHandleDeleted_ChannelRoomScopedPublish(t *testing.T) {
 	data, err := json.Marshal(&evt)
 	require.NoError(t, err)
 
-	h := NewHandler(store, us, pub, keyStore, true)
+	h := NewHandler(store, us, pub, keyStore, defaultParentFetcher, true)
 	require.NoError(t, h.HandleMessage(context.Background(), data))
 
 	require.Len(t, pub.records, 1, "channel: single room-scoped publish")
@@ -932,7 +956,7 @@ func TestHandleDeleted_MissingUpdatedAt_ReturnsError(t *testing.T) {
 	data, err := json.Marshal(&evt)
 	require.NoError(t, err)
 
-	h := NewHandler(store, us, pub, keyStore, true)
+	h := NewHandler(store, us, pub, keyStore, defaultParentFetcher, true)
 	err = h.HandleMessage(context.Background(), data)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "missing UpdatedAt")
@@ -974,7 +998,7 @@ func TestHandleUpdated_DMRoom_FansOutToBothMembers(t *testing.T) {
 	data, err := json.Marshal(&evt)
 	require.NoError(t, err)
 
-	h := NewHandler(store, us, pub, keyStore, true)
+	h := NewHandler(store, us, pub, keyStore, defaultParentFetcher, true)
 	require.NoError(t, h.HandleMessage(context.Background(), data))
 
 	require.Len(t, pub.records, 2, "per-user fan-out: one publish per DM member")
@@ -1029,7 +1053,7 @@ func TestHandleDeleted_DMRoom_FansOutToBothMembers(t *testing.T) {
 	data, err := json.Marshal(&evt)
 	require.NoError(t, err)
 
-	h := NewHandler(store, us, pub, keyStore, true)
+	h := NewHandler(store, us, pub, keyStore, defaultParentFetcher, true)
 	require.NoError(t, h.HandleMessage(context.Background(), data))
 
 	require.Len(t, pub.records, 2, "per-user fan-out: one publish per DM member")
@@ -1085,7 +1109,7 @@ func TestHandleUpdated_BotDMRoom_SkipsBotAccount(t *testing.T) {
 	data, err := json.Marshal(&evt)
 	require.NoError(t, err)
 
-	h := NewHandler(store, us, pub, keyStore, true)
+	h := NewHandler(store, us, pub, keyStore, defaultParentFetcher, true)
 	require.NoError(t, h.HandleMessage(context.Background(), data))
 
 	require.Len(t, pub.records, 1, "botDM: only the human recipient gets the live event")
@@ -1145,7 +1169,7 @@ func TestHandler_HandleMessage_ChannelEncryptionDisabled(t *testing.T) {
 			}
 
 			// nil keyStore — handler must NOT dereference it when encrypt=false
-			h := NewHandler(store, us, pub, nil, false)
+			h := NewHandler(store, us, pub, nil, defaultParentFetcher, false)
 			err := h.HandleMessage(context.Background(), makeMessageEvent("room-1", tc.content, msgTime))
 			require.NoError(t, err)
 
@@ -1207,7 +1231,7 @@ func TestHandleReacted_ChannelRoomScopedPublish(t *testing.T) {
 	data, err := json.Marshal(&evt)
 	require.NoError(t, err)
 
-	h := NewHandler(store, us, pub, keyStore, true)
+	h := NewHandler(store, us, pub, keyStore, defaultParentFetcher, true)
 	require.NoError(t, h.HandleMessage(context.Background(), data))
 
 	require.Len(t, pub.records, 2, "channel: room-scoped publish + author notification")
@@ -1257,7 +1281,7 @@ func TestHandleReacted_DMFanOut(t *testing.T) {
 	data, err := json.Marshal(&evt)
 	require.NoError(t, err)
 
-	h := NewHandler(store, us, pub, keyStore, false)
+	h := NewHandler(store, us, pub, keyStore, defaultParentFetcher, false)
 	require.NoError(t, h.HandleMessage(context.Background(), data))
 
 	require.Len(t, pub.records, 3, "DM: one event per non-bot account + author notification")
@@ -1291,7 +1315,7 @@ func TestHandleReacted_MissingDelta_LogsAndDrops(t *testing.T) {
 	}
 	data, _ := json.Marshal(&evt)
 
-	h := NewHandler(store, us, pub, keyStore, true)
+	h := NewHandler(store, us, pub, keyStore, defaultParentFetcher, true)
 	err := h.HandleMessage(context.Background(), data)
 	require.NoError(t, err, "malformed event must be acked, not NAK-ed")
 	assert.Empty(t, pub.records)
@@ -1320,7 +1344,7 @@ func TestHandleReacted_MissingUpdatedAt_LogsAndDrops(t *testing.T) {
 	}
 	data, _ := json.Marshal(&evt)
 
-	h := NewHandler(store, us, pub, keyStore, true)
+	h := NewHandler(store, us, pub, keyStore, defaultParentFetcher, true)
 	err := h.HandleMessage(context.Background(), data)
 	require.NoError(t, err, "malformed event must be acked, not NAK-ed")
 	assert.Empty(t, pub.records)
@@ -1380,7 +1404,7 @@ func TestHandleReacted_AuthorNotificationPolicy(t *testing.T) {
 			data, err := json.Marshal(&evt)
 			require.NoError(t, err)
 
-			h := NewHandler(store, us, pub, keyStore, true)
+			h := NewHandler(store, us, pub, keyStore, defaultParentFetcher, true)
 			require.NoError(t, h.HandleMessage(context.Background(), data))
 
 			notif := findPublishRecord(pub.records, subject.Notification(tc.authorAccount))
@@ -1442,7 +1466,7 @@ func TestHandleReacted_AuthorNotification_RoomType(t *testing.T) {
 			data, err := json.Marshal(&evt)
 			require.NoError(t, err)
 
-			h := NewHandler(store, us, pub, keyStore, true)
+			h := NewHandler(store, us, pub, keyStore, defaultParentFetcher, true)
 			require.NoError(t, h.HandleMessage(context.Background(), data))
 
 			notif := findPublishRecord(pub.records, subject.Notification("bob"))
@@ -1502,7 +1526,7 @@ func TestHandleReacted_AuthorPublishFailure_RoomFanOutStillSucceeds(t *testing.T
 	data, err := json.Marshal(&evt)
 	require.NoError(t, err)
 
-	h := NewHandler(store, us, pub, keyStore, true)
+	h := NewHandler(store, us, pub, keyStore, defaultParentFetcher, true)
 	require.NoError(t, h.HandleMessage(context.Background(), data),
 		"author-notify failure must not NAK the canonical event")
 	require.NotNil(t, findPublishRecord(pub.records, subject.RoomEvent(roomID)),
@@ -1538,7 +1562,7 @@ func TestHandlePinned_ChannelRoomScopedPublish(t *testing.T) {
 	data, err := json.Marshal(&evt)
 	require.NoError(t, err)
 
-	h := NewHandler(store, us, pub, keyStore, false)
+	h := NewHandler(store, us, pub, keyStore, defaultParentFetcher, false)
 	require.NoError(t, h.HandleMessage(context.Background(), data))
 
 	require.Len(t, pub.records, 1)
@@ -1587,7 +1611,7 @@ func TestHandlePinned_DMRoom_FansOutToBothMembers(t *testing.T) {
 	data, err := json.Marshal(&evt)
 	require.NoError(t, err)
 
-	h := NewHandler(store, us, pub, keyStore, true)
+	h := NewHandler(store, us, pub, keyStore, defaultParentFetcher, true)
 	require.NoError(t, h.HandleMessage(context.Background(), data))
 
 	require.Len(t, pub.records, 2)
@@ -1620,7 +1644,7 @@ func TestHandlePinned_MissingPinnedAt_ReturnsError(t *testing.T) {
 	data, err := json.Marshal(&evt)
 	require.NoError(t, err)
 
-	h := NewHandler(store, us, pub, keyStore, true)
+	h := NewHandler(store, us, pub, keyStore, defaultParentFetcher, true)
 	err = h.HandleMessage(context.Background(), data)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "missing PinnedAt")
@@ -1653,7 +1677,7 @@ func TestHandleUnpinned_ChannelRoomScopedPublish(t *testing.T) {
 	data, err := json.Marshal(&evt)
 	require.NoError(t, err)
 
-	h := NewHandler(store, us, pub, keyStore, false)
+	h := NewHandler(store, us, pub, keyStore, defaultParentFetcher, false)
 	require.NoError(t, h.HandleMessage(context.Background(), data))
 
 	require.Len(t, pub.records, 1)
@@ -1699,7 +1723,7 @@ func TestHandleUnpinned_DMRoom_FansOutToBothMembers(t *testing.T) {
 	data, err := json.Marshal(&evt)
 	require.NoError(t, err)
 
-	h := NewHandler(store, us, pub, keyStore, true)
+	h := NewHandler(store, us, pub, keyStore, defaultParentFetcher, true)
 	require.NoError(t, h.HandleMessage(context.Background(), data))
 
 	require.Len(t, pub.records, 2)
@@ -1723,6 +1747,7 @@ func TestThreadFanOutAccounts(t *testing.T) {
 	tests := []struct {
 		name          string
 		sender        string
+		parentSender  string
 		followers     map[string]struct{}
 		extraAccounts []string
 		want          []string
@@ -1775,11 +1800,32 @@ func TestThreadFanOutAccounts(t *testing.T) {
 			extraAccounts: []string{"alice", "carol"},
 			want:          []string{"alice", "bob", "carol"},
 		},
+		{
+			name:         "parent sender always included, even without a thread_rooms row yet",
+			sender:       "alice",
+			parentSender: "carol",
+			followers:    map[string]struct{}{},
+			want:         []string{"alice", "carol"},
+		},
+		{
+			name:         "parent sender deduped against sender and followers",
+			sender:       "alice",
+			parentSender: "alice",
+			followers:    map[string]struct{}{"bob": {}},
+			want:         []string{"alice", "bob"},
+		},
+		{
+			name:         "bot parent sender skipped",
+			sender:       "alice",
+			parentSender: "system.bot",
+			followers:    map[string]struct{}{"bob": {}},
+			want:         []string{"alice", "bob"},
+		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := threadFanOutAccounts(tc.sender, tc.followers, tc.extraAccounts)
+			got := threadFanOutAccounts(tc.sender, tc.parentSender, tc.followers, tc.extraAccounts)
 			assert.ElementsMatch(t, tc.want, got)
 		})
 	}
@@ -1812,7 +1858,7 @@ func TestHandleServerBroadcast_ThreadReplyAdded_FansOutBadge(t *testing.T) {
 	}
 	data, _ := json.Marshal(evt)
 
-	h := NewHandler(store, us, pub, keyStore, false)
+	h := NewHandler(store, us, pub, keyStore, defaultParentFetcher, false)
 	h.HandleServerBroadcast(context.Background(), data)
 
 	require.Len(t, pub.records, 1)
@@ -1858,7 +1904,7 @@ func TestHandleServerBroadcast_ThreadReplyAdded_PropagatesNewTlm(t *testing.T) {
 	data, err := json.Marshal(evt)
 	require.NoError(t, err)
 
-	h := NewHandler(store, us, pub, keyStore, false)
+	h := NewHandler(store, us, pub, keyStore, defaultParentFetcher, false)
 	h.HandleServerBroadcast(context.Background(), data)
 
 	require.Len(t, pub.records, 1)
@@ -1897,7 +1943,7 @@ func TestHandleServerBroadcast_ThreadReplyAdded_NilNewTlm_NoFieldInOutput(t *tes
 	data, err := json.Marshal(evt)
 	require.NoError(t, err)
 
-	h := NewHandler(store, us, pub, keyStore, false)
+	h := NewHandler(store, us, pub, keyStore, defaultParentFetcher, false)
 	h.HandleServerBroadcast(context.Background(), data)
 
 	require.Len(t, pub.records, 1)
@@ -1935,7 +1981,7 @@ func TestHandleServerBroadcast_ThreadReplyAdded_MissingNewTCount_Skips(t *testin
 	}
 	data, _ := json.Marshal(evt)
 
-	h := NewHandler(store, us, pub, keyStore, false)
+	h := NewHandler(store, us, pub, keyStore, defaultParentFetcher, false)
 	h.HandleServerBroadcast(context.Background(), data)
 	assert.Empty(t, pub.records)
 }
@@ -1964,7 +2010,7 @@ func TestHandleServerBroadcast_ThreadReplyAdded_MissingParentMessageID_Skips(t *
 	}
 	data, _ := json.Marshal(evt)
 
-	h := NewHandler(store, us, pub, keyStore, false)
+	h := NewHandler(store, us, pub, keyStore, defaultParentFetcher, false)
 	h.HandleServerBroadcast(context.Background(), data)
 	assert.Empty(t, pub.records)
 }
@@ -1996,7 +2042,7 @@ func TestHandleServerBroadcast_ThreadReplyAdded_GetRoomError_LogsAndContinues(t 
 	data, _ := json.Marshal(evt)
 
 	// HandleServerBroadcast is fire-and-forget: errors are logged, not returned.
-	h := NewHandler(store, us, pub, keyStore, false)
+	h := NewHandler(store, us, pub, keyStore, defaultParentFetcher, false)
 	h.HandleServerBroadcast(context.Background(), data)
 	assert.Empty(t, pub.records)
 }
@@ -2035,7 +2081,7 @@ func TestHandleThreadCreated_ChannelRoom_FansOutToFollowers(t *testing.T) {
 	}
 	data, _ := json.Marshal(evt)
 
-	h := NewHandler(store, us, pub, keyStore, false)
+	h := NewHandler(store, us, pub, keyStore, defaultParentFetcher, false)
 	require.NoError(t, h.HandleMessage(context.Background(), data))
 
 	// bob and carol (followers) + alice (sender) included for multi-device parity
@@ -2084,11 +2130,61 @@ func TestHandleThreadCreated_ChannelRoom_NoFollowers_SendsToSenderOnly(t *testin
 	}
 	data, _ := json.Marshal(evt)
 
-	h := NewHandler(store, us, pub, keyStore, false)
+	h := NewHandler(store, us, pub, keyStore, defaultParentFetcher, false)
 	require.NoError(t, h.HandleMessage(context.Background(), data))
 	// No other followers → sender still receives their own echo (multi-device parity).
 	require.Len(t, pub.records, 1)
 	assert.Equal(t, subject.UserRoomEvent("alice"), pub.records[0].subject)
+}
+
+// Race regression guard: on the first reply thread_rooms may not exist yet, so
+// GetThreadFollowers returns empty and replyAccounts is unavailable. The parent
+// author (fetched from history-service) must still receive the reply — they are
+// never in replyAccounts on the first reply, so an empty follower set must not drop
+// them.
+func TestHandleThreadCreated_ChannelRoom_ParentAuthorFannedOutBeforeThreadRoomExists(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	store := NewMockStore(ctrl)
+	us := NewMockUserStore(ctrl)
+	pub := &mockPublisher{}
+	keyStore := NewMockRoomKeyProvider(ctrl)
+
+	msgTime := time.Date(2026, 4, 1, 10, 0, 0, 0, time.UTC)
+	parentAt := msgTime.Add(-time.Hour)
+
+	// thread_rooms not created yet → no followers; parent authored by carol.
+	store.EXPECT().GetRoomMeta(gomock.Any(), "r1").Return(metaOf(testChannelRoom), nil)
+	store.EXPECT().GetThreadFollowers(gomock.Any(), "parent-1").Return(map[string]struct{}{}, nil)
+	us.EXPECT().FindUsersByAccounts(gomock.Any(), []string{"alice"}).Return([]model.User{testUsers[0]}, nil)
+	parentFetcher := stubParentFetcher{info: &ParentMessageInfo{SenderAccount: "carol", CreatedAt: parentAt}}
+
+	evt := model.MessageEvent{
+		Event:     model.EventCreated,
+		SiteID:    "site-a",
+		Timestamp: msgTime.UnixMilli(),
+		Message: model.Message{
+			ID:                    "reply-1",
+			RoomID:                "r1",
+			UserID:                "u-alice",
+			UserAccount:           "alice",
+			Content:               "a plain thread reply with no mentions",
+			CreatedAt:             msgTime,
+			ThreadParentMessageID: "parent-1",
+			TShow:                 false,
+		},
+	}
+	data, _ := json.Marshal(evt)
+
+	h := NewHandler(store, us, pub, keyStore, parentFetcher, false)
+	require.NoError(t, h.HandleMessage(context.Background(), data))
+
+	got := map[string]bool{}
+	for _, r := range pub.records {
+		got[r.subject] = true
+	}
+	require.Len(t, pub.records, 2)
+	assert.True(t, got[subject.UserRoomEvent("alice")], "reply sender receives their own echo")
+	assert.True(t, got[subject.UserRoomEvent("carol")], "parent author receives the reply despite empty replyAccounts")
 }
 
 func TestHandleThreadCreated_DMRoom_FansOutToAllMembers(t *testing.T) {
@@ -2121,7 +2217,7 @@ func TestHandleThreadCreated_DMRoom_FansOutToAllMembers(t *testing.T) {
 	}
 	data, _ := json.Marshal(evt)
 
-	h := NewHandler(store, us, pub, keyStore, false)
+	h := NewHandler(store, us, pub, keyStore, defaultParentFetcher, false)
 	require.NoError(t, h.HandleMessage(context.Background(), data))
 
 	require.Len(t, pub.records, 2, "DM thread reply fans out to all members")
@@ -2133,7 +2229,7 @@ func TestHandleThreadCreated_DMRoom_FansOutToAllMembers(t *testing.T) {
 	assert.True(t, subjects[subject.UserRoomEvent("bob")])
 }
 
-func TestHandleThreadCreated_DMRoom_WithMention_SetsMentions(t *testing.T) {
+func TestHandleThreadCreated_DMRoom_WithMention_NoSubscriptionWrite(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	store := NewMockStore(ctrl)
 	us := NewMockUserStore(ctrl)
@@ -2142,8 +2238,11 @@ func TestHandleThreadCreated_DMRoom_WithMention_SetsMentions(t *testing.T) {
 
 	msgTime := time.Date(2026, 4, 1, 11, 0, 0, 0, time.UTC)
 
+	// DM thread-reply mention badges are owned entirely by message-worker
+	// (markThreadMentions on the thread_subscriptions row); broadcast-worker touches
+	// no subscription here. SetSubscriptionMentions (room sub) must NOT be called —
+	// no EXPECT registered.
 	store.EXPECT().GetRoomMeta(gomock.Any(), "dm-1").Return(metaOf(testDMRoom), nil)
-	store.EXPECT().SetSubscriptionMentions(gomock.Any(), "dm-1", []string{"bob"}).Return(nil)
 	store.EXPECT().ListSubscriptions(gomock.Any(), "dm-1").Return(testDMSubs, nil)
 	us.EXPECT().FindUsersByAccounts(gomock.Any(), []string{"alice", "bob"}).Return(testUsers, nil)
 
@@ -2164,9 +2263,58 @@ func TestHandleThreadCreated_DMRoom_WithMention_SetsMentions(t *testing.T) {
 	}
 	data, _ := json.Marshal(evt)
 
-	h := NewHandler(store, us, pub, keyStore, false)
+	h := NewHandler(store, us, pub, keyStore, defaultParentFetcher, false)
 	require.NoError(t, h.HandleMessage(context.Background(), data))
 	require.Len(t, pub.records, 2)
+}
+
+func TestHandleThreadCreated_ChannelExcludesRestrictedAndNonMemberMentions(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	store := NewMockStore(ctrl)
+	us := NewMockUserStore(ctrl)
+	pub := &mockPublisher{}
+	keyStore := NewMockRoomKeyProvider(ctrl)
+
+	parentAt := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	joinedAfter := parentAt.Add(time.Hour)
+	msgTime := parentAt.Add(2 * time.Hour)
+
+	// bob: member, full access → included. carol: member, joined after parent → excluded.
+	// dave: absent from the map → non-member → excluded.
+	store.EXPECT().GetRoomMeta(gomock.Any(), "room-1").Return(metaOf(testChannelRoom), nil)
+	store.EXPECT().GetHistorySharedSince(gomock.Any(), "room-1", gomock.Any()).
+		Return(map[string]*time.Time{"bob": nil, "carol": &joinedAfter}, nil)
+	store.EXPECT().GetThreadFollowers(gomock.Any(), "parent-1").Return(map[string]struct{}{}, nil)
+	us.EXPECT().FindUsersByAccounts(gomock.Any(), gomock.Any()).Return(testUsers, nil)
+
+	evt := model.MessageEvent{
+		Event:     model.EventCreated,
+		SiteID:    "site-a",
+		Timestamp: msgTime.UnixMilli(),
+		Message: model.Message{
+			ID:                    "reply-1",
+			RoomID:                "room-1",
+			UserID:                "u-alice",
+			UserAccount:           "alice",
+			Content:               "@bob @carol @dave hi",
+			CreatedAt:             msgTime,
+			ThreadParentMessageID: "parent-1",
+			TShow:                 false,
+		},
+	}
+	data, _ := json.Marshal(evt)
+
+	h := NewHandler(store, us, pub, keyStore, stubParentFetcher{info: &ParentMessageInfo{CreatedAt: parentAt}}, false)
+	require.NoError(t, h.HandleMessage(context.Background(), data))
+
+	got := map[string]bool{}
+	for _, r := range pub.records {
+		got[r.subject] = true
+	}
+	assert.True(t, got[subject.UserRoomEvent("alice")], "sender receives their own echo")
+	assert.True(t, got[subject.UserRoomEvent("bob")], "unrestricted member mentionee receives the reply")
+	assert.False(t, got[subject.UserRoomEvent("carol")], "member who joined after the parent is excluded")
+	assert.False(t, got[subject.UserRoomEvent("dave")], "non-member mentionee is excluded")
 }
 
 func TestHandleThreadUpdated_ChannelRoom_FansOutToFollowers(t *testing.T) {
@@ -2205,7 +2353,7 @@ func TestHandleThreadUpdated_ChannelRoom_FansOutToFollowers(t *testing.T) {
 	}
 	data, _ := json.Marshal(evt)
 
-	h := NewHandler(store, us, pub, keyStore, false)
+	h := NewHandler(store, us, pub, keyStore, defaultParentFetcher, false)
 	require.NoError(t, h.HandleMessage(context.Background(), data))
 
 	// bob and carol (followers) + alice (sender) included for multi-device parity
@@ -2224,6 +2372,105 @@ func TestHandleThreadUpdated_ChannelRoom_FansOutToFollowers(t *testing.T) {
 	assert.True(t, subjects[subject.UserRoomEvent("alice")])
 	assert.True(t, subjects[subject.UserRoomEvent("bob")])
 	assert.True(t, subjects[subject.UserRoomEvent("carol")])
+}
+
+func TestHandleThreadUpdated_ChannelExcludesRestrictedAndNonMemberMentions(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	store := NewMockStore(ctrl)
+	us := NewMockUserStore(ctrl)
+	pub := &mockPublisher{}
+	keyStore := NewMockRoomKeyProvider(ctrl)
+
+	parentAt := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	joinedAfter := parentAt.Add(time.Hour)
+	msgTime := parentAt.Add(2 * time.Hour)
+	editedAt := msgTime.Add(time.Minute)
+
+	room := &model.Room{ID: "r1", Type: model.RoomTypeChannel, SiteID: "site-a"}
+	store.EXPECT().GetRoom(gomock.Any(), "r1").Return(room, nil)
+	// bob: member full access → included. carol: joined after parent → excluded.
+	// dave: absent → non-member → excluded.
+	store.EXPECT().GetHistorySharedSince(gomock.Any(), "r1", gomock.Any()).
+		Return(map[string]*time.Time{"bob": nil, "carol": &joinedAfter}, nil)
+	store.EXPECT().GetThreadFollowers(gomock.Any(), "parent-1").Return(map[string]struct{}{}, nil)
+
+	evt := model.MessageEvent{
+		Event:     model.EventUpdated,
+		SiteID:    "site-a",
+		Timestamp: editedAt.UnixMilli(),
+		Message: model.Message{
+			ID:                    "reply-1",
+			RoomID:                "r1",
+			UserAccount:           "alice",
+			Content:               "@bob @carol @dave hi",
+			CreatedAt:             msgTime,
+			EditedAt:              &editedAt,
+			UpdatedAt:             &editedAt,
+			ThreadParentMessageID: "parent-1",
+			TShow:                 false,
+		},
+	}
+	data, _ := json.Marshal(evt)
+
+	h := NewHandler(store, us, pub, keyStore, stubParentFetcher{info: &ParentMessageInfo{CreatedAt: parentAt}}, false)
+	require.NoError(t, h.HandleMessage(context.Background(), data))
+
+	got := map[string]bool{}
+	for _, r := range pub.records {
+		got[r.subject] = true
+	}
+	assert.True(t, got[subject.UserRoomEvent("alice")], "sender receives their own echo")
+	assert.True(t, got[subject.UserRoomEvent("bob")], "unrestricted member mentionee receives the edit")
+	assert.False(t, got[subject.UserRoomEvent("carol")], "member who joined after the parent is excluded")
+	assert.False(t, got[subject.UserRoomEvent("dave")], "non-member mentionee is excluded")
+}
+
+func TestHandleThreadDeleted_ChannelExcludesRestrictedAndNonMemberMentions(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	store := NewMockStore(ctrl)
+	us := NewMockUserStore(ctrl)
+	pub := &mockPublisher{}
+	keyStore := NewMockRoomKeyProvider(ctrl)
+
+	parentAt := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	joinedAfter := parentAt.Add(time.Hour)
+	msgTime := parentAt.Add(2 * time.Hour)
+	deletedAt := msgTime.Add(time.Minute)
+
+	room := &model.Room{ID: "r1", Type: model.RoomTypeChannel, SiteID: "site-a"}
+	store.EXPECT().GetRoom(gomock.Any(), "r1").Return(room, nil)
+	store.EXPECT().GetHistorySharedSince(gomock.Any(), "r1", gomock.Any()).
+		Return(map[string]*time.Time{"bob": nil, "carol": &joinedAfter}, nil)
+	store.EXPECT().GetThreadFollowers(gomock.Any(), "parent-1").Return(map[string]struct{}{}, nil)
+
+	evt := model.MessageEvent{
+		Event:     model.EventDeleted,
+		SiteID:    "site-a",
+		Timestamp: deletedAt.UnixMilli(),
+		Message: model.Message{
+			ID:                    "reply-1",
+			RoomID:                "r1",
+			UserAccount:           "alice",
+			Content:               "@bob @carol @dave hi",
+			CreatedAt:             msgTime,
+			UpdatedAt:             &deletedAt,
+			ThreadParentMessageID: "parent-1",
+			TShow:                 false,
+		},
+	}
+	data, _ := json.Marshal(evt)
+
+	h := NewHandler(store, us, pub, keyStore, stubParentFetcher{info: &ParentMessageInfo{CreatedAt: parentAt}}, false)
+	require.NoError(t, h.HandleMessage(context.Background(), data))
+
+	got := map[string]bool{}
+	for _, r := range pub.records {
+		got[r.subject] = true
+	}
+	assert.True(t, got[subject.UserRoomEvent("alice")], "sender receives their own echo")
+	assert.True(t, got[subject.UserRoomEvent("bob")], "unrestricted member mentionee receives the delete")
+	assert.False(t, got[subject.UserRoomEvent("carol")], "member who joined after the parent is excluded")
+	assert.False(t, got[subject.UserRoomEvent("dave")], "non-member mentionee is excluded")
 }
 
 func TestHandleThreadUpdated_ChannelRoom_GetThreadFollowersError(t *testing.T) {
@@ -2258,7 +2505,7 @@ func TestHandleThreadUpdated_ChannelRoom_GetThreadFollowersError(t *testing.T) {
 	}
 	data, _ := json.Marshal(evt)
 
-	h := NewHandler(store, us, pub, keyStore, false)
+	h := NewHandler(store, us, pub, keyStore, defaultParentFetcher, false)
 	err := h.HandleMessage(context.Background(), data)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "thread fan-out")
@@ -2301,7 +2548,7 @@ func TestHandleThreadUpdated_DMRoom_FansOutToAllMembers(t *testing.T) {
 	}
 	data, _ := json.Marshal(evt)
 
-	h := NewHandler(store, us, pub, keyStore, false)
+	h := NewHandler(store, us, pub, keyStore, defaultParentFetcher, false)
 	require.NoError(t, h.HandleMessage(context.Background(), data))
 
 	require.Len(t, pub.records, 2)
@@ -2353,7 +2600,7 @@ func TestHandleThreadDeleted_ChannelRoom_FansOutToFollowers(t *testing.T) {
 	}
 	data, _ := json.Marshal(evt)
 
-	h := NewHandler(store, us, pub, keyStore, false)
+	h := NewHandler(store, us, pub, keyStore, defaultParentFetcher, false)
 	require.NoError(t, h.HandleMessage(context.Background(), data))
 
 	// bob and carol (followers) + alice (sender) included for multi-device parity
@@ -2406,7 +2653,7 @@ func TestHandleThreadDeleted_ChannelRoom_WithBadgeUpdate(t *testing.T) {
 	}
 	data, _ := json.Marshal(evt)
 
-	h := NewHandler(store, us, pub, keyStore, false)
+	h := NewHandler(store, us, pub, keyStore, defaultParentFetcher, false)
 	require.NoError(t, h.HandleMessage(context.Background(), data))
 
 	// delete events to bob (follower) + alice (sender, multi-device parity) + 1 badge update (to room channel)
@@ -2466,7 +2713,7 @@ func TestHandleThreadDeleted_DMRoom_FansOutToAllMembers(t *testing.T) {
 	}
 	data, _ := json.Marshal(evt)
 
-	h := NewHandler(store, us, pub, keyStore, false)
+	h := NewHandler(store, us, pub, keyStore, defaultParentFetcher, false)
 	require.NoError(t, h.HandleMessage(context.Background(), data))
 
 	require.Len(t, pub.records, 2)
@@ -2489,7 +2736,7 @@ func TestPublishToThreadAccounts_AllFail_ReturnsError(t *testing.T) {
 	us := NewMockUserStore(ctrl)
 	keyStore := NewMockRoomKeyProvider(ctrl)
 
-	h := NewHandler(store, us, failPub, keyStore, false)
+	h := NewHandler(store, us, failPub, keyStore, defaultParentFetcher, false)
 	err := h.publishToThreadAccounts(context.Background(), []string{"alice", "bob"}, []byte(`{}`), "parent-1")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "all 2 thread account publishes failed")
@@ -2504,7 +2751,7 @@ func TestPublishToThreadAccounts_PartialFail_ReturnsNil(t *testing.T) {
 	us := NewMockUserStore(ctrl)
 	keyStore := NewMockRoomKeyProvider(ctrl)
 
-	h := NewHandler(store, us, failPub, keyStore, false)
+	h := NewHandler(store, us, failPub, keyStore, defaultParentFetcher, false)
 	// alice succeeds, bob fails — partial failure must not trigger redelivery.
 	err := h.publishToThreadAccounts(context.Background(), []string{"alice", "bob"}, []byte(`{}`), "parent-1")
 	require.NoError(t, err)
@@ -2517,7 +2764,7 @@ func TestPublishToThreadAccounts_Empty_NoOp(t *testing.T) {
 	pub := &mockPublisher{}
 	keyStore := NewMockRoomKeyProvider(ctrl)
 
-	h := NewHandler(store, us, pub, keyStore, false)
+	h := NewHandler(store, us, pub, keyStore, defaultParentFetcher, false)
 	require.NoError(t, h.publishToThreadAccounts(context.Background(), nil, []byte(`{}`), "parent-1"))
 	assert.Empty(t, pub.records)
 }
@@ -2564,7 +2811,7 @@ func TestHandleCreated_NonRename_NoRoomRenamedEvent(t *testing.T) {
 	store.EXPECT().GetRoomMeta(gomock.Any(), "room-1").Return(metaOf(testChannelRoom), nil)
 	us.EXPECT().FindUsersByAccounts(gomock.Any(), []string{"sender"}).Return(nil, nil)
 
-	h := NewHandler(store, us, pub, keyStore, false)
+	h := NewHandler(store, us, pub, keyStore, defaultParentFetcher, false)
 	require.NoError(t, h.HandleMessage(context.Background(), makeMessageEvent("room-1", "hello", msgTime)))
 
 	require.Len(t, pub.records, 1, "normal message: exactly one publish")
@@ -2586,7 +2833,7 @@ func TestHandleCreated_AdvancesSenderLastSeen(t *testing.T) {
 	store.EXPECT().GetRoomMeta(gomock.Any(), "room-1").Return(metaOf(testChannelRoom), nil)
 	us.EXPECT().FindUsersByAccounts(gomock.Any(), []string{"sender"}).Return(nil, nil)
 
-	h := NewHandler(store, us, pub, keyStore, false)
+	h := NewHandler(store, us, pub, keyStore, defaultParentFetcher, false)
 	require.NoError(t, h.HandleMessage(context.Background(), makeMessageEvent("room-1", "hello", msgTime)))
 }
 
@@ -2605,6 +2852,6 @@ func TestHandleCreated_AdvanceSenderLastSeen_FailureSwallowed(t *testing.T) {
 	store.EXPECT().GetRoomMeta(gomock.Any(), "room-1").Return(metaOf(testChannelRoom), nil)
 	us.EXPECT().FindUsersByAccounts(gomock.Any(), []string{"sender"}).Return(nil, nil)
 
-	h := NewHandler(store, us, pub, keyStore, false)
+	h := NewHandler(store, us, pub, keyStore, defaultParentFetcher, false)
 	require.NoError(t, h.HandleMessage(context.Background(), makeMessageEvent("room-1", "hello", msgTime)))
 }

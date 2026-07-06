@@ -151,36 +151,32 @@ func TestMongoThreadFollowers_Lookup(t *testing.T) {
 
 	tf := newMongoThreadFollowers(col)
 
-	t.Run("returns replyAccounts and parent createdAt for parent", func(t *testing.T) {
+	t.Run("returns replyAccounts for parent", func(t *testing.T) {
 		got, err := tf.Lookup(ctx, "parent-1")
 		require.NoError(t, err)
 		assert.Len(t, got.Followers, 2)
 		assert.Contains(t, got.Followers, "alice")
 		assert.Contains(t, got.Followers, "bob")
 		assert.NotContains(t, got.Followers, "carol")
-		require.NotNil(t, got.ParentCreatedAt, "threadParentCreatedAt must be read from the doc")
-		assert.True(t, parentCreatedAt.Equal(*got.ParentCreatedAt), "parent createdAt round-trips")
 	})
 
-	t.Run("missing threadParentCreatedAt yields nil ParentCreatedAt", func(t *testing.T) {
+	t.Run("returns replyAccounts for a thread with no parent createdAt column", func(t *testing.T) {
 		got, err := tf.Lookup(ctx, "parent-2")
 		require.NoError(t, err)
 		assert.Len(t, got.Followers, 1)
-		assert.Nil(t, got.ParentCreatedAt, "unset timestamp must stay nil")
+		assert.Contains(t, got.Followers, "carol")
 	})
 
 	t.Run("empty parentMessageID returns empty set", func(t *testing.T) {
 		got, err := tf.Lookup(ctx, "")
 		require.NoError(t, err)
 		assert.Empty(t, got.Followers)
-		assert.Nil(t, got.ParentCreatedAt)
 	})
 
 	t.Run("unknown parent returns empty set", func(t *testing.T) {
 		got, err := tf.Lookup(ctx, "no-such-parent")
 		require.NoError(t, err)
 		assert.Empty(t, got.Followers)
-		assert.Nil(t, got.ParentCreatedAt)
 	})
 }
 

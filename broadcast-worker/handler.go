@@ -42,24 +42,41 @@ type RoomKeyProvider interface {
 	Get(ctx context.Context, roomID string) (*roomkeystore.VersionedKeyPair, error)
 }
 
-// Handler processes MESSAGES_CANONICAL messages and broadcasts room events.
-type Handler struct {
-	store     Store
-	userStore userstore.UserStore
-	pub       Publisher
-	keyStore  RoomKeyProvider
-	encrypt   bool
-	encoder   *roomcrypto.Encoder
+// ParentMessageInfo is the subset of a thread's parent message the channel fan-out
+// needs: the author (always a recipient) and the creation time (feeds the mention
+// visibility gate).
+type ParentMessageInfo struct {
+	SenderAccount string
+	CreatedAt     time.Time
 }
 
-func NewHandler(store Store, userStore userstore.UserStore, pub Publisher, keyStore RoomKeyProvider, encrypt bool) *Handler {
+// ParentFetcher resolves a thread's parent message from history-service. The parent
+// pre-exists (a reply targets it), so this is race-free — unlike thread_rooms, which
+// message-worker may not have created yet on the first reply.
+type ParentFetcher interface {
+	FetchParent(ctx context.Context, account, roomID, siteID, messageID string) (*ParentMessageInfo, error)
+}
+
+// Handler processes MESSAGES_CANONICAL messages and broadcasts room events.
+type Handler struct {
+	store         Store
+	userStore     userstore.UserStore
+	pub           Publisher
+	keyStore      RoomKeyProvider
+	parentFetcher ParentFetcher
+	encrypt       bool
+	encoder       *roomcrypto.Encoder
+}
+
+func NewHandler(store Store, userStore userstore.UserStore, pub Publisher, keyStore RoomKeyProvider, parentFetcher ParentFetcher, encrypt bool) *Handler {
 	return &Handler{
-		store:     store,
-		userStore: userStore,
-		pub:       pub,
-		keyStore:  keyStore,
-		encrypt:   encrypt,
-		encoder:   roomcrypto.NewEncoder(),
+		store:         store,
+		userStore:     userStore,
+		pub:           pub,
+		keyStore:      keyStore,
+		parentFetcher: parentFetcher,
+		encrypt:       encrypt,
+		encoder:       roomcrypto.NewEncoder(),
 	}
 }
 
@@ -206,11 +223,12 @@ func (h *Handler) handleThreadCreated(ctx context.Context, evt *model.MessageEve
 		return fmt.Errorf("get room meta %s: %w", msg.RoomID, err)
 	}
 
-	// Channel rooms: only thread subscribers and @-mentioned accounts receive the
-	// event. Fetch the subscriber list and build fanOut before any further work.
+	// Channel rooms: only thread followers and (history-gated) @-mentioned accounts
+	// receive the event. channelThreadFanOut applies the visibility gate and builds
+	// the recipient set.
 	var fanOut []string
 	if meta.Type == model.RoomTypeChannel {
-		fanOut, err = h.channelThreadFanOut(ctx, parentMsgID, msg.UserAccount, parsed.Accounts)
+		fanOut, err = h.channelThreadFanOut(ctx, msg.RoomID, evt.SiteID, parentMsgID, msg.UserAccount, parsed.Accounts)
 		if err != nil {
 			return fmt.Errorf("channel thread fan-out for parent %s: %w", parentMsgID, err)
 		}
@@ -252,14 +270,10 @@ func (h *Handler) handleThreadCreated(ctx context.Context, evt *model.MessageEve
 		}
 		return h.publishToThreadAccounts(ctx, fanOut, payload, parentMsgID)
 	case model.RoomTypeDM, model.RoomTypeBotDM:
-		// DM thread replies fan out to all members. @-mention badges are correct
-		// since DM members can see the reply. lastMsgAt is intentionally NOT
-		// updated: thread replies must not trigger hasUnread for non-participants.
-		if len(resolved.Accounts) > 0 {
-			if err := h.store.SetSubscriptionMentions(ctx, meta.ID, resolved.Accounts); err != nil {
-				return fmt.Errorf("set subscription mentions: %w", err)
-			}
-		}
+		// DM thread replies fan out to all members. The thread-sub mention badge is
+		// owned by message-worker (markThreadMentions), so broadcast-worker doesn't
+		// touch subscriptions here. lastMsgAt is intentionally NOT updated (would
+		// wrongly mark hasUnread for non-participants).
 		return h.publishDMEvents(ctx, meta, clientMsg, evt.Timestamp, resolved.Accounts)
 	default:
 		slog.WarnContext(ctx, "unknown room type, skipping thread fan-out",
@@ -314,7 +328,7 @@ func (h *Handler) handleThreadUpdated(ctx context.Context, evt *model.MessageEve
 	switch room.Type {
 	case model.RoomTypeChannel:
 		parsed := mention.Parse(msg.Content)
-		fanOut, err := h.channelThreadFanOut(ctx, parentMsgID, msg.UserAccount, parsed.Accounts)
+		fanOut, err := h.channelThreadFanOut(ctx, room.ID, room.SiteID, parentMsgID, msg.UserAccount, parsed.Accounts)
 		if err != nil {
 			return fmt.Errorf("channel thread fan-out for thread update of parent %s: %w", parentMsgID, err)
 		}
@@ -367,7 +381,7 @@ func (h *Handler) handleThreadDeleted(ctx context.Context, evt *model.MessageEve
 		// receive the delete. Only the channel path uses mentions; the DM path
 		// fans out to all members.
 		parsed := mention.Parse(msg.Content)
-		fanOut, err := h.channelThreadFanOut(ctx, parentMsgID, msg.UserAccount, parsed.Accounts)
+		fanOut, err := h.channelThreadFanOut(ctx, room.ID, room.SiteID, parentMsgID, msg.UserAccount, parsed.Accounts)
 		if err != nil {
 			return fmt.Errorf("channel thread fan-out for thread delete of parent %s: %w", parentMsgID, err)
 		}
@@ -952,7 +966,7 @@ func (h *Handler) publishToThreadAccounts(ctx context.Context, accounts []string
 // reply and silently drop the echo. followers (thread repliers) and
 // extraAccounts (@-mentioned users) are merged after, deduped. Bots are always
 // excluded.
-func threadFanOutAccounts(senderAccount string, followers map[string]struct{}, extraAccounts []string) []string {
+func threadFanOutAccounts(senderAccount, parentSenderAccount string, followers map[string]struct{}, extraAccounts []string) []string {
 	seen := map[string]struct{}{}
 	var fanOut []string
 	add := func(acc string) {
@@ -968,7 +982,8 @@ func threadFanOutAccounts(senderAccount string, followers map[string]struct{}, e
 		seen[acc] = struct{}{}
 		fanOut = append(fanOut, acc)
 	}
-	add(senderAccount) // author is a thread participant — include race-free
+	add(senderAccount)       // reply author — thread participant, include race-free
+	add(parentSenderAccount) // parent author — thread owner, always included, race-free
 	for acc := range followers {
 		add(acc)
 	}
@@ -978,16 +993,50 @@ func threadFanOutAccounts(senderAccount string, followers map[string]struct{}, e
 	return fanOut
 }
 
-// channelThreadFanOut resolves the deduplicated recipient list for a channel
-// thread event: it fetches the parent message's thread followers and merges
-// them with the @-mentioned accounts, excluding the sender. Shared by the
-// channel branch of every thread handler (created/updated/deleted).
-func (h *Handler) channelThreadFanOut(ctx context.Context, parentMsgID, sender string, mentions []string) ([]string, error) {
+// allowedThreadMentions filters mentions to room members whose history window admits
+// the thread parent (mentionVisible); non-members (absent from the window map) are
+// excluded. Returns nil for empty input.
+func (h *Handler) allowedThreadMentions(ctx context.Context, roomID string, mentions []string, parentCreatedAt *time.Time) ([]string, error) {
+	if len(mentions) == 0 {
+		return nil, nil
+	}
+	windows, err := h.store.GetHistorySharedSince(ctx, roomID, mentions)
+	if err != nil {
+		return nil, fmt.Errorf("get history windows for room %s: %w", roomID, err)
+	}
+	allowed := make([]string, 0, len(mentions))
+	for _, acc := range mentions {
+		hss, isMember := windows[acc]
+		// Exclude non-members (no room subscription) outright; keep a member only when
+		// their history window admits the thread's parent.
+		if !isMember || !mentionVisible(hss, parentCreatedAt) {
+			continue
+		}
+		allowed = append(allowed, acc)
+	}
+	return allowed, nil
+}
+
+// channelThreadFanOut builds the deduplicated channel recipient set: the reply sender
+// + the parent author (both included for multi-device sync / thread ownership, race-free)
+// + the parent's thread followers + history-gated @-mentions, bots excluded. The parent
+// is fetched from history-service (authoritative CreatedAt for the gate + author account);
+// a fetch error is returned so the caller NAKs and JetStream redelivers. The gate lives
+// here so no thread handler can bypass it.
+func (h *Handler) channelThreadFanOut(ctx context.Context, roomID, siteID, parentMsgID, sender string, mentions []string) ([]string, error) {
+	parent, err := h.parentFetcher.FetchParent(ctx, sender, roomID, siteID, parentMsgID)
+	if err != nil {
+		return nil, fmt.Errorf("fetch thread parent %s: %w", parentMsgID, err)
+	}
+	allowed, err := h.allowedThreadMentions(ctx, roomID, mentions, &parent.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
 	followers, err := h.store.GetThreadFollowers(ctx, parentMsgID)
 	if err != nil {
 		return nil, fmt.Errorf("get thread followers for parent %s: %w", parentMsgID, err)
 	}
-	return threadFanOutAccounts(sender, followers, mentions), nil
+	return threadFanOutAccounts(sender, parent.SenderAccount, followers, allowed), nil
 }
 
 // usersByAccount indexes a slice of users by their Account for O(1) lookup

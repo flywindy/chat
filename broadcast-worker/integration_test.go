@@ -82,7 +82,7 @@ func TestBroadcastWorker_ChannelRoom_Integration(t *testing.T) {
 	pub := &recordingPublisher{}
 	key := testRoomKey(t)
 	keyStore := &fakeRoomKeyProvider{pair: key}
-	handler := NewHandler(store, us, pub, keyStore, true)
+	handler := NewHandler(store, us, pub, keyStore, defaultParentFetcher, true)
 
 	msgTime := time.Now().UTC().Truncate(time.Millisecond)
 	evt := model.MessageEvent{
@@ -128,7 +128,7 @@ func TestBroadcastWorker_ChannelRoom_MentionAll_Integration(t *testing.T) {
 	pub := &recordingPublisher{}
 	key := testRoomKey(t)
 	keyStore := &fakeRoomKeyProvider{pair: key}
-	handler := NewHandler(store, us, pub, keyStore, true)
+	handler := NewHandler(store, us, pub, keyStore, defaultParentFetcher, true)
 
 	msgTime := time.Now().UTC().Truncate(time.Millisecond)
 	evt := model.MessageEvent{
@@ -168,7 +168,7 @@ func TestBroadcastWorker_ChannelRoom_IndividualMention_Integration(t *testing.T)
 	pub := &recordingPublisher{}
 	key := testRoomKey(t)
 	keyStore := &fakeRoomKeyProvider{pair: key}
-	handler := NewHandler(store, us, pub, keyStore, true)
+	handler := NewHandler(store, us, pub, keyStore, defaultParentFetcher, true)
 
 	msgTime := time.Now().UTC().Truncate(time.Millisecond)
 	evt := model.MessageEvent{
@@ -218,7 +218,7 @@ func TestBroadcastWorker_DMRoom_Integration(t *testing.T) {
 	us := userstore.NewMongoStore(db.Collection("users"))
 	pub := &recordingPublisher{}
 	keyStore := &fakeRoomKeyProvider{pair: nil}
-	handler := NewHandler(store, us, pub, keyStore, true)
+	handler := NewHandler(store, us, pub, keyStore, defaultParentFetcher, true)
 
 	msgTime := time.Now().UTC().Truncate(time.Millisecond)
 	evt := model.MessageEvent{
@@ -280,7 +280,7 @@ func TestBroadcastWorker_ChannelRoom_EncryptionDisabled_Integration(t *testing.T
 	pub := &recordingPublisher{}
 
 	// nil keyStore — encryption is disabled, handler must not consult it
-	handler := NewHandler(store, us, pub, nil, false)
+	handler := NewHandler(store, us, pub, nil, defaultParentFetcher, false)
 
 	msgTime := time.Now().UTC().Truncate(time.Millisecond)
 	evt := model.MessageEvent{
@@ -331,7 +331,7 @@ func TestBroadcastWorker_PersistsLastMessage_Integration(t *testing.T) {
 	require.NoError(t, err)
 
 	pub := &recordingPublisher{}
-	h := NewHandler(cached, userstore.NewMongoStore(db.Collection("users")), pub, &fakeRoomKeyProvider{}, false)
+	h := NewHandler(cached, userstore.NewMongoStore(db.Collection("users")), pub, &fakeRoomKeyProvider{}, defaultParentFetcher, false)
 
 	msgTime := time.Date(2026, 5, 18, 12, 0, 0, 0, time.UTC)
 	evt := model.MessageEvent{
@@ -518,4 +518,32 @@ func TestAdvanceSubscriptionLastSeen_OnlyAdvances(t *testing.T) {
 
 	// Missing subscription is a best-effort no-op.
 	require.NoError(t, store.AdvanceSubscriptionLastSeen(ctx, "no-room", "nobody", t2))
+}
+
+func TestBroadcastWorker_GetHistorySharedSince_Integration(t *testing.T) {
+	db := setupMongo(t)
+	ctx := context.Background()
+	store := NewMongoStore(db.Collection("rooms"), db.Collection("subscriptions"), db.Collection("thread_rooms"), nil, 0)
+
+	shared := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	_, err := db.Collection("subscriptions").InsertMany(ctx, []interface{}{
+		model.Subscription{ID: "hss1", User: model.SubscriptionUser{ID: "u-al", Account: "alice"}, RoomID: "r-hss", HistorySharedSince: &shared},
+		model.Subscription{ID: "hss2", User: model.SubscriptionUser{ID: "u-bo", Account: "bob"}, RoomID: "r-hss"},
+	})
+	require.NoError(t, err)
+
+	got, err := store.GetHistorySharedSince(ctx, "r-hss", []string{"alice", "bob", "carol"})
+	require.NoError(t, err)
+	require.NotNil(t, got["alice"])
+	assert.Equal(t, shared.UnixMilli(), got["alice"].UTC().UnixMilli())
+	bobWindow, bobPresent := got["bob"]
+	require.True(t, bobPresent, "member with a nil window must still be present in the map")
+	assert.Nil(t, bobWindow, "member without window decodes to nil")
+	_, present := got["carol"]
+	assert.False(t, present, "non-member is absent from the map")
+
+	// Empty accounts short-circuits without a query.
+	empty, err := store.GetHistorySharedSince(ctx, "r-hss", nil)
+	require.NoError(t, err)
+	assert.Empty(t, empty)
 }

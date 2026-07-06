@@ -233,6 +233,7 @@ room types; bots consume messages through a separate backend path.
 | `type` | string | Always `"new_message"`. |
 | `roomId` | string | |
 | `timestamp` | number | Epoch ms (UTC). Event publish time. |
+| `eventTimestamp` | number | Optional. Epoch ms (UTC). Canonical event time. |
 | `roomName` | string | |
 | `roomType` | string | `"channel"`, `"dm"`, etc. |
 | `siteId` | string | |
@@ -281,6 +282,7 @@ Channel example (encrypted):
   "type": "new_message",
   "roomId": "01970a4f8c2d7c9aQ",
   "timestamp": 1746518100123,
+  "eventTimestamp": 1746518100100,
   "roomName": "engineering-announcements",
   "roomType": "channel",
   "siteId": "siteA",
@@ -302,6 +304,7 @@ DM example (plaintext):
   "type": "new_message",
   "roomId": "alice___bob",
   "timestamp": 1746518100123,
+  "eventTimestamp": 1746518100100,
   "roomName": "alice, bob",
   "roomType": "dm",
   "siteId": "siteA",

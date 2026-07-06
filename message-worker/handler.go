@@ -500,13 +500,37 @@ func (h *Handler) buildThreadSubscription(msg *model.Message, threadRoomID, user
 // room's site (eventSiteID); the mentionee's home site (Participant.SiteID) is
 // used only for the cross-site inbox routing.
 func (h *Handler) markThreadMentions(ctx context.Context, msg *model.Message, threadRoomID, eventSiteID string, isMigration bool) error {
-	var mentionedAccounts []string
+	// Collect mention candidates (excluding @all and the sender) and their accounts
+	// in one pass; candidates hold pointers into msg.Mentions to avoid struct copies.
+	candidates := make([]*model.Participant, 0, len(msg.Mentions))
+	accounts := make([]string, 0, len(msg.Mentions))
 	for i := range msg.Mentions {
 		p := &msg.Mentions[i]
 		if p.Account == "all" {
 			continue
 		}
 		if p.UserID == msg.UserID {
+			continue
+		}
+		candidates = append(candidates, p)
+		accounts = append(accounts, p.Account)
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+
+	windows, err := h.threadStore.GetHistorySharedSince(ctx, msg.RoomID, accounts)
+	if err != nil {
+		return fmt.Errorf("get history windows for thread mentions: %w", err)
+	}
+
+	var mentionedAccounts []string
+	for _, p := range candidates {
+		hss, isMember := windows[p.Account]
+		// Skip non-members (no room subscription) and members whose history window
+		// starts after the thread's parent — neither may see the parent, so they are
+		// not subscribed, not inboxed, and not added as a follower.
+		if !isMember || !mentionVisible(hss, msg.ThreadParentMessageCreatedAt) {
 			continue
 		}
 		// Migrated replies skip the hasMention write + inbox (collections owns it); still collect accounts for replyAccounts.

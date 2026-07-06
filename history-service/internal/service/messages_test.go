@@ -1640,14 +1640,16 @@ func TestHistoryService_EditMessage_ThreadReply_CarriesThreadFields(t *testing.T
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, true, nil)
+	parentCreatedAt := time.Date(2026, 5, 10, 9, 0, 0, 0, time.UTC)
 	hydrated := &models.Message{
-		MessageID:      "reply-1",
-		RoomID:         "r1",
-		Sender:         models.Participant{Account: "u1", ID: "u1-id"},
-		CreatedAt:      time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC),
-		Msg:            "original reply",
-		ThreadParentID: "parent-1",
-		TShow:          false,
+		MessageID:             "reply-1",
+		RoomID:                "r1",
+		Sender:                models.Participant{Account: "u1", ID: "u1-id"},
+		CreatedAt:             time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC),
+		Msg:                   "original reply",
+		ThreadParentID:        "parent-1",
+		ThreadParentCreatedAt: &parentCreatedAt,
+		TShow:                 false,
 	}
 	msgs.EXPECT().GetMessageByID(gomock.Any(), "reply-1").Return(hydrated, nil)
 	msgs.EXPECT().UpdateMessageContent(gomock.Any(), hydrated, "edited reply", gomock.Any()).Return(nil)
@@ -1659,6 +1661,8 @@ func TestHistoryService_EditMessage_ThreadReply_CarriesThreadFields(t *testing.T
 			require.NoError(t, json.Unmarshal(data, &evt))
 			assert.Equal(t, "parent-1", evt.Message.ThreadParentMessageID, "edit event must carry ThreadParentMessageID for thread routing")
 			assert.False(t, evt.Message.TShow, "edit event must carry TShow")
+			require.NotNil(t, evt.Message.ThreadParentMessageCreatedAt, "edit event must carry parent createdAt for the visibility gate")
+			assert.Equal(t, parentCreatedAt.UTC(), evt.Message.ThreadParentMessageCreatedAt.UTC())
 			return nil
 		})
 
@@ -1676,14 +1680,16 @@ func TestHistoryService_DeleteMessage_ThreadReply_CarriesThreadFields(t *testing
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, true, nil)
+	parentCreatedAt := time.Date(2026, 5, 10, 9, 0, 0, 0, time.UTC)
 	hydrated := &models.Message{
-		MessageID:      "reply-1",
-		RoomID:         "r1",
-		Sender:         models.Participant{Account: "u1", ID: "u1-id"},
-		CreatedAt:      time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC),
-		Msg:            "reply",
-		ThreadParentID: "parent-1",
-		TShow:          false,
+		MessageID:             "reply-1",
+		RoomID:                "r1",
+		Sender:                models.Participant{Account: "u1", ID: "u1-id"},
+		CreatedAt:             time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC),
+		Msg:                   "reply",
+		ThreadParentID:        "parent-1",
+		ThreadParentCreatedAt: &parentCreatedAt,
+		TShow:                 false,
 	}
 	msgs.EXPECT().GetMessageByID(gomock.Any(), "reply-1").Return(hydrated, nil)
 	msgs.EXPECT().
@@ -1699,6 +1705,8 @@ func TestHistoryService_DeleteMessage_ThreadReply_CarriesThreadFields(t *testing
 			require.NoError(t, json.Unmarshal(data, &evt))
 			assert.Equal(t, "parent-1", evt.Message.ThreadParentMessageID, "delete event must carry ThreadParentMessageID for thread routing")
 			assert.False(t, evt.Message.TShow, "delete event must carry TShow")
+			require.NotNil(t, evt.Message.ThreadParentMessageCreatedAt, "delete event must carry parent createdAt for the visibility gate")
+			assert.Equal(t, parentCreatedAt.UTC(), evt.Message.ThreadParentMessageCreatedAt.UTC())
 			return nil
 		})
 

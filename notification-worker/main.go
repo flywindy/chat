@@ -215,6 +215,7 @@ func main() {
 	handler := NewHandler(HandlerDeps{
 		Members:            memberLookup,
 		Followers:          newMongoThreadFollowers(threadRoomCol),
+		Parent:             newHistoryParentFetcher(nc),
 		Presence:           presence,
 		Hook:               noopVetoer{},
 		Emitter:            emitter,

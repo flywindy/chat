@@ -36,6 +36,7 @@ type RoomMetaGetter interface {
 type HandlerDeps struct {
 	Members            MemberCache
 	Followers          ThreadFollowerLister
+	Parent             ParentFetcher // resolves a thread's parent author + createdAt from history-service
 	Presence           PresenceSnapshotter
 	Hook               Vetoer
 	Emitter            Emitter
@@ -115,19 +116,30 @@ func (h *Handler) HandleMessage(ctx context.Context, data []byte) error {
 	isThreadOnlyReply := msg.ThreadParentMessageID != "" && !msg.TShow
 
 	var followers map[string]struct{}
-	// parentCreatedAt comes from thread_rooms (written by message-worker), not the
-	// event; nil (thread room not created yet) drives conservative suppression.
+	// parentCreatedAt + parentSenderAccount are read from history-service, not the
+	// event or thread_rooms: message-gatekeeper no longer carries the parent createdAt,
+	// and thread_rooms may not exist yet on the first reply. The parent pre-exists, so
+	// this fetch is race-free and authoritative for both the suppression gate and the
+	// parent-author recipient.
 	var parentCreatedAt *time.Time
+	var parentSenderAccount string
 	if isThreadOnlyReply {
-		// A clean miss returns empty followers + nil error (handled below as the
-		// first-reply race); an actual Mongo failure must NAK rather than silently
-		// ack and drop follower-only recipients and restricted-room filtering.
+		// A clean thread_rooms miss returns empty followers + nil error (the first-reply
+		// race); an actual Mongo failure must NAK rather than silently ack and drop
+		// follower-only recipients.
 		info, ferr := h.deps.Followers.Lookup(ctx, msg.ThreadParentMessageID)
 		if ferr != nil {
 			return fmt.Errorf("lookup thread room for parent %s: %w", msg.ThreadParentMessageID, ferr)
 		}
 		followers = info.Followers
-		parentCreatedAt = info.ParentCreatedAt
+		// The reply sender can always read the parent they replied to; fetch on their behalf.
+		parent, perr := h.deps.Parent.FetchParent(ctx, msg.UserAccount, msg.RoomID, evt.SiteID, msg.ThreadParentMessageID)
+		if perr != nil {
+			return fmt.Errorf("fetch thread parent %s: %w", msg.ThreadParentMessageID, perr)
+		}
+		pc := parent.CreatedAt
+		parentCreatedAt = &pc
+		parentSenderAccount = parent.SenderAccount
 	}
 
 	roomType := members[0].RoomType
@@ -157,6 +169,13 @@ func (h *Handler) HandleMessage(ctx context.Context, data []byte) error {
 
 		if isThreadOnlyReply {
 			_, follows := followers[m.Account]
+			// The parent author is always notified of replies to their own thread, even
+			// before thread_rooms exists (they aren't yet in replyAccounts). The restricted-
+			// room gate above still applies, but never excludes them — they were present
+			// when they authored the parent.
+			if m.Account == parentSenderAccount {
+				follows = true
+			}
 			if !follows && !mentioned {
 				continue
 			}

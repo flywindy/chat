@@ -171,3 +171,33 @@ func (m *mongoStore) GetThreadFollowers(ctx context.Context, parentMessageID str
 	}
 	return out, nil
 }
+
+func (m *mongoStore) GetHistorySharedSince(ctx context.Context, roomID string, accounts []string) (map[string]*time.Time, error) {
+	out := make(map[string]*time.Time, len(accounts))
+	if len(accounts) == 0 {
+		return out, nil
+	}
+	filter := bson.M{"roomId": roomID, "u.account": bson.M{"$in": accounts}}
+	opts := options.Find().SetProjection(bson.M{"u.account": 1, "historySharedSince": 1, "_id": 0})
+	cursor, err := m.subCol.Find(ctx, filter, opts)
+	if err != nil {
+		return nil, fmt.Errorf("query history windows for room %s: %w", roomID, err)
+	}
+	defer cursor.Close(ctx)
+	// Minimal decode shape: the projection returns only u.account + historySharedSince,
+	// so decode just those rather than the full model.SubscriptionUser (whose other
+	// fields would silently be zero-valued).
+	var rows []struct {
+		User struct {
+			Account string `bson:"account"`
+		} `bson:"u"`
+		HistorySharedSince *time.Time `bson:"historySharedSince"`
+	}
+	if err := cursor.All(ctx, &rows); err != nil {
+		return nil, fmt.Errorf("decode history windows: %w", err)
+	}
+	for i := range rows {
+		out[rows[i].User.Account] = rows[i].HistorySharedSince
+	}
+	return out, nil
+}

@@ -43,6 +43,10 @@ type ThreadStore interface {
 	// Used by paths that don't already update lastMsg (first-reply parent author,
 	// mention-only subscribers) so the field mirrors thread_subscriptions membership.
 	AddReplyAccounts(ctx context.Context, threadRoomID string, accounts []string) error
+	// GetHistorySharedSince returns each account's room-subscription historySharedSince
+	// (nil when unrestricted; absent from the map when the account has no subscription
+	// in the room — key-presence encodes membership).
+	GetHistorySharedSince(ctx context.Context, roomID string, accounts []string) (map[string]*time.Time, error)
 	// AdvanceThreadSubscriptionLastSeen advances the replier's own lastSeenAt: replying
 	// implies they've seen up to their own reply, keeping the thread read-floor
 	// (minUserLastSeenAt) from counting the replier against it (#396).

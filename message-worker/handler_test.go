@@ -492,6 +492,7 @@ func TestHandler_ProcessMessage(t *testing.T) {
 			mockUserStore := NewMockUserStore(ctrl)
 			mockThreadStore := NewMockThreadStore(ctrl)
 			mockThreadStore.EXPECT().AddReplyAccounts(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+			stubHistoryAllMembers(mockThreadStore)
 			// Thread replies resolve the parent createdAt from messages_by_id; default to
 			// found so cases proceed (the parent-row stamp is allowed but not asserted here).
 			mockStore.EXPECT().GetMessageCreatedAt(gomock.Any(), gomock.Any()).Return(parentCreatedAt, true, nil).AnyTimes()
@@ -1750,6 +1751,7 @@ func TestHandler_MarkThreadMentions_InboxPublishes(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			ts := NewMockThreadStore(ctrl)
 			ts.EXPECT().AddReplyAccounts(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+			stubHistoryAllMembers(ts)
 
 			expectedMarks := 0
 			for _, p := range tt.mentionees {
@@ -1802,6 +1804,7 @@ func TestHandler_MarkThreadMentions_InboxPublishError_NAKs(t *testing.T) {
 	ts := NewMockThreadStore(ctrl)
 	ts.EXPECT().AddReplyAccounts(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	ts.EXPECT().MarkThreadSubscriptionMention(gomock.Any(), gomock.Any()).Return(nil)
+	stubHistoryAllMembers(ts)
 
 	boom := errors.New("publish boom")
 	h := NewHandler(NewMockStore(ctrl), NewMockUserStore(ctrl), ts, "site-a",
@@ -1823,6 +1826,7 @@ func TestHandler_MarkThreadMentions_HasMentionInPayload(t *testing.T) {
 	ts := NewMockThreadStore(ctrl)
 	ts.EXPECT().AddReplyAccounts(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	ts.EXPECT().MarkThreadSubscriptionMention(gomock.Any(), gomock.Any()).Return(nil)
+	stubHistoryAllMembers(ts)
 
 	var captured []byte
 	h := NewHandler(NewMockStore(ctrl), NewMockUserStore(ctrl), ts, "site-a",
@@ -1845,6 +1849,53 @@ func TestHandler_MarkThreadMentions_HasMentionInPayload(t *testing.T) {
 	assert.True(t, sub.HasMention, "inbox-emitted ThreadSubscription must carry HasMention=true")
 	assert.Equal(t, "u-bob", sub.UserID)
 	assert.Equal(t, "site-a", sub.SiteID, "Subscription.SiteID is the room's site, not the mentionee's owner site")
+}
+
+// stubHistoryAllMembers makes GetHistorySharedSince treat every queried account as a
+// full-access member (nil window), so the history gate in markThreadMentions includes
+// them all. Used by thread-mention tests that predate the visibility gate.
+func stubHistoryAllMembers(ts *MockThreadStore) {
+	ts.EXPECT().GetHistorySharedSince(gomock.Any(), gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, _ string, accounts []string) (map[string]*time.Time, error) {
+			m := make(map[string]*time.Time, len(accounts))
+			for _, a := range accounts {
+				m[a] = nil
+			}
+			return m, nil
+		}).AnyTimes()
+}
+
+func TestHandler_MarkThreadMentions_SkipsRestrictedAndNonMembers(t *testing.T) {
+	parentAt := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	joinedAfter := parentAt.Add(time.Hour)
+	replyAt := parentAt.Add(2 * time.Hour)
+
+	ctrl := gomock.NewController(t)
+	ts := NewMockThreadStore(ctrl)
+
+	// alice: member, full access → kept. bob: member, joined after parent → skipped.
+	// carol: absent from the map → non-member → skipped.
+	ts.EXPECT().GetHistorySharedSince(gomock.Any(), "r1", gomock.Any()).
+		Return(map[string]*time.Time{"alice": nil, "bob": &joinedAfter}, nil)
+	// Only alice is subscribed and added to replyAccounts.
+	ts.EXPECT().MarkThreadSubscriptionMention(gomock.Any(), gomock.Cond(func(x any) bool {
+		return x.(*model.ThreadSubscription).UserAccount == "alice"
+	})).Return(nil)
+	ts.EXPECT().AddReplyAccounts(gomock.Any(), "tr-1", []string{"alice"}).Return(nil)
+
+	h := NewHandler(NewMockStore(ctrl), NewMockUserStore(ctrl), ts, "site-a",
+		func(_ context.Context, _ string, _ []byte, _ string) error { return nil })
+
+	msg := &model.Message{
+		ID: "msg-reply", RoomID: "r1", UserID: "u-sender", UserAccount: "sender",
+		CreatedAt: replyAt, ThreadParentMessageID: "msg-parent", ThreadParentMessageCreatedAt: &parentAt,
+		Mentions: []model.Participant{
+			{UserID: "u-al", Account: "alice", SiteID: "site-a"},
+			{UserID: "u-bo", Account: "bob", SiteID: "site-a"},
+			{UserID: "u-ca", Account: "carol", SiteID: "site-a"},
+		},
+	}
+	require.NoError(t, h.markThreadMentions(context.Background(), msg, "tr-1", "site-a", false))
 }
 
 // fakeJSMsg is a minimal jetstream.Msg test double that records whether Ack or
@@ -1943,6 +1994,7 @@ func TestHandler_HandleJetStreamMsg(t *testing.T) {
 			mockUserStore := NewMockUserStore(ctrl)
 			mockThreadStore := NewMockThreadStore(ctrl)
 			mockThreadStore.EXPECT().AddReplyAccounts(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+			stubHistoryAllMembers(mockThreadStore)
 			tt.setupMocks(mockStore, mockUserStore, mockThreadStore)
 
 			h := NewHandler(mockStore, mockUserStore, mockThreadStore, "site-a", func(_ context.Context, _ string, _ []byte, _ string) error {

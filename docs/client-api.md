@@ -2887,6 +2887,7 @@ The payload is flat (no zero-valued room fields):
 | `roomId` | string | |
 | `siteId` | string | |
 | `timestamp` | number | Epoch ms (UTC). Event publish time. |
+| `eventTimestamp` | number | Milliseconds since Unix epoch (UTC). When message-worker published the canonical event. Omitted for legacy events. |
 | `messageId` | string | The edited message's ID. |
 | `newContent` | string | Optional. New plaintext content. Present for DMs and unencrypted channels. Omitted for encrypted channels — see `encryptedNewContent`. |
 | `encryptedNewContent` | [EncryptedMessage](#encryptedmessage) | Optional. For encrypted channel rooms. Omitted otherwise. |
@@ -2900,6 +2901,7 @@ The payload is flat (no zero-valued room fields):
   "roomId": "01970a4f8c2d7c9aQ",
   "siteId": "siteA",
   "timestamp": 1746518700123,
+  "eventTimestamp": 1746518700100,
   "messageId": "01970a4f8c2d7c9aQRST",
   "newContent": "morning team — updated",
   "editedBy": "alice",
@@ -3349,6 +3351,7 @@ See [Error envelope](#6-error-envelope-reference). Common errors: `"messageId is
 | `roomId` | string | |
 | `siteId` | string | |
 | `timestamp` | number | Epoch ms (UTC). Event publish time. |
+| `eventTimestamp` | number | Milliseconds since Unix epoch (UTC). When message-worker published the canonical event. Omitted for legacy events. |
 | `messageId` | string | The reacted-to message's ID. |
 | `shortcode` | string | The bare reaction shortcode. |
 | `action` | string | `"added"` or `"removed"`. |
@@ -3362,6 +3365,7 @@ See [Error envelope](#6-error-envelope-reference). Common errors: `"messageId is
   "roomId": "01970a4f8c2d7c9aQ",
   "siteId": "site-a",
   "timestamp": 1746518900123,
+  "eventTimestamp": 1746518900100,
   "messageId": "01970a4f8c2d7c9aQRST",
   "shortcode": "acme_party",
   "action": "added",
@@ -4884,6 +4888,7 @@ A `RoomEvent`. Recipients: every client subscribed to the room (which includes t
 | `type` | string | Always `"new_message"`. |
 | `roomId` | string | |
 | `timestamp` | number | Epoch ms (UTC). Event publish time. |
+| `eventTimestamp` | number | Milliseconds since Unix epoch (UTC). When message-worker published the canonical event. Omitted for legacy events. |
 | `roomName` | string | |
 | `roomType` | string | `channel`, `dm`, etc. |
 | `siteId` | string | |
@@ -4929,6 +4934,7 @@ The canonical broadcast message (distinct from the history [Message schema](#mes
   "type": "new_message",
   "roomId": "01970a4f8c2d7c9aQ",
   "timestamp": 1746518100123,
+  "eventTimestamp": 1746518100100,
   "roomName": "engineering-announcements",
   "roomType": "channel",
   "siteId": "siteA",
@@ -4952,6 +4958,7 @@ A `RoomEvent` (same struct as above) published once per DM participant. Recipien
   "type": "new_message",
   "roomId": "alice___bob",
   "timestamp": 1746518100123,
+  "eventTimestamp": 1746518100100,
   "roomName": "alice, bob",
   "roomType": "dm",
   "siteId": "siteA",

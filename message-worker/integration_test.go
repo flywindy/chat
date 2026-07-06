@@ -636,6 +636,14 @@ func TestHandler_Integration_ThreadReplyWithMention(t *testing.T) {
 	})
 	require.NoError(t, err)
 
+	// Bob is a room member (has a subscription with no historySharedSince → full access).
+	// markThreadMentions only subscribes mentionees who are room members whose history
+	// window admits the parent; a mentionee with no subscription is excluded.
+	_, err = db.Collection("subscriptions").InsertOne(ctx, bson.M{
+		"_id": "sub-bob", "roomId": "r-mention", "u": bson.M{"_id": "u-bob", "account": "bob"},
+	})
+	require.NoError(t, err)
+
 	store := NewCassandraStore(cassSession, msgbucket.New(24*time.Hour), nil)
 	us := userstore.NewMongoStore(userCol)
 	ts := newThreadStoreMongo(db)
@@ -654,7 +662,7 @@ func TestHandler_Integration_ThreadReplyWithMention(t *testing.T) {
 	parentSender := &cassParticipant{ID: "u-parent", EngName: "Parent User", Account: "parent-user"}
 	require.NoError(t, store.SaveMessage(ctx, parentMsg, parentSender, "site-a"))
 
-	// Thread reply from replier that mentions @bob (non-participant).
+	// Thread reply from replier that mentions @bob (a room member).
 	replyEvt := model.MessageEvent{
 		Message: model.Message{
 			ID: "msg-reply-mention", RoomID: "r-mention", UserID: "u-replier", UserAccount: "replier",
@@ -705,6 +713,76 @@ func TestHandler_Integration_ThreadReplyWithMention(t *testing.T) {
 		})
 		require.NoError(t, err)
 		assert.Equal(t, int64(3), count)
+	})
+}
+
+// A mentionee with no room subscription is not a member and must not be
+// thread-subscribed (Option B: non-member mentions are excluded).
+func TestHandler_Integration_ThreadReplyMentionNonMemberExcluded(t *testing.T) {
+	ctx := context.Background()
+
+	cassSession := setupCassandra(t)
+	db := setupMongo(t)
+
+	userCol := db.Collection("users")
+	_, err := userCol.InsertMany(ctx, []interface{}{
+		bson.M{"_id": "u-parent", "account": "parent-user", "siteId": "site-a", "engName": "Parent User", "chineseName": "家長", "employeeId": "EMP001"},
+		bson.M{"_id": "u-replier", "account": "replier", "siteId": "site-a", "engName": "Replier User", "chineseName": "回覆者", "employeeId": "EMP002"},
+		bson.M{"_id": "u-bob", "account": "bob", "siteId": "site-a", "engName": "Bob Chen", "chineseName": "鮑勃", "employeeId": "EMP003"},
+	})
+	require.NoError(t, err)
+	// NOTE: no subscriptions row for bob → he is not a room member.
+
+	store := NewCassandraStore(cassSession, msgbucket.New(24*time.Hour), nil)
+	us := userstore.NewMongoStore(userCol)
+	ts := newThreadStoreMongo(db)
+	require.NoError(t, ts.EnsureIndexes(ctx))
+	h := NewHandler(store, us, ts, "site-a", func(_ context.Context, _ string, _ []byte, _ string) error {
+		return nil
+	})
+
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	parentMsg := &model.Message{
+		ID: "msg-parent-nonmember", RoomID: "r-nonmember", UserID: "u-parent", UserAccount: "parent-user",
+		Content: "parent message", CreatedAt: now.Add(-1 * time.Minute),
+	}
+	require.NoError(t, store.SaveMessage(ctx, parentMsg, &cassParticipant{ID: "u-parent", Account: "parent-user"}, "site-a"))
+
+	replyEvt := model.MessageEvent{
+		Message: model.Message{
+			ID: "msg-reply-nonmember", RoomID: "r-nonmember", UserID: "u-replier", UserAccount: "replier",
+			Content: "hey @bob take a look", CreatedAt: now,
+			ThreadParentMessageID: "msg-parent-nonmember",
+		},
+		SiteID: "site-a", Timestamp: now.UnixMilli(),
+	}
+	data, err := json.Marshal(replyEvt)
+	require.NoError(t, err)
+	require.NoError(t, h.processMessage(ctx, data, false))
+
+	t.Run("bob not subscribed (non-member)", func(t *testing.T) {
+		count, err := db.Collection("thread_subscriptions").CountDocuments(ctx, bson.M{
+			"parentMessageId": "msg-parent-nonmember", "userId": "u-bob",
+		})
+		require.NoError(t, err)
+		assert.Equal(t, int64(0), count, "non-member mentionee must not be thread-subscribed")
+	})
+
+	t.Run("only parent author + replier subscribed", func(t *testing.T) {
+		count, err := db.Collection("thread_subscriptions").CountDocuments(ctx, bson.M{
+			"parentMessageId": "msg-parent-nonmember",
+		})
+		require.NoError(t, err)
+		assert.Equal(t, int64(2), count)
+	})
+
+	t.Run("bob not added to thread_rooms.replyAccounts", func(t *testing.T) {
+		var room model.ThreadRoom
+		require.NoError(t, db.Collection("thread_rooms").FindOne(ctx, bson.M{
+			"parentMessageId": "msg-parent-nonmember",
+		}).Decode(&room))
+		assert.NotContains(t, room.ReplyAccounts, "bob", "non-member mentionee must not be a thread follower")
 	})
 }
 
@@ -1947,4 +2025,71 @@ func TestAdvanceThreadSubscriptionLastSeen_OnlyAdvances(t *testing.T) {
 
 	// Missing subscription is a best-effort no-op.
 	require.NoError(t, store.AdvanceThreadSubscriptionLastSeen(ctx, "no-room", "nobody", t2))
+}
+
+func TestThreadStoreMongo_GetHistorySharedSince(t *testing.T) {
+	ctx := context.Background()
+	db := setupMongo(t)
+	store := newThreadStoreMongo(db)
+
+	shared := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	_, err := db.Collection("subscriptions").InsertMany(ctx, []interface{}{
+		model.Subscription{ID: "hss-al", User: model.SubscriptionUser{ID: "u-al", Account: "alice"}, RoomID: "r-hss", HistorySharedSince: &shared},
+		model.Subscription{ID: "hss-bo", User: model.SubscriptionUser{ID: "u-bo", Account: "bob"}, RoomID: "r-hss"},
+	})
+	require.NoError(t, err)
+
+	got, err := store.GetHistorySharedSince(ctx, "r-hss", []string{"alice", "bob", "carol"})
+	require.NoError(t, err)
+	require.NotNil(t, got["alice"])
+	assert.Equal(t, shared.UnixMilli(), got["alice"].UTC().UnixMilli())
+	bobWindow, bobPresent := got["bob"]
+	require.True(t, bobPresent, "member with a nil window must still be present in the map")
+	assert.Nil(t, bobWindow, "member without window decodes to nil")
+	_, present := got["carol"]
+	assert.False(t, present, "non-member is absent from the map")
+
+	empty, err := store.GetHistorySharedSince(ctx, "r-hss", nil)
+	require.NoError(t, err)
+	assert.Empty(t, empty)
+}
+
+func TestCassandraStore_SaveThreadMessage_TShowWritesAllTables(t *testing.T) {
+	cassSession := setupCassandra(t)
+	bucket := msgbucket.New(24 * time.Hour)
+	store := NewCassandraStore(cassSession, bucket, nil)
+	ctx := context.Background()
+
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	parentCreatedAt := now.Add(-time.Hour)
+	sender := &cassParticipant{ID: "u-1", Account: "alice"}
+	msg := &model.Message{
+		ID:                           "m-tshow",
+		RoomID:                       "r-tshow",
+		UserID:                       "u-1",
+		UserAccount:                  "alice",
+		Content:                      "visible reply",
+		CreatedAt:                    now,
+		ThreadParentMessageID:        "m-parent",
+		ThreadParentMessageCreatedAt: &parentCreatedAt,
+		TShow:                        true,
+	}
+
+	_, err := store.SaveThreadMessage(ctx, msg, sender, "site-a", "tr-tshow-1")
+	require.NoError(t, err)
+
+	// The batch must land in all three tables. Assert the reply's own rows by exact
+	// key so the parent's tcount-UPDATE upsert (same partitions) can't interfere.
+	var count int
+	require.NoError(t, cassSession.Query(`SELECT COUNT(*) FROM messages_by_id WHERE message_id = ?`, "m-tshow").WithContext(ctx).Scan(&count))
+	assert.Equal(t, 1, count, "messages_by_id reply row written")
+
+	require.NoError(t, cassSession.Query(`SELECT COUNT(*) FROM thread_messages_by_thread WHERE thread_room_id = ?`, "tr-tshow-1").WithContext(ctx).Scan(&count))
+	assert.Equal(t, 1, count, "thread_messages_by_thread row written")
+
+	var gotTShow bool
+	require.NoError(t, cassSession.Query(
+		`SELECT tshow FROM messages_by_room WHERE room_id = ? AND bucket = ? AND created_at = ? AND message_id = ?`,
+		"r-tshow", bucket.Of(now), now, "m-tshow").WithContext(ctx).Scan(&gotTShow))
+	assert.True(t, gotTShow, "tshow mirror row written to messages_by_room with tshow=true")
 }

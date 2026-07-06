@@ -21,6 +21,7 @@ var (
 type threadStoreMongo struct {
 	threadRooms         *mongo.Collection
 	threadSubscriptions *mongo.Collection
+	subscriptions       *mongo.Collection
 }
 
 // Compile-time assertion that *threadStoreMongo satisfies ThreadStore.
@@ -30,6 +31,7 @@ func newThreadStoreMongo(db *mongo.Database) *threadStoreMongo {
 	return &threadStoreMongo{
 		threadRooms:         db.Collection("thread_rooms"),
 		threadSubscriptions: db.Collection("thread_subscriptions"),
+		subscriptions:       db.Collection("subscriptions"),
 	}
 }
 
@@ -169,4 +171,34 @@ func (s *threadStoreMongo) AddReplyAccounts(ctx context.Context, threadRoomID st
 		return fmt.Errorf("add reply accounts to thread room %s: %w", threadRoomID, err)
 	}
 	return nil
+}
+
+func (s *threadStoreMongo) GetHistorySharedSince(ctx context.Context, roomID string, accounts []string) (map[string]*time.Time, error) {
+	out := make(map[string]*time.Time, len(accounts))
+	if len(accounts) == 0 {
+		return out, nil
+	}
+	filter := bson.M{"roomId": roomID, "u.account": bson.M{"$in": accounts}}
+	opts := options.Find().SetProjection(bson.M{"u.account": 1, "historySharedSince": 1, "_id": 0})
+	cursor, err := s.subscriptions.Find(ctx, filter, opts)
+	if err != nil {
+		return nil, fmt.Errorf("query history windows for room %s: %w", roomID, err)
+	}
+	defer cursor.Close(ctx)
+	// Minimal decode shape: the projection returns only u.account + historySharedSince,
+	// so decode just those rather than the full model.SubscriptionUser (whose other
+	// fields would silently be zero-valued).
+	var rows []struct {
+		User struct {
+			Account string `bson:"account"`
+		} `bson:"u"`
+		HistorySharedSince *time.Time `bson:"historySharedSince"`
+	}
+	if err := cursor.All(ctx, &rows); err != nil {
+		return nil, fmt.Errorf("decode history windows: %w", err)
+	}
+	for i := range rows {
+		out[rows[i].User.Account] = rows[i].HistorySharedSince
+	}
+	return out, nil
 }

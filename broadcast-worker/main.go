@@ -186,7 +186,8 @@ func main() {
 		slog.Info("room-key cache enabled", "size", cfg.RoomKeyCacheSize, "ttl", cfg.RoomKeyCacheTTL)
 	}
 
-	handler := NewHandler(coalescer, us, publisher, keyProvider, cfg.Encryption.Enabled)
+	parentFetcher := newHistoryParentFetcher(nc)
+	handler := NewHandler(coalescer, us, publisher, keyProvider, parentFetcher, cfg.Encryption.Enabled)
 
 	// Core-NATS queue subscriber for server-broadcast events (e.g. thread tcount badge).
 	// Fire-and-forget: errors are logged inside HandleServerBroadcast; no retry path.

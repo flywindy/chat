@@ -4,16 +4,14 @@ import (
 	"context"
 	"errors"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 type stubThreadLookup struct {
-	out       []string
-	parentcAt *time.Time
-	err       error
+	out []string
+	err error
 }
 
 func (s *stubThreadLookup) Lookup(_ context.Context, _ string) (ThreadRoomInfo, error) {
@@ -24,7 +22,7 @@ func (s *stubThreadLookup) Lookup(_ context.Context, _ string) (ThreadRoomInfo, 
 	for _, a := range s.out {
 		set[a] = struct{}{}
 	}
-	return ThreadRoomInfo{Followers: set, ParentCreatedAt: s.parentcAt}, nil
+	return ThreadRoomInfo{Followers: set}, nil
 }
 
 func TestThreadFollowers_Resolve(t *testing.T) {

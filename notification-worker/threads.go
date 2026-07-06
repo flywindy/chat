@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
@@ -12,10 +11,10 @@ import (
 )
 
 // ThreadRoomInfo is the per-thread metadata read from thread_rooms in one query.
-// ParentCreatedAt (nil on the first-reply race) drives restricted-room suppression.
+// The parent's createdAt is no longer read here — it comes authoritatively from
+// history-service (see ParentFetcher), which is race-free on the first reply.
 type ThreadRoomInfo struct {
-	Followers       map[string]struct{}
-	ParentCreatedAt *time.Time
+	Followers map[string]struct{}
 }
 
 // ThreadFollowerLister reads thread metadata for the thread rooted at parentMessageID.
@@ -36,10 +35,9 @@ func (m *mongoThreadFollowers) Lookup(ctx context.Context, parentMessageID strin
 		return ThreadRoomInfo{Followers: map[string]struct{}{}}, nil
 	}
 	var doc struct {
-		ReplyAccounts         []string  `bson:"replyAccounts"`
-		ThreadParentCreatedAt time.Time `bson:"threadParentCreatedAt"`
+		ReplyAccounts []string `bson:"replyAccounts"`
 	}
-	opts := options.FindOne().SetProjection(bson.M{"replyAccounts": 1, "threadParentCreatedAt": 1, "_id": 0})
+	opts := options.FindOne().SetProjection(bson.M{"replyAccounts": 1, "_id": 0})
 	err := m.col.FindOne(ctx, bson.M{"parentMessageId": parentMessageID}, opts).Decode(&doc)
 	if err != nil {
 		if errors.Is(err, mongo.ErrNoDocuments) {
@@ -53,10 +51,5 @@ func (m *mongoThreadFollowers) Lookup(ctx context.Context, parentMessageID strin
 			out[a] = struct{}{}
 		}
 	}
-	info := ThreadRoomInfo{Followers: out}
-	if !doc.ThreadParentCreatedAt.IsZero() {
-		t := doc.ThreadParentCreatedAt.UTC()
-		info.ParentCreatedAt = &t
-	}
-	return info, nil
+	return ThreadRoomInfo{Followers: out}, nil
 }
