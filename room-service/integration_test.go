@@ -1946,6 +1946,33 @@ func TestMongoStore_UpdateSubscriptionRead_Integration(t *testing.T) {
 	assert.ErrorIs(t, err, model.ErrSubscriptionNotFound)
 }
 
+// Regression for #447: room read must clear hasMention (the thread mirror already did).
+// Reads the raw doc, not GetSubscription — that projection omits hasMention (would false-pass).
+func TestMongoStore_UpdateSubscriptionRead_ClearsHasMention(t *testing.T) {
+	ctx := context.Background()
+	db := setupMongo(t)
+	store := NewMongoStore(db)
+	require.NoError(t, store.EnsureIndexes(ctx))
+
+	mustInsertSub(t, db, &model.Subscription{
+		ID:         "s1",
+		User:       model.SubscriptionUser{ID: "u1", Account: "alice"},
+		RoomID:     "r1",
+		SiteID:     "site-a",
+		JoinedAt:   time.Now().UTC().Add(-time.Hour),
+		HasMention: true,
+	})
+
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	require.NoError(t, store.UpdateSubscriptionRead(ctx, "r1", "alice", now, false))
+
+	var raw model.Subscription
+	require.NoError(t, db.Collection("subscriptions").FindOne(ctx, bson.M{"_id": "s1"}).Decode(&raw))
+	assert.False(t, raw.HasMention)
+	require.NotNil(t, raw.LastSeenAt)
+	assert.WithinDuration(t, now, *raw.LastSeenAt, time.Second)
+}
+
 func TestMongoStore_GetUserSiteID_Integration(t *testing.T) {
 	ctx := context.Background()
 	db := setupMongo(t)

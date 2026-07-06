@@ -1044,7 +1044,7 @@ func (s *MongoStore) FindExistingAccounts(ctx context.Context, accounts []string
 func (s *MongoStore) UpdateSubscriptionRead(ctx context.Context, roomID, account string, lastSeenAt time.Time, alert bool) error {
 	res, err := s.subscriptions.UpdateOne(ctx,
 		bson.M{"roomId": roomID, "u.account": account},
-		bson.M{"$set": bson.M{"lastSeenAt": lastSeenAt, "alert": alert}},
+		bson.M{"$set": bson.M{"lastSeenAt": lastSeenAt, "alert": alert, "hasMention": false}},
 	)
 	if err != nil {
 		return fmt.Errorf("update subscription read for %q in room %q: %w", account, roomID, err)
