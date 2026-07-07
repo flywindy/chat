@@ -197,3 +197,12 @@ Post-seed **updates**: HR fields are **not** re-propagated (the company-wide syn
 
 ## Explicitly **not** migrated
 `federation.domains[]`; livechat (`l`) / voip (`v`) rooms; group DMs (`d`>2); team grouping (`teamId`/`teamMain`); user deactivation/deletion; thread-sub unfollows during cutover. Flag any of these you'd expect to matter.
+
+
+## Collection for direct transfer:
+rocketchat_avatar, tsmc_apps_v, tsmc_bot_cmd_men , tsmc_tsso_tokens, rocketchat_uploads, tsmc_bot_authorization, ufsTokens, user_devices
+
+Handled by **`oplog-direct-transfer`**: copied verbatim (whole doc, same `_id`) into the same-named
+new-stack collection, mirroring insert/update/replace/delete. Metadata only — the actual file/blob
+bytes for `rocketchat_uploads`/`ufsTokens`/`rocketchat_avatar` (UFS/GridFS) are a separate owner's
+concern. See `docs/superpowers/specs/2026-07-01-oplog-direct-transfer-design.md`.

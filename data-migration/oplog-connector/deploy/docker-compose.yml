@@ -42,7 +42,7 @@ services:
       - SOURCE_DB=rocketchat
       - CHECKPOINT_DB=migration
       - NATS_URL=nats://nats:4222
-      - WATCH_COLLECTIONS=rocketchat_message,rocketchat_room,rocketchat_subscription,rocketchat_uploads,tsmc_room_members,tsmc_thread_subscriptions,tsmc_hr_acct_org,users
+      - WATCH_COLLECTIONS=rocketchat_message,rocketchat_room,rocketchat_subscription,rocketchat_uploads,tsmc_room_members,tsmc_thread_subscriptions,tsmc_hr_acct_org,users,rocketchat_avatar,tsmc_apps_v,tsmc_bot_cmd_men,tsmc_tsso_tokens,tsmc_bot_authorization,ufsTokens,user_devices
       - READ_PREFERENCE=primaryPreferred
       - BOOTSTRAP_STREAMS=true
       - LOG_LEVEL=info

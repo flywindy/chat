@@ -49,6 +49,23 @@ The connector forwards raw change-stream events with **no `updateLookup`** and *
 | **All collections** |
 | 17 | Collection drop / rename | collection-level (`drop`/`rename`/`invalidate`) | n/a | terminates/invalidates the per-collection change stream | ⚠️ out of scope, deferred — connector re-point, not migration logic |
 
+## Direct-transfer collections (oplog-direct-transfer)
+
+Copied **verbatim** by source `_id` into the same-named new-stack collection — no mapping. Because
+the destination adopts the source `_id`, **delete is actionable** (unlike the re-keyed collections above).
+
+| Op | Handling |
+|---|---|
+| `insert` / `replace` | upsert the full doc verbatim by `_id` |
+| `update` | re-read the full current source doc by `_id`, upsert; vanished → skip |
+| `delete` | delete by `_id` (idempotent) |
+| collection-level (`drop`/`rename`/`invalidate`) | ⚠️ out of scope, deferred |
+
+Collections: `rocketchat_avatar`, `tsmc_apps_v`, `tsmc_bot_cmd_men`, `tsmc_tsso_tokens`,
+`rocketchat_uploads`, `tsmc_bot_authorization`, `ufsTokens`, `user_devices`.
+**Metadata only** — file/blob bytes (UFS/GridFS) are out of scope. No destination indexes or TTL
+(removal is CDC-driven). Design: `docs/superpowers/specs/2026-07-01-oplog-direct-transfer-design.md`.
+
 ## inbox-worker handler coverage
 
 Every apply-handler the inbox-worker exposes is either produced by the migration or intentionally not:
