@@ -43,6 +43,7 @@ paths.
    - [2.2 HTTP — POST /api/v1/auth](#22-http--post-apiv1auth)
    - [2.3 HTTP — GET /api/userInfo (portal-service)](#23-http--get-apiuserinfo-portal-service)
    - [2.4 HTTP — Protected image upload/download](#24-http--protected-image-uploaddownload)
+   - [2.5 HTTP — GET /api/settings (portal-service)](#25-http--get-apisettings-portal-service)
 3. [Request/Reply Methods](#3-requestreply-methods)
    - [3.0 Shared schemas](#30-shared-schemas)
    - [3.1 room-service](#31-room-service)
@@ -600,6 +601,51 @@ See [Error envelope](#6-error-envelope-reference). HTTP statuses:
 | 404 | `not_found` | — | `{ "code": "not_found", "error": "file not found" }` |
 | 500 | `internal` | — | `{ "code": "internal", "error": "internal error" }` — user missing in context. |
 | 503 | `unavailable` | — | `{ "code": "unavailable", "error": "failed to retrieve file" }` — S3 GetObject/Stat failure. |
+
+#### Triggered events — success path
+
+`None — HTTP-only.`
+
+#### Triggered events — error path
+
+`None.`
+
+---
+
+### 2.5 HTTP — GET /api/settings (portal-service)
+
+**Endpoint:** `GET /api/settings`
+**Reply:** synchronous HTTP response
+
+Deployment-level frontend configuration, served from the portal's environment. Called before login — same discovery-tier trust as §2.3: no input, no token validated. Both values are static per deployment and required at portal startup (the OTEL URL is additionally validated and normalized there), so the endpoint has no runtime error path.
+
+#### Request
+
+No parameters.
+
+```http
+GET /api/settings
+```
+
+#### Success response
+
+`HTTP 200`, served with `Cache-Control: no-cache` (deployment config — revalidate, don't cache).
+
+| Field | Type | Notes |
+|---|---|---|
+| `apiVersion` | string | Backend API generation the client should target (e.g. `v2`). Opaque string — compare, don't parse. |
+| `otelBaseUrl` | string | Base URL for client OTEL telemetry, never with a trailing slash. The client appends `/trace` and `/log`. |
+
+```json
+{
+  "apiVersion": "v2",
+  "otelBaseUrl": "https://otel.example.com/v1"
+}
+```
+
+#### Error response
+
+The handler has no error path (both values are validated at portal startup). The only possible non-200 is a framework-level `500` from panic recovery, which returns an **empty body** — the [error envelope](#6-error-envelope-reference) does not apply here.
 
 #### Triggered events — success path
 

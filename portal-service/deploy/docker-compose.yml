@@ -52,6 +52,11 @@ services:
       # Per-site URL registry (JSON): siteId -> {authServiceUrl, baseUrl}.
       # baseUrl is the site's own origin, distinct from the auth-service URL.
       - 'PORTAL_SITE_URLS={"site-local":{"authServiceUrl":"http://localhost:8080","baseUrl":"http://localhost:3000"}}'
+      # Served to the frontend via GET /api/settings. Both are required
+      # (notEmpty) — the localhost OTEL URL is a dev placeholder; the real
+      # per-environment value is set in the deployment (k8s / azure-pipelines).
+      - PORTAL_API_VERSION=v2
+      - PORTAL_OTEL_BASE_URL=http://localhost:4318/v1
       - MONGO_URI=mongodb://mongodb:27017
       - MONGO_DB=portal
     networks:

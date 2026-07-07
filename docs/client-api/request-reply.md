@@ -20,6 +20,7 @@ For connection, auth, shared schemas, and error reference, see [../client-api.md
 1. [HTTP — Connection & Auth](#http--connection--auth)
    - [POST /api/v1/auth](#post-apiv1auth)
    - [GET /api/userInfo](#get-apiuserinfo)
+   - [GET /api/settings](#get-apisettings)
    - [POST /api/v1/setCookie](#post-apiv1setcookie)
    - [POST /api/v1/file/rooms/:roomId/upload/images](#post-apiv1fileroomsroomiduploadimages)
    - [POST /api/v1/file/rooms/:roomId/upload/file](#post-apiv1fileroomsroomiduploadfile)
@@ -60,6 +61,19 @@ and error table.
 Site discovery — called once per login before POST /api/v1/auth. Returns the home site's NATS
 and auth-service connection coordinates. See
 [../client-api.md §2.3](../client-api.md#23-http--get-apiuserinfo-portal-service).
+
+**Emits:** `None — HTTP-only.`
+
+---
+
+### GET /api/settings
+
+**Endpoint:** `GET /api/settings`
+**Reply:** synchronous HTTP response
+
+Deployment-level frontend configuration — the backend API generation to target (`apiVersion`)
+and the OTEL telemetry base URL (`otelBaseUrl`). See
+[../client-api.md §2.5](../client-api.md#25-http--get-apisettings-portal-service).
 
 **Emits:** `None — HTTP-only.`
 

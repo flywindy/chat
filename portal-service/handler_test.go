@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"testing"
 
+	"github.com/caarlos0/env/v11"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -58,10 +59,16 @@ var testSites = map[string]siteURL{
 	"site-local": {AuthServiceURL: "https://auth.site-local.example.com", BaseURL: "http://localhost:3000"},
 }
 
+// testSettings is the settings payload used by the handler tests.
+var testSettings = settingsResponse{
+	APIVersion:  "v2",
+	OTELBaseURL: "https://otel.example.com/v1",
+}
+
 // newTestHandler builds a PortalHandler with the test site registry and the
 // local dev-fallback coordinates.
 func newTestHandler(cache *directoryCache, devMode bool) *PortalHandler {
-	return NewPortalHandler(cache, devMode, "site-local", "ws://localhost:9222", testSites)
+	return NewPortalHandler(cache, devMode, "site-local", "ws://localhost:9222", testSites, testSettings)
 }
 
 func TestHandleUserInfo_HappyPath(t *testing.T) {
@@ -224,6 +231,106 @@ func TestHandleReady(t *testing.T) {
 			assert.Equal(t, tt.wantCode, w.Code)
 		})
 	}
+}
+
+func TestHandleSettings(t *testing.T) {
+	t.Run("returns the configured settings with exact field names", func(t *testing.T) {
+		h := newTestHandler(cacheWith(aliceEmployee), false)
+		w := getPath(t, setupRouter(t, h), "/api/settings")
+
+		require.Equal(t, http.StatusOK, w.Code)
+		assert.JSONEq(t,
+			`{"apiVersion":"v2","otelBaseUrl":"https://otel.example.com/v1"}`,
+			w.Body.String())
+		// Deployment config must not be cached by intermediaries.
+		assert.Equal(t, "no-cache", w.Header().Get("Cache-Control"))
+	})
+
+	t.Run("serves before the directory cache is loaded", func(t *testing.T) {
+		// Static config — must not depend on the directory refresh.
+		h := newTestHandler(newDirectoryCache(), false)
+		w := getPath(t, setupRouter(t, h), "/api/settings")
+
+		require.Equal(t, http.StatusOK, w.Code)
+		assert.JSONEq(t,
+			`{"apiVersion":"v2","otelBaseUrl":"https://otel.example.com/v1"}`,
+			w.Body.String())
+	})
+}
+
+func TestParseOTELBaseURL(t *testing.T) {
+	for _, tt := range []struct{ name, raw, want string }{
+		{"https URL passes through", "https://otel.example.com/v1", "https://otel.example.com/v1"},
+		{"http URL passes through", "http://localhost:4318", "http://localhost:4318"},
+		{"trailing slash trimmed", "https://otel.example.com/v1/", "https://otel.example.com/v1"},
+		{"multiple trailing slashes trimmed", "https://otel.example.com/v1//", "https://otel.example.com/v1"},
+		{"bare root slash trimmed", "https://otel.example.com/", "https://otel.example.com"},
+		{"uppercase scheme normalized", "HTTPS://otel.example.com/v1", "https://otel.example.com/v1"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseOTELBaseURL(tt.raw)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+
+	for _, tt := range []struct{ name, raw string }{
+		{"empty string", ""},
+		{"garbage", "not a url"},
+		{"relative URL", "/v1"},
+		{"missing scheme", "otel.example.com/v1"},
+		{"scheme without host", "https://"},
+		{"non-http scheme", "ftp://otel.example.com"},
+		{"control character", "https://otel.example.com/\n"},
+		// The client appends /trace and /log — a base URL carrying a query,
+		// fragment, or credentials would break or leak on that append.
+		{"query string", "https://otel.example.com/v1?x=1"},
+		{"force query", "https://otel.example.com/v1?"},
+		{"fragment", "https://otel.example.com/v1#frag"},
+		{"embedded credentials", "https://user:pass@otel.example.com/v1"},
+	} {
+		t.Run(tt.name+" is rejected", func(t *testing.T) {
+			_, err := parseOTELBaseURL(tt.raw)
+			assert.Error(t, err)
+		})
+	}
+}
+
+// setSettingsEnv sets a complete valid environment for config parsing;
+// individual subtests override single vars to probe the notEmpty tags.
+func setSettingsEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("PORTAL_SITE_URLS", `{"site-a":{"authServiceUrl":"https://auth.a.com","baseUrl":"https://a.com"}}`)
+	t.Setenv("MONGO_URI", "mongodb://localhost:27017")
+	t.Setenv("PORTAL_API_VERSION", "v2")
+	t.Setenv("PORTAL_OTEL_BASE_URL", "https://otel.example.com/v1")
+}
+
+func TestConfig_SettingsEnvVars(t *testing.T) {
+	t.Run("parses both settings fields", func(t *testing.T) {
+		setSettingsEnv(t)
+		cfg, err := env.ParseAs[config]()
+		require.NoError(t, err)
+		assert.Equal(t, "v2", cfg.APIVersion)
+		assert.Equal(t, "https://otel.example.com/v1", cfg.OTELBaseURL)
+	})
+
+	for _, name := range []string{"PORTAL_API_VERSION", "PORTAL_OTEL_BASE_URL"} {
+		t.Run("empty "+name+" is rejected", func(t *testing.T) {
+			setSettingsEnv(t)
+			t.Setenv(name, "")
+			_, err := env.ParseAs[config]()
+			assert.ErrorContains(t, err, name)
+		})
+	}
+}
+
+func TestParseOTELBaseURL_RejectionErrorRedactsPassword(t *testing.T) {
+	// The rejection error is wrapped into the fatal startup log, so it must
+	// not echo the credential the rule exists to reject.
+	_, err := parseOTELBaseURL("https://user:hunter2@otel.example.com/v1")
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "hunter2")
 }
 
 func TestParseSiteURLs(t *testing.T) {

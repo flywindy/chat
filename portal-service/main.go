@@ -33,6 +33,11 @@ type config struct {
 	// different domains, so each site's URLs are listed explicitly.
 	SiteURLs string `env:"PORTAL_SITE_URLS,required"`
 
+	// APIVersion and OTELBaseURL are served to the frontend via GET /api/settings.
+	// Critical config — no envDefault, a deployment that forgets them fails fast.
+	APIVersion  string `env:"PORTAL_API_VERSION,notEmpty"`
+	OTELBaseURL string `env:"PORTAL_OTEL_BASE_URL,notEmpty"`
+
 	// CacheRefreshInterval drives how often the directory is reloaded (the
 	// hr_employee × users intersection via $lookup). Shorter than the daily HR
 	// cron so a newly provisioned user appears within a couple of hours.
@@ -64,6 +69,13 @@ func run() error {
 		return fmt.Errorf("parse site URL registry: %w", err)
 	}
 
+	otelBaseURL, err := parseOTELBaseURL(cfg.OTELBaseURL)
+	if err != nil {
+		return fmt.Errorf("parse OTEL base URL: %w", err)
+	}
+	settings := settingsResponse{APIVersion: cfg.APIVersion, OTELBaseURL: otelBaseURL}
+	slog.Info("settings config", "apiVersion", settings.APIVersion, "otelBaseUrl", settings.OTELBaseURL)
+
 	ctx := context.Background()
 
 	mongoClient, err := mongoutil.Connect(ctx, cfg.MongoURI, cfg.MongoUsername, cfg.MongoPassword)
@@ -89,7 +101,7 @@ func run() error {
 	slog.Info("directory config", "sites", len(sites), "refreshInterval", cfg.CacheRefreshInterval.String())
 
 	handler := NewPortalHandler(cache, cfg.DevMode,
-		cfg.DevFallbackSiteID, cfg.DevFallbackNatsURL, sites)
+		cfg.DevFallbackSiteID, cfg.DevFallbackNatsURL, sites, settings)
 	if cfg.DevMode {
 		slog.Info("dev mode enabled — unknown accounts fall back to the dev site")
 	}

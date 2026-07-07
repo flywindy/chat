@@ -3,8 +3,11 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -42,6 +45,37 @@ func parseSiteURLs(raw string) (map[string]siteURL, error) {
 	return sites, nil
 }
 
+// settingsResponse is the deployment config served to the frontend: the
+// backend API generation and the OTEL base URL (client appends /trace, /log).
+type settingsResponse struct {
+	APIVersion  string `json:"apiVersion"`
+	OTELBaseURL string `json:"otelBaseUrl"`
+}
+
+// parseOTELBaseURL fails startup unless the value is an absolute http(s) URL
+// safe for the client to append /trace and /log to: no credentials, query, or
+// fragment, and no trailing slash (so the append can't produce "//trace").
+func parseOTELBaseURL(raw string) (string, error) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		// url.Parse's error embeds the raw input; unwrap to the underlying
+		// reason so a mistyped credential can't reach the startup log.
+		var uerr *url.Error
+		if errors.As(err, &uerr) {
+			err = uerr.Err
+		}
+		return "", fmt.Errorf("decode OTEL base URL: %w", err)
+	}
+	if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return "", fmt.Errorf("OTEL base URL %q must be an absolute http(s) URL", u.Redacted())
+	}
+	if u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+		return "", fmt.Errorf("OTEL base URL %q must not carry credentials, query, or fragment", u.Redacted())
+	}
+	u.Path = strings.TrimRight(u.Path, "/")
+	return u.String(), nil
+}
+
 type userInfoResponse struct {
 	Account        string `json:"account"`
 	EmployeeID     string `json:"employeeId"`
@@ -63,19 +97,21 @@ type PortalHandler struct {
 	devFallbackSiteID  string
 	devFallbackNatsURL string
 	sites              map[string]siteURL
+	settings           settingsResponse
 }
 
 // NewPortalHandler creates a PortalHandler. devMode synthesizes a dev-site
 // entry for accounts absent from the directory so local logins need no seeding.
 // sites is the siteId → URL registry used to resolve each account's home-site
 // auth-service and base URLs.
-func NewPortalHandler(cache *directoryCache, devMode bool, devFallbackSiteID, devFallbackNatsURL string, sites map[string]siteURL) *PortalHandler {
+func NewPortalHandler(cache *directoryCache, devMode bool, devFallbackSiteID, devFallbackNatsURL string, sites map[string]siteURL, settings settingsResponse) *PortalHandler {
 	return &PortalHandler{
 		cache:              cache,
 		devMode:            devMode,
 		devFallbackSiteID:  devFallbackSiteID,
 		devFallbackNatsURL: devFallbackNatsURL,
 		sites:              sites,
+		settings:           settings,
 	}
 }
 
@@ -131,6 +167,14 @@ func (h *PortalHandler) resolve(ctx context.Context, c *gin.Context, account str
 		NATSURL:        e.NATSURL,
 		SiteID:         e.SiteID,
 	})
+}
+
+// HandleSettings serves the startup-validated frontend deployment config.
+func (h *PortalHandler) HandleSettings(c *gin.Context) {
+	// Deployment config must stay fresh across apiVersion bumps — force
+	// caches to revalidate on every fetch.
+	c.Header("Cache-Control", "no-cache")
+	c.JSON(http.StatusOK, h.settings)
 }
 
 // HandleHealth is the liveness probe: the process is up and serving HTTP.
