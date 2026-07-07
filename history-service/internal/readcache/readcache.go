@@ -21,6 +21,10 @@ import (
 	pkgmodel "github.com/hmchangw/chat/pkg/model"
 )
 
+// fetchTimeout bounds the detached shared load so a hung backend cannot leak
+// the singleflight goroutine or pin the in-flight key. See the design spec.
+const fetchTimeout = 10 * time.Second
+
 // Recorder records the outcome of a cache lookup. cachemetrics.Recorder
 // satisfies it; tests substitute a spy.
 type Recorder interface {
@@ -52,18 +56,22 @@ func newTTLCache[V any](size int, ttl time.Duration, rec Recorder) (*ttlCache[V]
 // returns (value, store, err): when store is false the value is returned to
 // the caller but not cached (used for negative results); when err is non-nil
 // nothing is cached and the error is returned.
+// If ctx is canceled before the shared load finishes, getOrLoad returns ctx.Err() immediately
+// while the load continues detached in the background, bounded by fetchTimeout.
 func (c *ttlCache[V]) getOrLoad(ctx context.Context, key string, load func(context.Context) (V, bool, error)) (V, error) {
 	if v, ok := c.lru.Get(key); ok {
 		c.metrics.Hit(ctx)
 		return v, nil
 	}
 
-	v, err, _ := c.sf.Do(key, func() (any, error) {
+	resCh := c.sf.DoChan(key, func() (any, error) {
 		// Re-check under singleflight in case a sibling populated the entry.
 		if cached, ok := c.lru.Get(key); ok {
 			return cached, nil
 		}
-		val, store, err := load(ctx)
+		fetchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), fetchTimeout)
+		defer cancel()
+		val, store, err := load(fetchCtx)
 		if err != nil {
 			return val, err
 		}
@@ -72,13 +80,20 @@ func (c *ttlCache[V]) getOrLoad(ctx context.Context, key string, load func(conte
 		}
 		return val, nil
 	})
-	if err != nil {
+	select {
+	case res := <-resCh:
+		if res.Err != nil {
+			c.metrics.Error(ctx)
+			var zero V
+			return zero, res.Err
+		}
+		c.metrics.Miss(ctx)
+		return res.Val.(V), nil
+	case <-ctx.Done():
 		c.metrics.Error(ctx)
 		var zero V
-		return zero, err
+		return zero, ctx.Err()
 	}
-	c.metrics.Miss(ctx)
-	return v.(V), nil
 }
 
 // SubscriptionSource is the subscription read the cache fronts.

@@ -223,3 +223,85 @@ func TestWrapStore_RejectsInvalidArgs(t *testing.T) {
 	_, err = roommetacache.WrapStore(stub, 10, 0)
 	assert.Error(t, err)
 }
+
+func TestCache_LeaderCancelDoesNotPoisonWaiters(t *testing.T) {
+	var calls atomic.Int32
+	entered := make(chan struct{}, 1)
+	block := make(chan struct{})
+	loader := func(ctx context.Context, roomID string) (roommetacache.Meta, error) {
+		calls.Add(1)
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
+		<-block
+		if err := ctx.Err(); err != nil {
+			return roommetacache.Meta{}, err
+		}
+		return makeMeta(roomID), nil
+	}
+	c, err := roommetacache.New(10, time.Minute, loader)
+	require.NoError(t, err)
+
+	leaderCtx, cancelLeader := context.WithCancel(context.Background())
+	leaderDone := make(chan error, 1)
+	go func() {
+		_, e := c.Get(leaderCtx, "r1")
+		leaderDone <- e
+	}()
+	<-entered
+
+	waiterReady := make(chan struct{})
+	waiterDone := make(chan error, 1)
+	go func() {
+		close(waiterReady)
+		_, e := c.Get(context.Background(), "r1")
+		waiterDone <- e
+	}()
+	<-waiterReady
+
+	cancelLeader()
+	require.ErrorIs(t, <-leaderDone, context.Canceled)
+	close(block)
+	require.NoError(t, <-waiterDone, "waiter must not be poisoned by the leader's cancel")
+
+	got, err := c.Get(context.Background(), "r1")
+	require.NoError(t, err)
+	assert.Equal(t, makeMeta("r1"), got)
+	assert.Equal(t, int32(1), calls.Load(), "shared load should have populated the cache")
+}
+
+func TestCache_CallerCancelReturnsCtxErr(t *testing.T) {
+	entered := make(chan struct{}, 1)
+	block := make(chan struct{})
+	defer close(block)
+	loader := func(ctx context.Context, roomID string) (roommetacache.Meta, error) {
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
+		<-block
+		if err := ctx.Err(); err != nil {
+			return roommetacache.Meta{}, err
+		}
+		return makeMeta(roomID), nil
+	}
+	c, err := roommetacache.New(10, time.Minute, loader)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, e := c.Get(ctx, "r1")
+		done <- e
+	}()
+	<-entered
+	cancel()
+
+	select {
+	case e := <-done:
+		require.ErrorIs(t, e, context.Canceled)
+	case <-time.After(2 * time.Second):
+		t.Fatal("caller did not return on its own ctx cancel within 2s")
+	}
+}

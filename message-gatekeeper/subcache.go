@@ -13,6 +13,10 @@ import (
 	"github.com/hmchangw/chat/pkg/model"
 )
 
+// subFetchTimeout bounds the detached shared load so a hung backend cannot leak
+// the singleflight goroutine or pin the in-flight key. See the design spec.
+const subFetchTimeout = 10 * time.Second
+
 // cacheRecorder records the outcome of a cache lookup. cachemetrics.Recorder
 // satisfies it; tests substitute a spy.
 type cacheRecorder interface {
@@ -74,11 +78,13 @@ func (c *cachedSubStore) GetSubscription(ctx context.Context, account, roomID st
 	// cannot contain NUL bytes; the \x00 separator therefore makes the key
 	// collision-free across any (roomID, account) split.
 	sfKey := roomID + "\x00" + account
-	v, err, _ := c.sf.Do(sfKey, func() (interface{}, error) {
+	resCh := c.sf.DoChan(sfKey, func() (interface{}, error) {
 		if cached, ok := c.lru.Get(key); ok {
 			return cached, nil
 		}
-		sub, err := c.Store.GetSubscription(ctx, account, roomID)
+		fetchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), subFetchTimeout)
+		defer cancel()
+		sub, err := c.Store.GetSubscription(fetchCtx, account, roomID)
 		if err != nil {
 			// Do not cache errNotSubscribed or transient errors — see spec.
 			return nil, err
@@ -91,19 +97,22 @@ func (c *cachedSubStore) GetSubscription(ctx context.Context, account, roomID st
 		c.lru.Add(key, projected)
 		return projected, nil
 	})
-	if err != nil {
-		// errNotSubscribed is a clean negative result (sender simply isn't a
-		// member), not a cache-layer failure — count it as a miss so it
-		// doesn't inflate the error rate. Real store failures are errors.
-		if errors.Is(err, errNotSubscribed) {
-			c.metrics.Miss(ctx)
-		} else {
-			c.metrics.Error(ctx)
+	select {
+	case res := <-resCh:
+		if res.Err != nil {
+			if errors.Is(res.Err, errNotSubscribed) {
+				c.metrics.Miss(ctx)
+			} else {
+				c.metrics.Error(ctx)
+			}
+			return nil, fmt.Errorf("get cached subscription: %w", res.Err)
 		}
-		return nil, fmt.Errorf("get cached subscription: %w", err)
+		c.metrics.Miss(ctx)
+		return fromCached(res.Val.(cachedSubscription)), nil
+	case <-ctx.Done():
+		c.metrics.Error(ctx)
+		return nil, ctx.Err()
 	}
-	c.metrics.Miss(ctx)
-	return fromCached(v.(cachedSubscription)), nil
 }
 
 // fromCached builds a partial *model.Subscription from the cached

@@ -21,6 +21,8 @@ type countingLookup struct {
 	results map[string]bool
 	err     error
 	delay   time.Duration
+	block   chan struct{} // when non-nil, blocks (unconditionally) before returning
+	entered chan struct{} // when non-nil (buffered), signals once when entered
 }
 
 func newCountingLookup() *countingLookup {
@@ -30,11 +32,23 @@ func newCountingLookup() *countingLookup {
 	}
 }
 
-func (l *countingLookup) CustomEmojiExists(_ context.Context, siteID, shortcode string) (bool, error) {
+func (l *countingLookup) CustomEmojiExists(ctx context.Context, siteID, shortcode string) (bool, error) {
 	key := siteID + "|" + shortcode
 	l.mu.Lock()
 	l.calls[key]++
 	l.mu.Unlock()
+	if l.entered != nil {
+		select {
+		case l.entered <- struct{}{}:
+		default:
+		}
+	}
+	if l.block != nil {
+		<-l.block
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	if l.delay > 0 {
 		time.Sleep(l.delay)
 	}
@@ -198,4 +212,67 @@ func TestCachedLookup_Invalidate(t *testing.T) {
 	assert.Equal(t, 2, inner.callCount("site-a", "tada"))
 
 	c.Invalidate("site-a", "never-cached")
+}
+
+func TestCachedLookup_LeaderCancelDoesNotPoisonWaiters(t *testing.T) {
+	inner := newCountingLookup()
+	inner.results["site-a|tada"] = true
+	inner.block = make(chan struct{})
+	inner.entered = make(chan struct{}, 1)
+	c, err := emoji.NewCachedLookup(inner, 16, time.Minute)
+	require.NoError(t, err)
+
+	leaderCtx, cancelLeader := context.WithCancel(context.Background())
+	leaderDone := make(chan error, 1)
+	go func() {
+		_, e := c.CustomEmojiExists(leaderCtx, "site-a", "tada")
+		leaderDone <- e
+	}()
+	<-inner.entered // leader is inside the shared load, holding the singleflight key
+
+	waiterReady := make(chan struct{})
+	waiterDone := make(chan error, 1)
+	go func() {
+		close(waiterReady)
+		_, e := c.CustomEmojiExists(context.Background(), "site-a", "tada")
+		waiterDone <- e
+	}()
+	<-waiterReady // waiter goroutine is running and about to coalesce
+
+	cancelLeader() // leader abandons via its own ctx
+	require.ErrorIs(t, <-leaderDone, context.Canceled)
+	close(inner.block) // release the (detached) shared load
+	require.NoError(t, <-waiterDone, "waiter with a valid ctx must not be poisoned by the leader's cancel")
+
+	// The shared load must have populated the cache: a fresh lookup does not hit inner.
+	got, err := c.CustomEmojiExists(context.Background(), "site-a", "tada")
+	require.NoError(t, err)
+	assert.True(t, got)
+	assert.Equal(t, 1, inner.callCount("site-a", "tada"))
+}
+
+func TestCachedLookup_CallerCancelReturnsCtxErr(t *testing.T) {
+	inner := newCountingLookup()
+	inner.results["site-a|tada"] = true
+	inner.block = make(chan struct{})
+	inner.entered = make(chan struct{}, 1)
+	defer close(inner.block)
+	c, err := emoji.NewCachedLookup(inner, 16, time.Minute)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, e := c.CustomEmojiExists(ctx, "site-a", "tada")
+		done <- e
+	}()
+	<-inner.entered
+	cancel()
+
+	select {
+	case e := <-done:
+		require.ErrorIs(t, e, context.Canceled)
+	case <-time.After(2 * time.Second):
+		t.Fatal("caller did not return on its own ctx cancel within 2s (blocking Do?)")
+	}
 }

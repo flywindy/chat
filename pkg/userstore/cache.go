@@ -13,6 +13,10 @@ import (
 	"github.com/hmchangw/chat/pkg/model"
 )
 
+// fetchTimeout bounds the detached shared load so a hung backend cannot leak
+// the singleflight goroutine or pin the in-flight key. See the design spec.
+const fetchTimeout = 10 * time.Second
+
 // Recorder records the outcome of a cache lookup. cachemetrics.Recorder
 // satisfies it; tests substitute a spy.
 type Recorder interface {
@@ -72,26 +76,34 @@ func (c *Cache) FindUserByID(ctx context.Context, id string) (*model.User, error
 		c.metrics.Hit(ctx)
 		return v, nil
 	}
-	v, err, _ := c.sf.Do(id, func() (interface{}, error) {
+	resCh := c.sf.DoChan(id, func() (interface{}, error) {
 		if cached, ok := c.byID.Get(id); ok {
 			return cached, nil
 		}
-		u, err := c.store.FindUserByID(ctx, id)
+		fetchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), fetchTimeout)
+		defer cancel()
+		u, err := c.store.FindUserByID(fetchCtx, id)
 		if err != nil {
 			return nil, err
 		}
 		c.populate(u)
 		return u, nil
 	})
-	if err != nil {
-		c.metrics.Error(ctx)
-		if errors.Is(err, ErrUserNotFound) {
-			return nil, err
+	select {
+	case res := <-resCh:
+		if res.Err != nil {
+			c.metrics.Error(ctx)
+			if errors.Is(res.Err, ErrUserNotFound) {
+				return nil, res.Err
+			}
+			return nil, fmt.Errorf("find cached user %q: %w", id, res.Err)
 		}
-		return nil, fmt.Errorf("find cached user %q: %w", id, err)
+		c.metrics.Miss(ctx)
+		return res.Val.(*model.User), nil
+	case <-ctx.Done():
+		c.metrics.Error(ctx)
+		return nil, ctx.Err()
 	}
-	c.metrics.Miss(ctx)
-	return v.(*model.User), nil
 }
 
 // FindUserByAccount serves from byAccount; cross-populates byID; SF key "account:"+account avoids ID collision.
@@ -100,26 +112,34 @@ func (c *Cache) FindUserByAccount(ctx context.Context, account string) (*model.U
 		c.metrics.Hit(ctx)
 		return v, nil
 	}
-	v, err, _ := c.sf.Do("account:"+account, func() (interface{}, error) {
+	resCh := c.sf.DoChan("account:"+account, func() (interface{}, error) {
 		if cached, ok := c.byAccount.Get(account); ok {
 			return cached, nil
 		}
-		u, err := c.store.FindUserByAccount(ctx, account)
+		fetchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), fetchTimeout)
+		defer cancel()
+		u, err := c.store.FindUserByAccount(fetchCtx, account)
 		if err != nil {
 			return nil, err
 		}
 		c.populate(u)
 		return u, nil
 	})
-	if err != nil {
-		c.metrics.Error(ctx)
-		if errors.Is(err, ErrUserNotFound) {
-			return nil, err
+	select {
+	case res := <-resCh:
+		if res.Err != nil {
+			c.metrics.Error(ctx)
+			if errors.Is(res.Err, ErrUserNotFound) {
+				return nil, res.Err
+			}
+			return nil, fmt.Errorf("find cached user by account %q: %w", account, res.Err)
 		}
-		return nil, fmt.Errorf("find cached user by account %q: %w", account, err)
+		c.metrics.Miss(ctx)
+		return res.Val.(*model.User), nil
+	case <-ctx.Done():
+		c.metrics.Error(ctx)
+		return nil, ctx.Err()
 	}
-	c.metrics.Miss(ctx)
-	return v.(*model.User), nil
 }
 
 // FindUsersByAccounts hits byAccount; misses forwarded in one call; input deduped; partial hits on store errors.

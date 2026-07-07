@@ -11,6 +11,10 @@ import (
 	"github.com/hmchangw/chat/pkg/cachemetrics"
 )
 
+// fetchTimeout bounds the detached shared load so a hung backend cannot leak
+// the singleflight goroutine or pin the in-flight key. See the design spec.
+const fetchTimeout = 10 * time.Second
+
 // Recorder records the outcome of a cache lookup. cachemetrics.Recorder
 // satisfies it; tests substitute a spy.
 type Recorder interface {
@@ -81,23 +85,31 @@ func (c *CachedLookup) CustomEmojiExists(ctx context.Context, siteID, shortcode 
 		return v, nil
 	}
 
-	v, err, _ := c.sf.Do(k.String(), func() (interface{}, error) {
+	resCh := c.sf.DoChan(k.String(), func() (interface{}, error) {
 		if cached, ok := c.lru.Get(k); ok {
 			return cached, nil
 		}
-		exists, err := c.inner.CustomEmojiExists(ctx, siteID, shortcode)
+		fetchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), fetchTimeout)
+		defer cancel()
+		exists, err := c.inner.CustomEmojiExists(fetchCtx, siteID, shortcode)
 		if err != nil {
 			return false, err
 		}
 		c.lru.Add(k, exists)
 		return exists, nil
 	})
-	if err != nil {
+	select {
+	case res := <-resCh:
+		if res.Err != nil {
+			c.metrics.Error(ctx)
+			return false, fmt.Errorf("custom emoji lookup %q for site %q: %w", shortcode, siteID, res.Err)
+		}
+		c.metrics.Miss(ctx)
+		return res.Val.(bool), nil
+	case <-ctx.Done():
 		c.metrics.Error(ctx)
-		return false, fmt.Errorf("custom emoji lookup %q for site %q: %w", shortcode, siteID, err)
+		return false, ctx.Err()
 	}
-	c.metrics.Miss(ctx)
-	return v.(bool), nil
 }
 
 // Invalidate removes the cached entry for (siteID, shortcode); safe on a miss.

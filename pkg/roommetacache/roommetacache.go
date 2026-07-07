@@ -29,6 +29,10 @@ import (
 	"github.com/hmchangw/chat/pkg/model"
 )
 
+// fetchTimeout bounds the detached shared load so a hung backend cannot leak
+// the singleflight goroutine or pin the in-flight key. See the design spec.
+const fetchTimeout = 10 * time.Second
+
 // Meta is the cached projection of a room document. Both consumers
 // (gatekeeper and broadcast-worker) use these four fields and nothing
 // else from the room. The json tags pin the L2 (Valkey) wire format.
@@ -97,25 +101,32 @@ func (c *Cache) Get(ctx context.Context, roomID string) (Meta, error) {
 		return v, nil
 	}
 
-	v, err, _ := c.sf.Do(roomID, func() (interface{}, error) {
-		// Recheck the cache inside singleflight in case a sibling caller
-		// populated it while we were waiting for the lock.
+	resCh := c.sf.DoChan(roomID, func() (interface{}, error) {
+		// Recheck inside singleflight in case a sibling populated the entry while we waited.
 		if cached, ok := c.lru.Get(roomID); ok {
 			return cached, nil
 		}
-		loaded, err := c.loader(ctx, roomID)
+		fetchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), fetchTimeout)
+		defer cancel()
+		loaded, err := c.loader(fetchCtx, roomID)
 		if err != nil {
 			return Meta{}, err
 		}
 		c.lru.Add(roomID, loaded)
 		return loaded, nil
 	})
-	if err != nil {
+	select {
+	case res := <-resCh:
+		if res.Err != nil {
+			c.metrics.Error(ctx)
+			return Meta{}, fmt.Errorf("get room meta for %q: %w", roomID, res.Err)
+		}
+		c.metrics.Miss(ctx)
+		return res.Val.(Meta), nil
+	case <-ctx.Done():
 		c.metrics.Error(ctx)
-		return Meta{}, fmt.Errorf("get room meta for %q: %w", roomID, err)
+		return Meta{}, ctx.Err()
 	}
-	c.metrics.Miss(ctx)
-	return v.(Meta), nil
 }
 
 // Invalidate removes any cached entry for roomID. Safe to call when
