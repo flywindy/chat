@@ -16,7 +16,8 @@ services:
       - SITE_ID=${SITE_ID:-site-local}
       - MONGO_URI=mongodb://mongodb:27017
       - MONGO_DB=chat
-      - MAX_FILES=10
+      - MAX_IMAGES=10
+      - MAX_ATTACHMENTS=1
       - MAX_IMAGE_SIZE_BYTES=26214400
       - FILE_UPLOAD_MAX_FILE_SIZE=104857600
       - FILE_UPLOAD_MEDIA_TYPE_BLACKLIST=image/svg+xml

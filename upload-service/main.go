@@ -33,8 +33,10 @@ type config struct {
 	MongoUsername string `env:"MONGO_USERNAME"  envDefault:""`
 	MongoPassword string `env:"MONGO_PASSWORD"  envDefault:""`
 
-	// MaxFiles caps the number of images per upload request.
-	MaxFiles int `env:"MAX_FILES" envDefault:"10"`
+	// MaxImages caps the number of images per image-upload request.
+	MaxImages int `env:"MAX_IMAGES" envDefault:"10"`
+	// MaxAttachments caps the number of files the single-file upload endpoint accepts.
+	MaxAttachments int `env:"MAX_ATTACHMENTS" envDefault:"1"`
 	// MaxImageSizeBytes is the per-image upload ceiling (default 25 MiB).
 	MaxImageSizeBytes int64 `env:"MAX_IMAGE_SIZE_BYTES" envDefault:"26214400"`
 
@@ -118,7 +120,7 @@ func run() error {
 	}
 
 	mimeFilter := newMediaTypeFilter(cfg.FileUploadMediaTypeWhitelist, cfg.FileUploadMediaTypeBlacklist)
-	handler := NewHandler(store, driveClient, s3Store, cfg.MaxFiles, cfg.MaxImageSizeBytes,
+	handler := NewHandler(store, driveClient, s3Store, cfg.MaxImages, cfg.MaxAttachments, cfg.MaxImageSizeBytes,
 		cfg.FileUploadMaxFileSize, mimeFilter, imagePreview, cfg.FileDownloadCacheMaxAgeSeconds)
 
 	gin.SetMode(gin.ReleaseMode)

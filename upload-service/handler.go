@@ -30,6 +30,9 @@ const (
 // imageFormField is the multipart form field carrying the uploaded images.
 const imageFormField = "images"
 
+// fileFormField is the multipart form field carrying the single-endpoint upload.
+const fileFormField = "file"
+
 // defaultUploadContentType is the fallback MIME for the single-file endpoint when
 // the multipart part carries no Content-Type.
 const defaultUploadContentType = "application/octet-stream"
@@ -52,26 +55,28 @@ type objectStore interface {
 
 // Handler holds the upload-service dependencies.
 type Handler struct {
-	store        Store
-	drive        driveClient
-	s3           objectStore
-	maxFiles     int
-	maxImageSize int64
-	maxFileSize  int64
-	mimeFilter   *mediaTypeFilter
-	preview      previewFunc
-	nowMilli     func() int64
-	cacheMaxAge  int
+	store          Store
+	drive          driveClient
+	s3             objectStore
+	maxImages      int
+	maxAttachments int
+	maxImageSize   int64
+	maxFileSize    int64
+	mimeFilter     *mediaTypeFilter
+	preview        previewFunc
+	nowMilli       func() int64
+	cacheMaxAge    int
 }
 
-// NewHandler wires the handler dependencies. maxFiles/maxImageSize gate the image
-// endpoint; maxFileSize/mimeFilter/preview gate the file endpoint; s3 backs the
-// MinIO/S3 download endpoint; cacheMaxAge is its Cache-Control max-age in seconds.
-func NewHandler(store Store, dc driveClient, s3 objectStore, maxFiles int, maxImageSize, maxFileSize int64,
+// NewHandler wires the handler dependencies. maxImages/maxImageSize gate the image
+// endpoint; maxAttachments/maxFileSize/mimeFilter/preview gate the file endpoint; s3
+// backs the MinIO/S3 download endpoint; cacheMaxAge is its Cache-Control max-age in seconds.
+func NewHandler(store Store, dc driveClient, s3 objectStore, maxImages, maxAttachments int, maxImageSize, maxFileSize int64,
 	mimeFilter *mediaTypeFilter, preview previewFunc, cacheMaxAge int) *Handler {
 	return &Handler{
-		store: store, drive: dc, s3: s3, maxFiles: maxFiles, maxImageSize: maxImageSize,
-		maxFileSize: maxFileSize, mimeFilter: mimeFilter, preview: preview, cacheMaxAge: cacheMaxAge,
+		store: store, drive: dc, s3: s3, maxImages: maxImages, maxAttachments: maxAttachments,
+		maxImageSize: maxImageSize, maxFileSize: maxFileSize, mimeFilter: mimeFilter,
+		preview: preview, cacheMaxAge: cacheMaxAge,
 		nowMilli: func() int64 { return time.Now().UTC().UnixMilli() },
 	}
 }
@@ -154,7 +159,7 @@ func (h *Handler) HandleUploadImages(c *gin.Context) {
 		return
 	}
 	files := form.File[imageFormField]
-	if len(files) > h.maxFiles {
+	if len(files) > h.maxImages {
 		errhttp.Write(ctx, c, errcode.BadRequest("too many files"))
 		return
 	}
@@ -227,11 +232,21 @@ func (h *Handler) HandleUploadFile(c *gin.Context) {
 		return
 	}
 
-	fh, err := c.FormFile("file")
+	form, err := c.MultipartForm()
 	if err != nil {
+		errhttp.Write(ctx, c, errcode.BadRequest("request must be multipart/form-data"))
+		return
+	}
+	files := form.File[fileFormField]
+	if len(files) == 0 {
 		errhttp.Write(ctx, c, errcode.BadRequest("file is required"))
 		return
 	}
+	if len(files) > h.maxAttachments {
+		errhttp.Write(ctx, c, errcode.BadRequest("too many files"))
+		return
+	}
+	fh := files[0]
 	if h.maxFileSize >= 0 && fh.Size > h.maxFileSize {
 		errhttp.Write(ctx, c, errcode.BadRequest("file size exceeds limit"))
 		return

@@ -392,7 +392,7 @@ success/failure in a single `200` (partial success).
 |---|---|---|---|---|
 | `ssoToken` | header | string | yes | OIDC-issued SSO token; identifies the uploader. |
 | `roomId` | path | string | yes | Target room ID; the caller must be a member. |
-| `images` | form file | file[] | yes | One or more images (`.png`/`.jpeg`/`.jpg`/`.heic`), each ≤ `MAX_IMAGE_SIZE_BYTES` (default 25 MiB); at most `MAX_FILES` (default 10). Repeat the field once per file. |
+| `images` | form file | file[] | yes | One or more images (`.png`/`.jpeg`/`.jpg`/`.heic`), each ≤ `MAX_IMAGE_SIZE_BYTES` (default 25 MiB); at most `MAX_IMAGES` (default 10). Repeat the field once per file. |
 
 #### Success response
 
@@ -461,7 +461,7 @@ pure-HTTP endpoint — it does **not** publish a message.
 |---|---|---|---|---|
 | `ssoToken` | header | string | yes | OIDC-issued SSO token; identifies the uploader. |
 | `roomId` | path | string | yes | Target room ID; the caller must be a member. |
-| `file` | form file | file | yes | The single file, ≤ `FILE_UPLOAD_MAX_FILE_SIZE` (default 100 MiB). Its MIME type must pass the server's allow/deny lists (`FILE_UPLOAD_MEDIA_TYPE_WHITELIST`/`BLACKLIST`; `image/svg+xml` is blocked by default). |
+| `file` | form file | file | yes | The single file, ≤ `FILE_UPLOAD_MAX_FILE_SIZE` (default 100 MiB). At most `MAX_ATTACHMENTS` (default 1) parts may be sent under this field; more is rejected with `too many files`. Its MIME type must pass the server's allow/deny lists (`FILE_UPLOAD_MEDIA_TYPE_WHITELIST`/`BLACKLIST`; `image/svg+xml` is blocked by default). |
 | `description` | form field | string | no | Optional attachment description. |
 
 #### Success response
@@ -495,7 +495,7 @@ Uses the [§6](#6-error-envelope-reference) envelope. HTTP statuses:
 
 | Status | `code` | `reason` | Example body |
 |---|---|---|---|
-| 400 | `bad_request` | — | `{ "code": "bad_request", "error": "file type is not allowed" }` — also `roomId is required`, `file is required`, `file size exceeds limit`. |
+| 400 | `bad_request` | — | `{ "code": "bad_request", "error": "file type is not allowed" }` — also `roomId is required`, `request must be multipart/form-data`, `file is required`, `too many files`, `file size exceeds limit`. |
 | 401 | `unauthenticated` | `invalid_sso_token` / `sso_token_expired` / `missing_fields` | `{ "code": "unauthenticated", "reason": "invalid_sso_token", "error": "invalid sso token" }` |
 | 403 | `forbidden` | `not_room_member` | `{ "code": "forbidden", "reason": "not_room_member", "error": "user alice is not in room abc123" }` |
 | 404 | `not_found` | — | `{ "code": "not_found", "error": "room not found" }` |
