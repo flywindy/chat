@@ -75,7 +75,7 @@ func (c *Client) UploadGroupImages(userID, username, email, groupID, origin stri
 	resp, err := req.
 		SetResult(&result).
 		SetPathParam("groupId", groupID).
-		Post(fmt.Sprintf("%s/api/v1/groups/{groupId}/files/bulk", c.GetBaseURLFromRoomOrigin(origin)))
+		Post(fmt.Sprintf("%s/api/v1/groups/{groupId}/files/bulk?bypass=true", c.GetBaseURLFromRoomOrigin(origin)))
 	if err != nil {
 		return nil, fmt.Errorf("upload group images: %w", err)
 	}

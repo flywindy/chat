@@ -1,4 +1,4 @@
-# upload-service `/setCookie` + cookie-based auth — design
+# upload-service `/file/setCookie` + cookie-based auth — design
 
 **Date:** 2026-07-03
 **Service:** `upload-service`
@@ -18,7 +18,7 @@ which requires explicit CORS handling.
 ### End-to-end flow (frontend is context only)
 
 ```
-1. fetch POST https://upload/api/v1/setCookie
+1. fetch POST https://upload/api/v1/file/setCookie
      headers: { ssoToken: <jwt> }, credentials: "include"
    → authMiddleware validates the JWT
    → handler emits: Set-Cookie: ssoToken=<jwt>; SameSite=None; Secure; Partitioned; HttpOnly; Path=/
@@ -136,10 +136,11 @@ r.Use(corsMiddleware(cfg.CORSAllowedOrigins)) // engine-level so preflight OPTIO
 registerRoutes(r, handler, validator, cfg.DevMode)
 ```
 
-`routes.go` only adds the new route to the existing group (its signature is unchanged):
+`routes.go` only adds the new route to the existing group (its signature is unchanged).
+The route lives under the `/file` prefix, alongside the sibling upload/download endpoints:
 
 ```go
-api.POST("/setCookie", h.HandleSetCookie)
+api.POST("/file/setCookie", h.HandleSetCookie)
 // … existing routes unchanged …
 ```
 
@@ -147,8 +148,8 @@ api.POST("/setCookie", h.HandleSetCookie)
 
 | Case | Result |
 |------|--------|
-| `/setCookie` with missing `ssoToken` header | 401 `AuthMissingFields` (authMiddleware, handler never runs) |
-| `/setCookie` with invalid/expired token | 401 `AuthInvalidToken` / `AuthTokenExpired` (authMiddleware) |
+| `/file/setCookie` with missing `ssoToken` header | 401 `AuthMissingFields` (authMiddleware, handler never runs) |
+| `/file/setCookie` with invalid/expired token | 401 `AuthInvalidToken` / `AuthTokenExpired` (authMiddleware) |
 | Download with expired/invalid cookie token | 401 via the same validator path, token sourced from cookie |
 | Request from a disallowed origin | No CORS headers; browser blocks the cross-origin read |
 | Preflight `OPTIONS` | 204, no body, no auth |
@@ -176,7 +177,7 @@ Coverage stays ≥80% (target 90% for the new handler/middleware). Run with `-ra
 
 ## Documentation & config deliverables
 
-- **`docs/client-api.md` §2.4** (canonical) — add a `POST /api/v1/setCookie` subsection
+- **`docs/client-api.md` §2.4** (canonical) — add a `POST /api/v1/file/setCookie` subsection
   (Endpoint, Request table, Success response with the exact `Set-Cookie` string, Error
   table, and the `Triggered events` = None footers) matching the style of the sibling
   upload/download endpoints. Also amend the §2.4 preamble and the two download endpoints'

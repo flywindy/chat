@@ -952,6 +952,19 @@ func TestRoute_UploadRegistered(t *testing.T) {
 	assert.True(t, found)
 }
 
+func TestRoute_SetCookieRegistered(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	registerRoutes(r, &Handler{}, nil, true)
+	found := false
+	for _, ri := range r.Routes() {
+		if ri.Method == http.MethodPost && ri.Path == "/api/v1/file/setCookie" {
+			found = true
+		}
+	}
+	assert.True(t, found)
+}
+
 // multipartFileParts builds a multipart body with n parts all under the "file"
 // field, so the single-file endpoint's attachment-count check can be exercised.
 func multipartFileParts(t *testing.T, n int) (*bytes.Buffer, string) {
@@ -1004,7 +1017,7 @@ func TestHandler_HandleSetCookie_SetsCookieAttributes(t *testing.T) {
 	h := &Handler{}
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/setCookie", nil)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/file/setCookie", nil)
 	c.Request.Header.Set("ssoToken", "jwt-abc")
 
 	h.HandleSetCookie(c)
@@ -1027,7 +1040,7 @@ func TestHandler_HandleSetCookie_FallsBackToCookie(t *testing.T) {
 	h := &Handler{}
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/setCookie", nil)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/file/setCookie", nil)
 	c.Request.Header.Set("Cookie", "ssoToken=cookie-jwt")
 
 	h.HandleSetCookie(c)
@@ -1044,7 +1057,7 @@ func TestHandler_HandleSetCookie_NoToken(t *testing.T) {
 	h := &Handler{}
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/setCookie", nil)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/file/setCookie", nil)
 
 	h.HandleSetCookie(c)
 

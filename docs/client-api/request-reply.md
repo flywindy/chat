@@ -21,7 +21,7 @@ For connection, auth, shared schemas, and error reference, see [../client-api.md
    - [POST /api/v1/auth](#post-apiv1auth)
    - [GET /api/userInfo](#get-apiuserinfo)
    - [GET /api/settings](#get-apisettings)
-   - [POST /api/v1/setCookie](#post-apiv1setcookie)
+   - [POST /api/v1/file/setCookie](#post-apiv1filesetcookie)
    - [POST /api/v1/file/rooms/:roomId/upload/images](#post-apiv1fileroomsroomiduploadimages)
    - [POST /api/v1/file/rooms/:roomId/upload/file](#post-apiv1fileroomsroomiduploadfile)
    - [GET /api/v1/file/rooms/:roomId/file/:fileId](#get-apiv1fileroomsroomidfilefileid)
@@ -79,16 +79,16 @@ and the OTEL telemetry base URL (`otelBaseUrl`). See
 
 ---
 
-### POST /api/v1/setCookie
+### POST /api/v1/file/setCookie
 
-**Endpoint:** `POST /api/v1/setCookie`
+**Endpoint:** `POST /api/v1/file/setCookie`
 **Reply:** synchronous HTTP response
 
 Exchanges the `ssoToken` header for an `ssoToken` cookie so the browser can load
 protected files via `<img src>` (which cannot send headers). Token is validated before
 the cookie is issued. Credentialed request; caller's `Origin` must be in the server's
 `CORS_ALLOWED_ORIGINS` allowlist. See
-[../client-api.md §2.4](../client-api.md#post-apiv1setcookie).
+[../client-api.md §2.4](../client-api.md#post-apiv1filesetcookie).
 
 **Emits:** `None — HTTP-only.`
 
@@ -129,7 +129,7 @@ multipart/form-data`. `ssoToken` header required; caller must be a room member. 
 **Reply:** synchronous HTTP response (raw file bytes, any type)
 
 Downloads a protected file (image/audio/video/document). `ssoToken` required (header,
-or the `ssoToken` cookie from `POST /api/v1/setCookie` for browser `<img>` downloads;
+or the `ssoToken` cookie from `POST /api/v1/file/setCookie` for browser `<img>` downloads;
 header wins); caller must be a room member. `drive_host` query param required.
 Called with the `relativePath` (image upload) or `titleLink` (file upload)
 returned by the upload endpoints. See
@@ -146,7 +146,7 @@ returned by the upload endpoints. See
 
 Downloads a previously-uploaded file by `fileId` (resolved via the `uploads`
 collection, streamed from MinIO/S3); `fileName` is cosmetic. `ssoToken` required
-(header, or the `ssoToken` cookie from `POST /api/v1/setCookie` for browser `<img>`
+(header, or the `ssoToken` cookie from `POST /api/v1/file/setCookie` for browser `<img>`
 downloads; header wins); caller must be a member of the file's room. See
 [../client-api.md §2.4](../client-api.md#get-apiv1file-uploadfileidfilename).
 

@@ -313,15 +313,15 @@ See [Error envelope](#6-error-envelope-reference). HTTP statuses:
 HTTP endpoints on `upload-service` for protected file uploads and downloads,
 proxied to/from an internal Drive. All require an OIDC-validated `ssoToken` — sent
 as the `ssoToken` header, or (for browser `<img>` downloads that cannot set headers)
-as an `ssoToken` cookie obtained from `POST /api/v1/setCookie` below; the header takes
+as an `ssoToken` cookie obtained from `POST /api/v1/file/setCookie` below; the header takes
 precedence. Room-scoped endpoints also require that the caller is a member (has a
 subscription) of `:roomId`. Cross-origin browsers are served credentialed CORS headers
 only when their `Origin` is in the server's `CORS_ALLOWED_ORIGINS` allowlist. Errors use
 the standard [§6](#6-error-envelope-reference) envelope `{ code, reason?, error }`.
 
-#### POST /api/v1/setCookie
+#### POST /api/v1/file/setCookie
 
-**Endpoint:** `POST /api/v1/setCookie`
+**Endpoint:** `POST /api/v1/file/setCookie`
 **Reply:** synchronous HTTP response
 
 Exchanges the `ssoToken` header for an `ssoToken` cookie so the browser can then load
@@ -526,7 +526,7 @@ or `titleLink` (file upload) returned by the upload endpoints.
 
 | Field | Source | Type | Required | Notes |
 |---|---|---|---|---|
-| `ssoToken` | header/cookie | string | yes | OIDC-issued SSO token. Sent as the `ssoToken` header, or as the `ssoToken` cookie from `POST /api/v1/setCookie` (browser `<img>` downloads); header wins. |
+| `ssoToken` | header/cookie | string | yes | OIDC-issued SSO token. Sent as the `ssoToken` header, or as the `ssoToken` cookie from `POST /api/v1/file/setCookie` (browser `<img>` downloads); header wins. |
 | `roomId` | path | string | yes | Room the image belongs to; the caller must be a member. |
 | `fileId` | path | string | yes | Drive file ID (from the upload response). |
 | `drive_host` | query | string | yes | Drive base URL (from the upload response). |
@@ -571,7 +571,7 @@ The response is always served as an attachment.
 
 | Field | Source | Type | Required | Notes |
 |---|---|---|---|---|
-| `ssoToken` | header/cookie | string | yes | OIDC-issued SSO token. Sent as the `ssoToken` header, or as the `ssoToken` cookie from `POST /api/v1/setCookie` (browser `<img>` downloads); header wins. |
+| `ssoToken` | header/cookie | string | yes | OIDC-issued SSO token. Sent as the `ssoToken` header, or as the `ssoToken` cookie from `POST /api/v1/file/setCookie` (browser `<img>` downloads); header wins. |
 | `fileId` | path | string | yes | Upload ID (the `uploads._id`); used for the metadata lookup. |
 | `fileName` | path | string | yes | Cosmetic — accepted but ignored; the served filename comes from the stored metadata. |
 
