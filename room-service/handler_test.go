@@ -6094,15 +6094,33 @@ func TestHandler_ListMentionableSubscriptions(t *testing.T) {
 			want: want{errIs: errMentionableLimitInvalid},
 		},
 		{
-			name: "limit exceeds UserCount + AppCount",
+			// Regression (#464): an over-cap explicit limit must clamp to the
+			// cap like the nil-limit branch does, not hard-reject.
+			name: "limit exceeds UserCount + AppCount clamps instead of rejecting",
 			body: []byte(`{"limit":8}`),
 			setupMock: func(s *MockRoomStore) {
 				s.EXPECT().CheckMembership(gomock.Any(), requester, roomID).
 					Return(nil)
 				s.EXPECT().GetRoom(gomock.Any(), roomID).
 					Return(&model.Room{ID: roomID, UserCount: 5, AppCount: 2}, nil)
+				s.EXPECT().
+					ListMentionableSubscriptions(gomock.Any(), roomID, requester, "", 7).
+					Return(stub, nil)
 			},
-			want: want{errIs: errMentionableLimitInvalid},
+			want: want{subs: stub},
+		},
+		{
+			// Empty room + explicit over-cap limit must still short-circuit
+			// to empty (no store call), never send $limit:0 to the store.
+			name: "explicit limit with empty room returns empty without store call",
+			body: []byte(`{"limit":5}`),
+			setupMock: func(s *MockRoomStore) {
+				s.EXPECT().CheckMembership(gomock.Any(), requester, roomID).
+					Return(nil)
+				s.EXPECT().GetRoom(gomock.Any(), roomID).
+					Return(&model.Room{ID: roomID, UserCount: 0, AppCount: 0}, nil)
+			},
+			want: want{subs: []model.MentionableSubscription{}},
 		},
 		{
 			name: "limit at cap is accepted",

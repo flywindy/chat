@@ -445,7 +445,7 @@ accounts are excluded. Returns `user` and `app` rows.
 
 #### Errors
 
-`"only room members can perform this action"`, `"limit must be > 0 and <= room user count + app count"`.
+`"only room members can perform this action"`, `"limit must be > 0 and <= room user count + app count"` (fires only for a non-positive limit; an over-cap positive limit is clamped).
 
 **Emits:** None — reply only.
 

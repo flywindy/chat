@@ -595,17 +595,18 @@ func (h *Handler) listMentionableSubscriptions(c *natsrouter.Context) (*model.Me
 	}
 
 	mentionableCap := room.UserCount + room.AppCount
+	if mentionableCap == 0 {
+		return &model.MentionableSubscriptionsResponse{Subscriptions: []model.MentionableSubscription{}}, nil
+	}
 	var limit int
 	if req.Limit == nil {
-		if mentionableCap == 0 {
-			return &model.MentionableSubscriptionsResponse{Subscriptions: []model.MentionableSubscription{}}, nil
-		}
 		limit = min(defaultMentionableLimit, mentionableCap)
 	} else {
 		limit = *req.Limit
-		if limit <= 0 || limit > mentionableCap {
+		if limit <= 0 {
 			return nil, errMentionableLimitInvalid
 		}
+		limit = min(limit, mentionableCap) // clamp over-cap instead of rejecting
 	}
 
 	// Filter is a literal substring. QuoteMeta escapes regex metacharacters
