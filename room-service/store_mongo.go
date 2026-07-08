@@ -1593,13 +1593,13 @@ func (s *MongoStore) UpdateRoomVisibility(ctx context.Context, roomID string, re
 	return nil
 }
 
-// ApplySubscriptionVisibility writes the {restricted, externalAccess} denorm
+// ApplySubscriptionRestriction writes the {restricted, externalAccess} denorm
 // flags to every subscription of the room. When restricted=true and ownerAccount
 // is non-empty, an aggregation-pipeline $cond also rewrites roles so only
 // ownerAccount holds RoleOwner — atomically, so the restrict transition cannot
 // land in a zero-owner state. Returns ErrOwnerNotSubscribed when ownerAccount
 // has no active subscription in the room.
-func (s *MongoStore) ApplySubscriptionVisibility(ctx context.Context, roomID string, restricted, externalAccess bool, ownerAccount string, visibilityUpdatedAt time.Time) error {
+func (s *MongoStore) ApplySubscriptionRestriction(ctx context.Context, roomID string, restricted, externalAccess bool, ownerAccount string, restrictUpdatedAt time.Time) error {
 	filter := bson.M{"roomId": roomID}
 
 	if restricted && ownerAccount != "" {
@@ -1615,9 +1615,9 @@ func (s *MongoStore) ApplySubscriptionVisibility(ctx context.Context, roomID str
 		}
 		pipeline := mongo.Pipeline{
 			bson.D{{Key: "$set", Value: bson.M{
-				"restricted":          true,
-				"externalAccess":      externalAccess,
-				"visibilityUpdatedAt": visibilityUpdatedAt,
+				"restricted":        true,
+				"externalAccess":    externalAccess,
+				"restrictUpdatedAt": restrictUpdatedAt,
 				"roles": bson.M{"$cond": bson.M{
 					"if":   bson.M{"$eq": bson.A{"$u.account", ownerAccount}},
 					"then": bson.A{string(model.RoleOwner)},
@@ -1632,7 +1632,7 @@ func (s *MongoStore) ApplySubscriptionVisibility(ctx context.Context, roomID str
 	}
 
 	if _, err := s.subscriptions.UpdateMany(ctx, filter, bson.M{
-		"$set": bson.M{"restricted": restricted, "externalAccess": externalAccess, "visibilityUpdatedAt": visibilityUpdatedAt},
+		"$set": bson.M{"restricted": restricted, "externalAccess": externalAccess, "restrictUpdatedAt": restrictUpdatedAt},
 	}); err != nil {
 		return fmt.Errorf("apply visibility (flags only): %w", err)
 	}

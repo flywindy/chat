@@ -879,7 +879,7 @@ func TestMongoInboxStore_UpdateSubscriptionNamesForRoom(t *testing.T) {
 	assert.Equal(t, "untouched", otherSub.Name)
 }
 
-func TestMongoInboxStore_ApplySubscriptionVisibility(t *testing.T) {
+func TestMongoInboxStore_ApplySubscriptionRestriction(t *testing.T) {
 	seed := func(t *testing.T, db *mongo.Database) {
 		t.Helper()
 		_, err := db.Collection("subscriptions").InsertMany(context.Background(), []any{
@@ -910,7 +910,7 @@ func TestMongoInboxStore_ApplySubscriptionVisibility(t *testing.T) {
 		store := &mongoInboxStore{subCol: db.Collection("subscriptions")}
 		seed(t, db)
 
-		require.NoError(t, store.ApplySubscriptionVisibility(context.Background(), "r1", true, false, "bob", time.Now().UTC()))
+		require.NoError(t, store.ApplySubscriptionRestriction(context.Background(), "r1", true, false, "bob", time.Now().UTC()))
 
 		subs := loadSubs(t, db)
 		roles := rolesByAccount(subs)
@@ -928,7 +928,7 @@ func TestMongoInboxStore_ApplySubscriptionVisibility(t *testing.T) {
 		store := &mongoInboxStore{subCol: db.Collection("subscriptions")}
 		seed(t, db)
 
-		require.NoError(t, store.ApplySubscriptionVisibility(context.Background(), "r1", true, true, "", time.Now().UTC()))
+		require.NoError(t, store.ApplySubscriptionRestriction(context.Background(), "r1", true, true, "", time.Now().UTC()))
 
 		subs := loadSubs(t, db)
 		roles := rolesByAccount(subs)
@@ -946,7 +946,7 @@ func TestMongoInboxStore_ApplySubscriptionVisibility(t *testing.T) {
 		store := &mongoInboxStore{subCol: db.Collection("subscriptions")}
 		seed(t, db)
 
-		require.NoError(t, store.ApplySubscriptionVisibility(context.Background(), "r1", false, false, "bob", time.Now().UTC()))
+		require.NoError(t, store.ApplySubscriptionRestriction(context.Background(), "r1", false, false, "bob", time.Now().UTC()))
 
 		subs := loadSubs(t, db)
 		roles := rolesByAccount(subs)
@@ -1341,39 +1341,39 @@ func TestInbox_UpdateSubscriptionNamesForRoom_NewerApplies(t *testing.T) {
 	assert.Equal(t, "newer", got.Name)
 }
 
-func TestInbox_ApplySubscriptionVisibility_OutOfOrderSkipped(t *testing.T) {
+func TestInbox_ApplySubscriptionRestriction_OutOfOrderSkipped(t *testing.T) {
 	ctx := context.Background()
 	store := newGuardStore(setupMongo(t))
 
 	// Sub last set restricted=true by a newer event (ts=200).
 	_, err := store.subCol.InsertOne(ctx, bson.M{
 		"_id": "s1", "roomId": "r1", "u": bson.M{"account": "alice"},
-		"restricted": true, "externalAccess": false, "visibilityUpdatedAt": time.UnixMilli(200).UTC(),
+		"restricted": true, "externalAccess": false, "restrictUpdatedAt": time.UnixMilli(200).UTC(),
 	})
 	require.NoError(t, err)
 
 	// An older unrestrict (ts=100) must not regress visibility state.
-	require.NoError(t, store.ApplySubscriptionVisibility(ctx, "r1", false, false, "", time.UnixMilli(100).UTC()))
+	require.NoError(t, store.ApplySubscriptionRestriction(ctx, "r1", false, false, "", time.UnixMilli(100).UTC()))
 
 	var got model.Subscription
 	require.NoError(t, store.subCol.FindOne(ctx, bson.M{"_id": "s1"}).Decode(&got))
 	assert.True(t, got.Restricted) // unchanged
 }
 
-func TestInbox_ApplySubscriptionVisibility_NewerApplies(t *testing.T) {
+func TestInbox_ApplySubscriptionRestriction_NewerApplies(t *testing.T) {
 	ctx := context.Background()
 	store := newGuardStore(setupMongo(t))
 
-	// Two subs at an older visibilityUpdatedAt; a newer restrict rewrites roles.
+	// Two subs at an older restrictUpdatedAt; a newer restrict rewrites roles.
 	_, err := store.subCol.InsertMany(ctx, []any{
 		bson.M{"_id": "s1", "roomId": "r1", "u": bson.M{"account": "alice"},
-			"roles": []model.Role{model.RoleOwner}, "restricted": false, "visibilityUpdatedAt": time.UnixMilli(100).UTC()},
+			"roles": []model.Role{model.RoleOwner}, "restricted": false, "restrictUpdatedAt": time.UnixMilli(100).UTC()},
 		bson.M{"_id": "s2", "roomId": "r1", "u": bson.M{"account": "bob"},
-			"roles": []model.Role{model.RoleMember}, "restricted": false, "visibilityUpdatedAt": time.UnixMilli(100).UTC()},
+			"roles": []model.Role{model.RoleMember}, "restricted": false, "restrictUpdatedAt": time.UnixMilli(100).UTC()},
 	})
 	require.NoError(t, err)
 
-	require.NoError(t, store.ApplySubscriptionVisibility(ctx, "r1", true, false, "bob", time.UnixMilli(200).UTC()))
+	require.NoError(t, store.ApplySubscriptionRestriction(ctx, "r1", true, false, "bob", time.UnixMilli(200).UTC()))
 
 	var alice, bob model.Subscription
 	require.NoError(t, store.subCol.FindOne(ctx, bson.M{"_id": "s1"}).Decode(&alice))

@@ -4064,7 +4064,10 @@ func TestSubscriptionEnrichmentFields_RoundTrip(t *testing.T) {
 
 func TestSubscriptionBaseMetadata_RoundTrip(t *testing.T) {
 	favoriteUpdatedAt := time.Date(2026, 2, 1, 9, 0, 0, 0, time.UTC)
-	updatedAt := time.Date(2026, 3, 2, 10, 0, 0, 0, time.UTC)
+	muteUpdatedAt := time.Date(2026, 2, 2, 9, 0, 0, 0, time.UTC)
+	rolesUpdatedAt := time.Date(2026, 2, 3, 9, 0, 0, 0, time.UTC)
+	nameUpdatedAt := time.Date(2026, 2, 4, 9, 0, 0, 0, time.UTC)
+	restrictUpdatedAt := time.Date(2026, 2, 5, 9, 0, 0, 0, time.UTC)
 	src := model.Subscription{
 		ID:                "s1",
 		User:              model.SubscriptionUser{ID: "u1", Account: "alice"},
@@ -4075,7 +4078,10 @@ func TestSubscriptionBaseMetadata_RoundTrip(t *testing.T) {
 		JoinedAt:          time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 		HasUnread:         true,
 		FavoriteUpdatedAt: &favoriteUpdatedAt,
-		UpdatedAt:         &updatedAt,
+		MuteUpdatedAt:     &muteUpdatedAt,
+		RolesUpdatedAt:    &rolesUpdatedAt,
+		NameUpdatedAt:     &nameUpdatedAt,
+		RestrictUpdatedAt: &restrictUpdatedAt,
 	}
 	dst := model.Subscription{}
 	roundTrip(t, &src, &dst)
@@ -4091,7 +4097,7 @@ func TestSubscriptionBaseMetadata_RoundTrip(t *testing.T) {
 	zb, err := json.Marshal(&model.Subscription{ID: "z", JoinedAt: time.Now().UTC()})
 	require.NoError(t, err)
 	require.NoError(t, json.Unmarshal(zb, &zero))
-	for _, k := range []string{"favoriteUpdatedAt", "updatedAt"} {
+	for _, k := range []string{"favoriteUpdatedAt", "muteUpdatedAt", "rolesUpdatedAt", "nameUpdatedAt", "restrictUpdatedAt", "updatedAt"} {
 		_, present := zero[k]
 		assert.False(t, present, "%q must be omitted when unset", k)
 	}

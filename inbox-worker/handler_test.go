@@ -312,11 +312,11 @@ func (s *stubInboxStore) getNameUpdates() []nameUpdate {
 	return cp
 }
 
-func (s *stubInboxStore) ApplySubscriptionVisibility(_ context.Context, roomID string, restricted, externalAccess bool, ownerAccount string, visibilityUpdatedAt time.Time) error {
+func (s *stubInboxStore) ApplySubscriptionRestriction(_ context.Context, roomID string, restricted, externalAccess bool, ownerAccount string, restrictUpdatedAt time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.visibilityUpdates = append(s.visibilityUpdates, visibilityUpdate{
-		roomID: roomID, restricted: restricted, externalAccess: externalAccess, ownerAccount: ownerAccount, updatedAt: visibilityUpdatedAt,
+		roomID: roomID, restricted: restricted, externalAccess: externalAccess, ownerAccount: ownerAccount, updatedAt: restrictUpdatedAt,
 	})
 	return nil
 }

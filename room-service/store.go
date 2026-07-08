@@ -13,7 +13,7 @@ var (
 	ErrUserNotFound       = errors.New("user not found")                        // GetUser: no matching account
 	ErrAppNotFound        = errors.New("app not found")                         // GetApp: no matching bot account
 	ErrRoomNotFound       = errors.New("room not found")                        // UpdateRoomVisibility: no matching room
-	ErrOwnerNotSubscribed = errors.New("owner account is no longer subscribed") // ApplySubscriptionVisibility: owner left
+	ErrOwnerNotSubscribed = errors.New("owner account is no longer subscribed") // ApplySubscriptionRestriction: owner left
 )
 
 //go:generate mockgen -source=store.go -destination=mock_store_test.go -package=main
@@ -205,15 +205,15 @@ type RoomStore interface {
 	// UpdateRoomVisibility sets rooms.{restricted, externalAccess, updatedAt}.
 	// Returns ErrRoomNotFound when no room matches.
 	UpdateRoomVisibility(ctx context.Context, roomID string, restricted, externalAccess bool) error
-	// ApplySubscriptionVisibility writes the {restricted, externalAccess} denorm
+	// ApplySubscriptionRestriction writes the {restricted, externalAccess} denorm
 	// flags to every subscription of the room. When restricted=true and
 	// ownerAccount is non-empty, an aggregation-pipeline $cond also rewrites
 	// roles so only ownerAccount holds RoleOwner. Returns ErrOwnerNotSubscribed
 	// when ownerAccount has no active subscription in the room (the rewrite
-	// would leave zero owners). Stamps visibilityUpdatedAt so the origin doc
+	// would leave zero owners). Stamps restrictUpdatedAt so the origin doc
 	// carries the same high-water mark the federated event publishes (inbox-worker
 	// guards remote applies against it).
-	ApplySubscriptionVisibility(ctx context.Context, roomID string, restricted, externalAccess bool, ownerAccount string, visibilityUpdatedAt time.Time) error
+	ApplySubscriptionRestriction(ctx context.Context, roomID string, restricted, externalAccess bool, ownerAccount string, restrictUpdatedAt time.Time) error
 	// ListSubscriptionsByRoom returns every subscription in the room. Used to
 	// drive cross-site inbox fan-out (one event per remote site).
 	ListSubscriptionsByRoom(ctx context.Context, roomID string) ([]model.Subscription, error)

@@ -204,8 +204,8 @@ func (h *handler) roomRenamedEvent(room *model.Room) model.InboxEvent {
 }
 
 func (h *handler) roomRestrictedEvent(room *model.Room) model.InboxEvent {
-	// Use the source _updatedAt millis (zero-guarded in handleRoom) as the visibilityUpdatedAt
-	// high-water mark so ApplySubscriptionVisibility matches the companion room_sync guard.
+	// Use the source _updatedAt millis (zero-guarded in handleRoom) as the restrictUpdatedAt
+	// high-water mark so ApplySubscriptionRestriction matches the companion room_sync guard.
 	return h.inboxEvent(model.InboxRoomRestricted, room.SiteID, mustMarshal(model.RoomRestrictedInboxPayload{
 		RoomID:         room.ID,
 		Restricted:     room.Restricted,

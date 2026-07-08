@@ -42,18 +42,18 @@ func (m *MockInboxStore) EXPECT() *MockInboxStoreMockRecorder {
 	return m.recorder
 }
 
-// ApplySubscriptionVisibility mocks base method.
-func (m *MockInboxStore) ApplySubscriptionVisibility(ctx context.Context, roomID string, restricted, externalAccess bool, ownerAccount string, visibilityUpdatedAt time.Time) error {
+// ApplySubscriptionRestriction mocks base method.
+func (m *MockInboxStore) ApplySubscriptionRestriction(ctx context.Context, roomID string, restricted, externalAccess bool, ownerAccount string, restrictUpdatedAt time.Time) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ApplySubscriptionVisibility", ctx, roomID, restricted, externalAccess, ownerAccount, visibilityUpdatedAt)
+	ret := m.ctrl.Call(m, "ApplySubscriptionRestriction", ctx, roomID, restricted, externalAccess, ownerAccount, restrictUpdatedAt)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
-// ApplySubscriptionVisibility indicates an expected call of ApplySubscriptionVisibility.
-func (mr *MockInboxStoreMockRecorder) ApplySubscriptionVisibility(ctx, roomID, restricted, externalAccess, ownerAccount, visibilityUpdatedAt any) *gomock.Call {
+// ApplySubscriptionRestriction indicates an expected call of ApplySubscriptionRestriction.
+func (mr *MockInboxStoreMockRecorder) ApplySubscriptionRestriction(ctx, roomID, restricted, externalAccess, ownerAccount, restrictUpdatedAt any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ApplySubscriptionVisibility", reflect.TypeOf((*MockInboxStore)(nil).ApplySubscriptionVisibility), ctx, roomID, restricted, externalAccess, ownerAccount, visibilityUpdatedAt)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ApplySubscriptionRestriction", reflect.TypeOf((*MockInboxStore)(nil).ApplySubscriptionRestriction), ctx, roomID, restricted, externalAccess, ownerAccount, restrictUpdatedAt)
 }
 
 // ApplyThreadRead mocks base method.

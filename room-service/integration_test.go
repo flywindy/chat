@@ -2523,10 +2523,10 @@ func TestMongoStore_ToggleSubscriptionFavorite(t *testing.T) {
 	assert.ErrorIs(t, err, model.ErrSubscriptionNotFound)
 }
 
-// TestMongoStore_ApplySubscriptionVisibility_StampsTimestamp asserts the origin
-// write stamps visibilityUpdatedAt so the doc shares the federated event's
+// TestMongoStore_ApplySubscriptionRestriction_StampsTimestamp asserts the origin
+// write stamps restrictUpdatedAt so the doc shares the federated event's
 // high-water mark (inbox-worker guards remote applies against it).
-func TestMongoStore_ApplySubscriptionVisibility_StampsTimestamp(t *testing.T) {
+func TestMongoStore_ApplySubscriptionRestriction_StampsTimestamp(t *testing.T) {
 	db := testutil.MongoDB(t, "room-svc-visibility-stamp")
 	store := NewMongoStore(db)
 	ctx := context.Background()
@@ -2543,13 +2543,13 @@ func TestMongoStore_ApplySubscriptionVisibility_StampsTimestamp(t *testing.T) {
 
 	// restrict+owner branch.
 	ts1 := time.Now().UTC()
-	require.NoError(t, store.ApplySubscriptionVisibility(ctx, "r1", true, false, "alice", ts1))
-	assert.Equal(t, ts1.UnixMilli(), subTimeField(t, db, "r1", "alice", "visibilityUpdatedAt").UnixMilli())
+	require.NoError(t, store.ApplySubscriptionRestriction(ctx, "r1", true, false, "alice", ts1))
+	assert.Equal(t, ts1.UnixMilli(), subTimeField(t, db, "r1", "alice", "restrictUpdatedAt").UnixMilli())
 
 	// flags-only branch (ownerAccount empty).
 	ts2 := ts1.Add(time.Second)
-	require.NoError(t, store.ApplySubscriptionVisibility(ctx, "r1", false, false, "", ts2))
-	assert.Equal(t, ts2.UnixMilli(), subTimeField(t, db, "r1", "alice", "visibilityUpdatedAt").UnixMilli())
+	require.NoError(t, store.ApplySubscriptionRestriction(ctx, "r1", false, false, "", ts2))
+	assert.Equal(t, ts2.UnixMilli(), subTimeField(t, db, "r1", "alice", "restrictUpdatedAt").UnixMilli())
 }
 
 func TestMongoStore_SetOwnerRole_Integration(t *testing.T) {

@@ -184,7 +184,10 @@ func subscriptionProjection(extra bson.M) bson.M {
 		"restricted":        1,
 		"externalAccess":    1,
 		"favoriteUpdatedAt": 1,
-		"_updatedAt":        1, // subscription's Mongo field (wire: updatedAt)
+		"muteUpdatedAt":     1,
+		"rolesUpdatedAt":    1,
+		"nameUpdatedAt":     1,
+		"restrictUpdatedAt": 1,
 		// room baseline copied to the top level (consumed by local enrichment)
 		"userCount":         1,
 		"lastMsgAt":         1,

@@ -4692,7 +4692,7 @@ func TestHandleRoomRename_Validation(t *testing.T) {
 // lookup. Used by the success-path table rows.
 func happyPathRestrictedSuccessSetup(s *MockRoomStore) {
 	s.EXPECT().UpdateRoomVisibility(gomock.Any(), "r1", gomock.Any(), gomock.Any()).Return(nil)
-	s.EXPECT().ApplySubscriptionVisibility(gomock.Any(), "r1", gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil)
+	s.EXPECT().ApplySubscriptionRestriction(gomock.Any(), "r1", gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil)
 	s.EXPECT().ListSubscriptionsByRoom(gomock.Any(), "r1").Return(nil, nil)
 	s.EXPECT().FindUsersByAccounts(gomock.Any(), gomock.Any()).Return(nil, nil)
 }

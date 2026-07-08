@@ -53,12 +53,12 @@ type InboxStore interface {
 	// a sub to a stale name. Used when a channel is renamed — replicated via the
 	// cross-site inbox to remote sites.
 	UpdateSubscriptionNamesForRoom(ctx context.Context, roomID, newName string, nameUpdatedAt time.Time) error
-	// ApplySubscriptionVisibility writes {restricted, externalAccess, roles} to all subs
-	// in the room, each guarded by its own visibilityUpdatedAt so an out-of-order
+	// ApplySubscriptionRestriction writes {restricted, externalAccess, roles} to all subs
+	// in the room, each guarded by its own restrictUpdatedAt so an out-of-order
 	// visibility change cannot regress the flags/roles. When restricted=true and
 	// ownerAccount is non-empty, a $cond pipeline demotes all accounts except
 	// ownerAccount to RoleMember.
-	ApplySubscriptionVisibility(ctx context.Context, roomID string, restricted, externalAccess bool, ownerAccount string, visibilityUpdatedAt time.Time) error
+	ApplySubscriptionRestriction(ctx context.Context, roomID string, restricted, externalAccess bool, ownerAccount string, restrictUpdatedAt time.Time) error
 	// UpdateUserStatus replicates a cross-site status change onto the local users doc keyed by
 	// account, guarded by statusUpdatedAt (the event publish time): an older/equal high-water
 	// mark is a no-op so out-of-order multi-site delivery can't regress the status. statusIsShow
@@ -327,7 +327,7 @@ func (h *Handler) handleRoomVisibilityChanged(ctx context.Context, evt *model.In
 	if err := json.Unmarshal(evt.Payload, &p); err != nil {
 		return errcode.Permanent(errcode.BadRequest("unmarshal room_restricted payload"))
 	}
-	if err := h.store.ApplySubscriptionVisibility(ctx, p.RoomID, p.Restricted, p.ExternalAccess, p.OwnerAccount, time.UnixMilli(p.Timestamp).UTC()); err != nil {
+	if err := h.store.ApplySubscriptionRestriction(ctx, p.RoomID, p.Restricted, p.ExternalAccess, p.OwnerAccount, time.UnixMilli(p.Timestamp).UTC()); err != nil {
 		return fmt.Errorf("apply subscription visibility for room %s: %w", p.RoomID, err)
 	}
 	return nil

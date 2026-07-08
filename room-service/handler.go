@@ -1906,7 +1906,7 @@ func (h *Handler) roomRestricted(c *natsrouter.Context, req model.RoomRestricted
 		}
 		return nil, fmt.Errorf("update room restricted: %w", err)
 	}
-	if err := h.store.ApplySubscriptionVisibility(ctx, req.RoomID, req.Restricted, req.ExternalAccess, req.OwnerAccount, time.UnixMilli(req.Timestamp).UTC()); err != nil {
+	if err := h.store.ApplySubscriptionRestriction(ctx, req.RoomID, req.Restricted, req.ExternalAccess, req.OwnerAccount, time.UnixMilli(req.Timestamp).UTC()); err != nil {
 		if errors.Is(err, ErrOwnerNotSubscribed) {
 			return nil, errOwnerNotMember
 		}

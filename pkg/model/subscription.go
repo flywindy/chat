@@ -55,15 +55,17 @@ type Subscription struct {
 	// RoomsInfoBatch RPC (baseline $lookup values when the RPC degrades). Never persisted.
 	Room *SubscriptionRoom `json:"room,omitempty" bson:"-"`
 
-	// Subscription-level metadata persisted on the Mongo subscriptions document.
-	// UpdatedAt is a nullable pointer so a creating writer that doesn't stamp it
-	// (e.g. room-worker's $setOnInsert) never persists a zero-time placeholder.
-	// Last favorite-toggle time (also bumped on un-favorite). bson key matches what the
-	// writers store; the old `favoritedAt` key was never written, so the value never surfaced.
+	// Per-attribute last-change timestamps persisted on the Mongo subscriptions
+	// document, stamped by the write path as order-safety guards and surfaced to
+	// clients. Each is a nullable pointer, nil until the first guarded write, so a
+	// creating writer that doesn't stamp it never persists a zero-time placeholder.
+	// bson keys match what the writers store. RestrictUpdatedAt was formerly
+	// `visibilityUpdatedAt`.
 	FavoriteUpdatedAt *time.Time `json:"favoriteUpdatedAt,omitempty" bson:"favoriteUpdatedAt,omitempty"`
-	// Stored as `_updatedAt` in Mongo (matches the canonical subscriptions schema);
-	// serialized on the wire as `updatedAt`. Rooms keep the plain `updatedAt` field.
-	UpdatedAt *time.Time `json:"updatedAt,omitempty" bson:"_updatedAt,omitempty"`
+	MuteUpdatedAt     *time.Time `json:"muteUpdatedAt,omitempty"     bson:"muteUpdatedAt,omitempty"`
+	RolesUpdatedAt    *time.Time `json:"rolesUpdatedAt,omitempty"    bson:"rolesUpdatedAt,omitempty"`
+	NameUpdatedAt     *time.Time `json:"nameUpdatedAt,omitempty"     bson:"nameUpdatedAt,omitempty"`
+	RestrictUpdatedAt *time.Time `json:"restrictUpdatedAt,omitempty" bson:"restrictUpdatedAt,omitempty"`
 }
 
 // EnrichedSubscription is the decode target for the subscription-list aggregation:

@@ -778,7 +778,10 @@ user-service endpoints via room-service's `GetRoomsInfo` enrichment. `room` is
 | `externalAccess` | boolean | Optional. Denormalized room external-access flag. |
 | `room` | [SubscriptionRoom](#subscriptionroom) | Optional. Room-derived view (read-time enrichment; user-service endpoints only). |
 | `favoriteUpdatedAt` | RFC3339 timestamp | Optional. Last time the user toggled favorite on the room (also bumped on un-favorite). |
-| `updatedAt` | RFC3339 timestamp | Optional. When the subscription was last updated. |
+| `muteUpdatedAt` | RFC3339 timestamp | Optional. Last time the subscription's mute state changed. |
+| `rolesUpdatedAt` | RFC3339 timestamp | Optional. Last time the subscription's roles changed. |
+| `nameUpdatedAt` | RFC3339 timestamp | Optional. Last time the subscription's room name changed. |
+| `restrictUpdatedAt` | RFC3339 timestamp | Optional. Last time the room's restrict / external-access visibility changed. |
 
 #### SubscriptionRoom
 
@@ -4160,7 +4163,7 @@ Results are **paginated** by `offset`/`limit` (offset-based): the server returns
   - **Single-item lookups** (`subscription.getDM`, `subscription.getByRoomID`): the subscription is **kept with no `room` object** — the row is returned so the caller knows the subscription exists, but the deleted room is omitted.
 - **Local** rows carry the full room object (metadata + E2E key) from the `$lookup` baseline. **Cross-site** rows are fetched per remote site in parallel; if a site's RPC fails or a room isn't found, those rows are returned with **no `room` object** (the field is omitted) — the subscription still carries its own top-level `siteId`. `alert` and `hasMention` are unaffected (they come from the subscription, not the RPC).
 
-**Per-room-type record shape.** The kinds returned by `subscription.list` differ by row schema: `channel` and `dm` rows use the [Subscription](#subscription) schema (§3.0) — `dm` adds a top-level `hrInfo` — while `botDM` rows add a nested `app` object ([AppSubscription](#appsubscription), §3.0). All carry the nested [SubscriptionRoom](#subscriptionroom) (§3.0). Every field except the ones below is identical across the three types (`id`, `u`, `roomId`, `siteId`, `roles`, `joinedAt`, `muted`, `favorite`, `alert`, `hasMention`, `hasUnread`, `hasGroupMention`, `updatedAt`, and the rest of `room`). `isSubscribed` is a **base [Subscription](#subscription) field** (boolean, optional — omitted unless stored `true`) shared by all three types, not a type-specific field. Type-specific fields:
+**Per-room-type record shape.** The kinds returned by `subscription.list` differ by row schema: `channel` and `dm` rows use the [Subscription](#subscription) schema (§3.0) — `dm` adds a top-level `hrInfo` — while `botDM` rows add a nested `app` object ([AppSubscription](#appsubscription), §3.0). All carry the nested [SubscriptionRoom](#subscriptionroom) (§3.0). Every field except the ones below is identical across the three types (`id`, `u`, `roomId`, `siteId`, `roles`, `joinedAt`, `muted`, `favorite`, `alert`, `hasMention`, `hasUnread`, `hasGroupMention`, the per-attribute `*UpdatedAt` timestamps, and the rest of `room`). `isSubscribed` is a **base [Subscription](#subscription) field** (boolean, optional — omitted unless stored `true`) shared by all three types, not a type-specific field. Type-specific fields:
 
 | Field | `channel` | `dm` | `botDM` |
 |---|---|---|---|
@@ -4190,7 +4193,11 @@ The example below shows one record of each type in order (`channel`, `dm`, `botD
       "alert": true,
       "muted": false,
       "favorite": true,
-      "updatedAt": "2026-06-01T10:00:05Z",
+      "favoriteUpdatedAt": "2026-05-15T09:00:00Z",
+      "muteUpdatedAt": "2026-05-10T12:00:00Z",
+      "rolesUpdatedAt": "2026-05-06T08:01:23Z",
+      "nameUpdatedAt": "2026-05-06T08:01:23Z",
+      "restrictUpdatedAt": "2026-05-06T08:01:23Z",
       "room": {
         "siteId": "siteA",
         "name": "engineering-general",
@@ -4219,7 +4226,6 @@ The example below shows one record of each type in order (`channel`, `dm`, `botD
       "alert": false,
       "muted": false,
       "favorite": false,
-      "updatedAt": "2026-05-20T15:30:00Z",
       "hrInfo": { "account": "bob", "name": "鮑伯", "engName": "Bob" },
       "room": {
         "siteId": "siteA",
@@ -4242,7 +4248,6 @@ The example below shows one record of each type in order (`channel`, `dm`, `botD
       "alert": false,
       "muted": false,
       "favorite": false,
-      "updatedAt": "2026-05-01T08:00:10Z",
       "app": {
         "appId": "app_helper",
         "name": "Helper",
@@ -4319,7 +4324,6 @@ Same paginated shape as `subscription.list` — `{ "subscriptions": [...], "hasM
       "alert": true,
       "muted": false,
       "favorite": true,
-      "updatedAt": "2026-06-01T10:00:05Z",
       "room": {
         "siteId": "siteA",
         "name": "engineering-general",
@@ -4392,7 +4396,6 @@ Returns the calling user's DM subscription with the named counterpart. The reply
     "hasGroupMention": false,
     "muted": false,
     "favorite": false,
-    "updatedAt": "2026-05-20T15:30:00Z",
     "hrInfo": { "account": "bob", "name": "鮑伯", "engName": "Bob" },
     "room": {
       "siteId": "siteA",
@@ -4457,7 +4460,6 @@ Same shape as `subscription.list` — a (here, at most one) list:
       "hasGroupMention": false,
       "muted": false,
       "favorite": false,
-      "updatedAt": "2026-05-20T15:30:00Z",
       "room": {
         "siteId": "siteA",
         "lastMsgAt": "2026-05-20T15:30:00Z",

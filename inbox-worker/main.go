@@ -372,25 +372,25 @@ func (s *mongoInboxStore) UpdateSubscriptionNamesForRoom(ctx context.Context, ro
 	return nil
 }
 
-// ApplySubscriptionVisibility writes {restricted, externalAccess, roles} to all
-// subs in the room, each guarded by its own visibilityUpdatedAt ($lt) so an
+// ApplySubscriptionRestriction writes {restricted, externalAccess, roles} to all
+// subs in the room, each guarded by its own restrictUpdatedAt ($lt) so an
 // out-of-order visibility change cannot regress the flags/roles. The guard lives
 // in the filter for both the restrict-with-owner pipeline branch and the
 // flags-only branch.
-func (s *mongoInboxStore) ApplySubscriptionVisibility(ctx context.Context, roomID string, restricted, externalAccess bool, ownerAccount string, visibilityUpdatedAt time.Time) error {
+func (s *mongoInboxStore) ApplySubscriptionRestriction(ctx context.Context, roomID string, restricted, externalAccess bool, ownerAccount string, restrictUpdatedAt time.Time) error {
 	filter := bson.M{
 		"roomId": roomID,
 		"$or": bson.A{
-			bson.M{"visibilityUpdatedAt": bson.M{"$exists": false}},
-			bson.M{"visibilityUpdatedAt": bson.M{"$lt": visibilityUpdatedAt}},
+			bson.M{"restrictUpdatedAt": bson.M{"$exists": false}},
+			bson.M{"restrictUpdatedAt": bson.M{"$lt": restrictUpdatedAt}},
 		},
 	}
 	if restricted && ownerAccount != "" {
 		pipeline := mongo.Pipeline{
 			bson.D{{Key: "$set", Value: bson.M{
-				"restricted":          true,
-				"externalAccess":      externalAccess,
-				"visibilityUpdatedAt": visibilityUpdatedAt,
+				"restricted":        true,
+				"externalAccess":    externalAccess,
+				"restrictUpdatedAt": restrictUpdatedAt,
 				"roles": bson.M{"$cond": bson.M{
 					"if":   bson.M{"$eq": bson.A{"$u.account", ownerAccount}},
 					"then": bson.A{string(model.RoleOwner)},
@@ -404,7 +404,7 @@ func (s *mongoInboxStore) ApplySubscriptionVisibility(ctx context.Context, roomI
 		return nil
 	}
 	if _, err := s.subCol.UpdateMany(ctx, filter, bson.M{
-		"$set": bson.M{"restricted": restricted, "externalAccess": externalAccess, "visibilityUpdatedAt": visibilityUpdatedAt},
+		"$set": bson.M{"restricted": restricted, "externalAccess": externalAccess, "restrictUpdatedAt": restrictUpdatedAt},
 	}); err != nil {
 		return fmt.Errorf("apply visibility (flags only): %w", err)
 	}
