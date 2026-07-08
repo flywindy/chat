@@ -381,6 +381,107 @@ func TestHistoryService_ReactMessage_RemoveStoreError(t *testing.T) {
 	assertInternalErr(t, err, "react: remove")
 }
 
+// TestHistoryService_ReactMessage_PublishesFullMessage covers #459: the reacted-to
+// message in the canonical event must carry the full message body (content, tshow,
+// thread-reply linkage, type, mentions), not just the 5-field skeleton.
+func TestHistoryService_ReactMessage_PublishesFullMessage(t *testing.T) {
+	createdAt := joinTime.Add(1 * time.Minute)
+	threadParentCreatedAt := joinTime
+
+	cases := []struct {
+		name   string
+		target *models.Message
+	}{
+		{
+			name: "channel message",
+			target: &models.Message{
+				MessageID: "m1", RoomID: "r1", CreatedAt: createdAt,
+				Sender: models.Participant{ID: "user-bob", Account: "bob", EngName: "Bob", CompanyName: "鮑伯"},
+				Msg:    "hello world",
+				Type:   "text",
+				Mentions: []models.Participant{
+					{ID: "user-carol", Account: "carol", EngName: "Carol", CompanyName: "卡蘿"},
+				},
+			},
+		},
+		{
+			name: "thread reply",
+			target: &models.Message{
+				MessageID: "m2", RoomID: "r1", CreatedAt: createdAt,
+				Sender:                models.Participant{ID: "user-bob", Account: "bob", EngName: "Bob"},
+				Msg:                   "a reply",
+				ThreadParentID:        "m1",
+				ThreadParentCreatedAt: &threadParentCreatedAt,
+			},
+		},
+		{
+			name: "tshow reply",
+			target: &models.Message{
+				MessageID: "m3", RoomID: "r1", CreatedAt: createdAt,
+				Sender:                models.Participant{ID: "user-bob", Account: "bob", EngName: "Bob"},
+				Msg:                   "also sent to channel",
+				TShow:                 true,
+				ThreadParentID:        "m1",
+				ThreadParentCreatedAt: &threadParentCreatedAt,
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			f := newReactFixture(t)
+			f.stubShortcodeKnown("thumbsup")
+			f.subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, true, nil)
+			f.msgs.EXPECT().GetMessageByID(gomock.Any(), tc.target.MessageID).Return(tc.target, nil)
+			f.users.EXPECT().FindUserByAccount(gomock.Any(), "u1").Return(aliceUserPtr(), nil)
+			f.msgs.EXPECT().
+				AddReaction(gomock.Any(), tc.target, gomock.Any(), gomock.Any()).
+				Return(nil)
+
+			var publishedPayload []byte
+			f.pub.EXPECT().
+				Publish(gomock.Any(), subject.MsgCanonicalReacted("site-test"), gomock.Any(), gomock.Any()).
+				DoAndReturn(func(_ context.Context, _ string, data []byte, _ string) error {
+					publishedPayload = data
+					return nil
+				})
+
+			resp, err := f.svc.ReactMessage(testContext(), "site-test",
+				models.ReactMessageRequest{MessageID: tc.target.MessageID, Shortcode: "thumbsup"})
+			require.NoError(t, err)
+			require.NotNil(t, resp)
+
+			require.NotEmpty(t, publishedPayload)
+			var evt model.MessageEvent
+			require.NoError(t, json.Unmarshal(publishedPayload, &evt))
+
+			assert.Equal(t, tc.target.Msg, evt.Message.Content)
+			assert.Equal(t, tc.target.TShow, evt.Message.TShow)
+			assert.Equal(t, tc.target.ThreadParentID, evt.Message.ThreadParentMessageID)
+			assert.Equal(t, tc.target.Type, evt.Message.Type)
+			if tc.target.ThreadParentCreatedAt != nil {
+				require.NotNil(t, evt.Message.ThreadParentMessageCreatedAt)
+				assert.True(t, tc.target.ThreadParentCreatedAt.Equal(*evt.Message.ThreadParentMessageCreatedAt))
+			} else {
+				assert.Nil(t, evt.Message.ThreadParentMessageCreatedAt)
+			}
+			require.Len(t, evt.Message.Mentions, len(tc.target.Mentions))
+			for i, m := range tc.target.Mentions {
+				assert.Equal(t, m.Account, evt.Message.Mentions[i].Account)
+				assert.Equal(t, m.ID, evt.Message.Mentions[i].UserID)
+				assert.Equal(t, m.EngName, evt.Message.Mentions[i].EngName)
+				// ChineseName is carried by the Cassandra company_name field.
+				assert.Equal(t, m.CompanyName, evt.Message.Mentions[i].ChineseName)
+			}
+			// Sender display name folds in the Chinese name (company_name).
+			assert.Equal(t,
+				displayfmt.CombineWithFallback(tc.target.Sender.EngName, tc.target.Sender.CompanyName, tc.target.Sender.Account),
+				evt.Message.UserDisplayName)
+		})
+	}
+}
+
 func TestHistoryService_ReactMessage_CustomEmojiFound_Success(t *testing.T) {
 	f := newReactFixture(t)
 	createdAt := joinTime.Add(1 * time.Minute)

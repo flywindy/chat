@@ -12,6 +12,7 @@ import (
 	"github.com/hmchangw/chat/pkg/emoji"
 	"github.com/hmchangw/chat/pkg/errcode"
 	pkgmodel "github.com/hmchangw/chat/pkg/model"
+	"github.com/hmchangw/chat/pkg/model/cassandra"
 	"github.com/hmchangw/chat/pkg/natsrouter"
 	"github.com/hmchangw/chat/pkg/subject"
 	"github.com/hmchangw/chat/pkg/userstore"
@@ -105,15 +106,8 @@ func (s *HistoryService) ReactMessage(c *natsrouter.Context, siteID string, req 
 	}
 
 	canonicalEvt := pkgmodel.MessageEvent{
-		Event: pkgmodel.EventReacted,
-		Message: pkgmodel.Message{
-			ID:          msg.MessageID,
-			RoomID:      msg.RoomID,
-			UserID:      msg.Sender.ID,
-			UserAccount: msg.Sender.Account,
-			CreatedAt:   msg.CreatedAt,
-			UpdatedAt:   &reactedAt,
-		},
+		Event:     pkgmodel.EventReacted,
+		Message:   toWireMessage(msg, &reactedAt),
 		SiteID:    siteID,
 		Timestamp: reactedAt.UnixMilli(),
 		ReactionDelta: &pkgmodel.ReactionDelta{
@@ -137,4 +131,52 @@ func (s *HistoryService) ReactMessage(c *natsrouter.Context, siteID string, req 
 		Action:    action,
 		ReactedAt: reactedAt.UnixMilli(),
 	}, nil
+}
+
+// toWireMessage builds the full wire Message for the reaction notification's
+// canonical event (#459 — was a 6-field skeleton). updatedAt is the reaction
+// toggle time.
+func toWireMessage(msg *cassandra.Message, updatedAt *time.Time) pkgmodel.Message {
+	var mentions []pkgmodel.Participant
+	if msg.Mentions != nil {
+		mentions = make([]pkgmodel.Participant, len(msg.Mentions))
+		for i := range msg.Mentions {
+			mentions[i] = toWireParticipant(&msg.Mentions[i])
+		}
+	}
+	var pinnedBy *pkgmodel.Participant
+	if msg.PinnedBy != nil {
+		p := toWireParticipant(msg.PinnedBy)
+		pinnedBy = &p
+	}
+	return pkgmodel.Message{
+		ID:                           msg.MessageID,
+		RoomID:                       msg.RoomID,
+		UserID:                       msg.Sender.ID,
+		UserAccount:                  msg.Sender.Account,
+		UserDisplayName:              displayfmt.CombineWithFallback(msg.Sender.EngName, msg.Sender.CompanyName, msg.Sender.Account),
+		Content:                      msg.Msg,
+		Attachments:                  msg.Attachments,
+		Card:                         msg.Card,
+		CardAction:                   msg.CardAction,
+		Mentions:                     mentions,
+		CreatedAt:                    msg.CreatedAt,
+		EditedAt:                     msg.EditedAt,
+		UpdatedAt:                    updatedAt,
+		ThreadParentMessageID:        msg.ThreadParentID,
+		ThreadParentMessageCreatedAt: msg.ThreadParentCreatedAt,
+		TShow:                        msg.TShow,
+		Type:                         msg.Type,
+		SysMsgData:                   msg.SysMsgData,
+		QuotedParentMessage:          msg.QuotedParentMessage,
+		PinnedAt:                     msg.PinnedAt,
+		PinnedBy:                     pinnedBy,
+	}
+}
+
+// toWireParticipant maps the persisted (Cassandra) participant fields onto the
+// wire Participant. ChineseName is carried by the Cassandra company_name field;
+// SiteID/DisplayName have no Cassandra source.
+func toWireParticipant(p *cassandra.Participant) pkgmodel.Participant {
+	return pkgmodel.Participant{UserID: p.ID, Account: p.Account, EngName: p.EngName, ChineseName: p.CompanyName}
 }

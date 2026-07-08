@@ -3440,7 +3440,7 @@ See [Error envelope](#6-error-envelope-reference). Common errors: `"messageId is
 | `type` | string | Always `"reaction"`. |
 | `roomId` | string | The room containing the reacted-to message. |
 | `roomType` | string | Room type: `"channel"`, `"dm"`, or `"botDM"`. |
-| `message` | [Message](#message-schema) | The full reacted-to message. |
+| `message` | [Message](#message-schema) | The full reacted-to message (same shape as history reads — `omitempty` fields like `tshow`/`threadParentMessageId` are absent, not `false`/`""`, when unset). |
 | `reactionDelta` | [ReactionDelta](#reactiondelta) | The single-reaction delta that triggered the notification. |
 | `timestamp` | number | Epoch ms (UTC). Event publish time. |
 
