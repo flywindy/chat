@@ -20,6 +20,11 @@ services:
       # hr-syncer runs at one central site; for single-site local dev,
       # point at ourselves.
       - HR_CENTRAL_SITE_ID=site-local
+      # Optional JetStream domain of the remote NATS cluster that owns the HR
+      # OrgSyncStream. Set when hr-syncer runs in a different domain so this
+      # worker's spotlight-org consumer targets that domain. Leave unset for
+      # single-cluster local dev (the HR stream is in this cluster's domain).
+      # - HR_JETSTREAM_DOMAIN=hr-hub
       - USER_ROOM_INDEX=user-room-mv-site-local
       - BOOTSTRAP_STREAMS=true
       # Optional YYYY-MM-DD (UTC) cutoff for the messages collection.

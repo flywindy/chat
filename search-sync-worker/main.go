@@ -55,10 +55,17 @@ type config struct {
 	SpotlightIndex      string `env:"SPOTLIGHT_INDEX,required"`
 	SpotlightOrgIndex   string `env:"SPOTLIGHT_ORG_INDEX,required"`
 	HRCentralSiteID     string `env:"HR_CENTRAL_SITE_ID,required"`
-	UserRoomIndex       string `env:"USER_ROOM_INDEX,required"`
-	DevMode             bool   `env:"DEV_MODE" envDefault:"false"`
-	HealthAddr          string `env:"HEALTH_ADDR" envDefault:":8081"`
-	PProfEnabled        bool   `env:"PPROF_ENABLED" envDefault:"false"`
+	// HRJetStreamDomain, when set, is the JetStream domain of the remote NATS
+	// cluster that owns OrgSyncStream (hr-syncer's HR stream). The spotlight-org
+	// consumer is created against a domain-scoped JetStream context so a worker
+	// at one site can consume the HR stream in another site's domain. Empty
+	// (default) means the HR stream is in this worker's local domain and the
+	// shared, otel-traced JetStream context is used.
+	HRJetStreamDomain string `env:"HR_JETSTREAM_DOMAIN" envDefault:""`
+	UserRoomIndex     string `env:"USER_ROOM_INDEX,required"`
+	DevMode           bool   `env:"DEV_MODE" envDefault:"false"`
+	HealthAddr        string `env:"HEALTH_ADDR" envDefault:":8081"`
+	PProfEnabled      bool   `env:"PPROF_ENABLED" envDefault:"false"`
 
 	// SyncMessagesFrom is an optional YYYY-MM-DD cutoff (UTC) that the
 	// messages collection compares against Message.CreatedAt. Events
@@ -220,6 +227,23 @@ func main() {
 		os.Exit(1)
 	}
 
+	// When HR_JETSTREAM_DOMAIN is set, the HR stream (OrgSyncStream) lives in a
+	// remote NATS domain. Build a raw domain-scoped JetStream context for the
+	// spotlight-org consumer: oteljetstream has no domain variant, and this
+	// worker already discards the per-message otel trace context on the consume
+	// path, so the raw context loses nothing in use. NewWithDomain only sets the
+	// API prefix (no I/O), so an error here is a config error, not a
+	// reachability failure. Empty domain keeps the shared js for the HR consumer.
+	var hrJS jetstream.JetStream
+	if cfg.HRJetStreamDomain != "" {
+		hrJS, err = jetstream.NewWithDomain(nc.NatsConn(), cfg.HRJetStreamDomain)
+		if err != nil {
+			slog.Error("jetstream HR-domain init failed",
+				"domain", cfg.HRJetStreamDomain, "error", err)
+			os.Exit(1)
+		}
+	}
+
 	bulkFlushInterval := time.Duration(cfg.BulkFlushInterval) * time.Second
 	stopCh := make(chan struct{})
 	doneChs := make([]chan struct{}, 0, len(collections))
@@ -252,14 +276,39 @@ func main() {
 		}
 
 		consumerCfg := buildConsumerConfig(cfg.Consumer, coll, cfg.SiteID)
-		cons, err := js.CreateOrUpdateConsumer(ctx, streamCfg.Name, consumerCfg)
-		if err != nil {
-			slog.Error("create consumer failed",
+
+		// The HR (spotlight-org) collection reads OrgSyncStream. When a remote HR
+		// domain is configured, create its consumer against the domain-scoped
+		// context; every other collection uses the shared otel-traced js.
+		var fetcher msgFetcher
+		if streamCfg.Name == hrName && hrJS != nil {
+			cons, err := hrJS.CreateOrUpdateConsumer(ctx, streamCfg.Name, consumerCfg)
+			if err != nil {
+				slog.Error("create consumer failed",
+					"stream", streamCfg.Name,
+					"consumer", coll.ConsumerName(),
+					"domain", cfg.HRJetStreamDomain,
+					"error", err,
+				)
+				os.Exit(1)
+			}
+			fetcher = rawConsumerAdapter{cons}
+			slog.Info("HR consumer bound to remote JetStream domain",
+				"domain", cfg.HRJetStreamDomain,
 				"stream", streamCfg.Name,
 				"consumer", coll.ConsumerName(),
-				"error", err,
 			)
-			os.Exit(1)
+		} else {
+			cons, err := js.CreateOrUpdateConsumer(ctx, streamCfg.Name, consumerCfg)
+			if err != nil {
+				slog.Error("create consumer failed",
+					"stream", streamCfg.Name,
+					"consumer", coll.ConsumerName(),
+					"error", err,
+				)
+				os.Exit(1)
+			}
+			fetcher = otelConsumerAdapter{cons}
 		}
 
 		handler := NewHandler(&engineAdapter{engine: engine}, coll, cfg.BulkBatchSize)
@@ -272,7 +321,7 @@ func main() {
 			"filters", consumerCfg.FilterSubjects,
 		)
 
-		go runConsumer(ctx, cons, handler, cfg.FetchBatchSize, cfg.BulkBatchSize, bulkFlushInterval, stopCh, doneCh)
+		go runConsumer(ctx, fetcher, handler, cfg.FetchBatchSize, cfg.BulkBatchSize, bulkFlushInterval, stopCh, doneCh)
 	}
 
 	healthStop, err := health.ServeWithPprof(cfg.HealthAddr, 5*time.Second, cfg.PProfEnabled,
@@ -347,7 +396,7 @@ func main() {
 // Bulk flush spans many client requests, so per-message X-Request-ID is intentionally NOT propagated; mint a per-flush bulkID if per-batch traceability becomes a need.
 func runConsumer(
 	ctx context.Context,
-	cons oteljetstream.Consumer,
+	cons msgFetcher,
 	handler *Handler,
 	fetchBatchSize, bulkBatchSize int,
 	bulkFlushInterval time.Duration,
@@ -403,8 +452,13 @@ func runConsumer(
 			continue
 		}
 
+		// Always drain batch.Messages() to completion. The otelBatch adapter
+		// (consumer_source.go) re-channels via a goroutine that blocks on an
+		// unbuffered send until the channel is drained; an early break here
+		// would leak that goroutine and stall shutdown. Bound work via
+		// fetchCount above, not by abandoning a batch mid-range.
 		for msg := range batch.Messages() {
-			add(msg.Msg)
+			add(msg)
 			// Mid-batch flush: if a single fan-out message just pushed the
 			// buffer over the bulk cap, flush immediately instead of waiting
 			// for the outer loop — otherwise the next message's actions
