@@ -43,3 +43,36 @@ func TestClusterDomains_EnvParse(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "https://a", p.CD.baseURL("s1"))
 }
+
+func TestConfig_EmojiAndNATSDefaults(t *testing.T) {
+	t.Setenv("SITE_ID", "s1")
+	t.Setenv("CLUSTER_DOMAINS", `[{"siteID":"s1","domain":"http://localhost:8080"}]`)
+	t.Setenv("EMPLOYEE_PHOTO_BASE_URL", "https://photos.example.com")
+	t.Setenv("MONGO_URI", "mongodb://localhost:27017")
+	t.Setenv("MINIO_ENDPOINT", "localhost:9000")
+	t.Setenv("MINIO_ACCESS_KEY", "k")
+	t.Setenv("MINIO_SECRET_KEY", "s")
+	t.Setenv("NATS_URL", "nats://localhost:4222")
+
+	cfg, err := env.ParseAs[config]()
+	require.NoError(t, err)
+	assert.Equal(t, "nats://localhost:4222", cfg.NatsURL)
+	assert.Empty(t, cfg.NatsCredsFile)
+	assert.Equal(t, int64(262144), cfg.EmojiMaxUploadBytes)
+	assert.Equal(t, 512, cfg.EmojiMaxDimension)
+	assert.False(t, cfg.EmojiDeleteEnabled)
+}
+
+func TestConfig_NATSURLRequired(t *testing.T) {
+	t.Setenv("SITE_ID", "s1")
+	t.Setenv("CLUSTER_DOMAINS", `[]`)
+	t.Setenv("EMPLOYEE_PHOTO_BASE_URL", "https://photos.example.com")
+	t.Setenv("MONGO_URI", "mongodb://localhost:27017")
+	t.Setenv("MINIO_ENDPOINT", "localhost:9000")
+	t.Setenv("MINIO_ACCESS_KEY", "k")
+	t.Setenv("MINIO_SECRET_KEY", "s")
+
+	_, err := env.ParseAs[config]()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "NATS_URL")
+}

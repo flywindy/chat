@@ -187,9 +187,12 @@ func TestValidate_Malformed_ReturnsInvalid(t *testing.T) {
 func TestValidator_Validate_NFC_CollapsesEquivalentForms(t *testing.T) {
 	v := emoji.NewValidator(&stubLookup{})
 
-	// "é" precomposed (U+00E9) vs decomposed (U+0065 U+0301).
+	// "é" precomposed (U+00E9) vs decomposed (U+0065 U+0301). The decomposed
+	// form must be written as an explicit escape — a literal "é" in source is
+	// silently precomposed by tooling/editors, which would make this test a
+	// no-op that never exercises the norm.NFC.String transform branch.
 	precomposed := "é"
-	decomposed := "é"
+	decomposed := "é"
 
 	gotPre, errPre := v.Validate(context.Background(), "site-a", precomposed)
 	require.Error(t, errPre)
@@ -200,4 +203,43 @@ func TestValidator_Validate_NFC_CollapsesEquivalentForms(t *testing.T) {
 	require.Error(t, errDec)
 	assert.ErrorIs(t, errDec, emoji.ErrInvalidShortcode)
 	assert.Empty(t, gotDec)
+}
+
+func TestCanonicalize(t *testing.T) {
+	cases := []struct {
+		name    string
+		in      string
+		want    string
+		wantErr bool
+	}{
+		{"valid ascii", "party_parrot", "party_parrot", false},
+		{"valid plus", "+1", "+1", false},
+		{"boundary 32", strings.Repeat("a", 32), strings.Repeat("a", 32), false},
+		{"empty", "", "", true},
+		{"uppercase", "Party", "", true},
+		{"wrapped in colons", ":party:", "", true},
+		{"too long 33", strings.Repeat("a", 33), "", true},
+		{"over byte cap", strings.Repeat("a", 1024), "", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := emoji.Canonicalize(tc.in)
+			if tc.wantErr {
+				require.Error(t, err)
+				assert.ErrorIs(t, err, emoji.ErrInvalidShortcode)
+				assert.Empty(t, got)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestIsStandard(t *testing.T) {
+	assert.True(t, emoji.IsStandard("thumbsup"))
+	assert.True(t, emoji.IsStandard("+1"))
+	assert.True(t, emoji.IsStandard("heart"))
+	assert.False(t, emoji.IsStandard("acme_party"))
+	assert.False(t, emoji.IsStandard(""))
 }

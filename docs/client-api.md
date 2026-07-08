@@ -60,6 +60,8 @@ paths.
    - [3.4 user-service](#34-user-service)
      - [`me`](#me) · [`status.getByName`](#statusgetbyname) · [`profile.getByName`](#profilegetbyname) · [`status.set`](#statusset) · [`subscription.list`](#subscriptionlist) · [`subscription.getChannels`](#subscriptiongetchannels)
      - [`subscription.getDM`](#subscriptiongetdm) · [`subscription.getByRoomID`](#subscriptiongetbyroomid) · [`subscription.count`](#subscriptioncount) · [`subscription.setAppSubscription`](#subscriptionsetappsubscription) · [`apps.list`](#appslist)
+   - [3.5 media-service](#35-media-service)
+     - [`emoji.list`](#emojilist--list-a-sites-custom-emoji) · [`emoji.delete`](#emojidelete--delete-a-custom-emoji)
 4. [Message Send](#4-message-send)
 5. [Room Encryption](#5-room-encryption)
 6. [Error envelope reference](#6-error-envelope-reference)
@@ -67,6 +69,8 @@ paths.
    - [GET /api/v1/avatar/:accountName](#get-apiv1avataraccountname)
    - [GET /api/v1/avatar/room/:roomID](#get-apiv1avatarroomroomid)
    - [PUT /api/v1/avatar/bot/:botName](#put-apiv1avatarbotbotname)
+   - [GET /api/v1/emoji/:shortcode](#get-apiv1emojishortcode)
+   - [PUT /api/v1/emoji/:shortcode](#put-apiv1emojishortcode)
 8. [Presence](#8-presence)
 
 ---
@@ -4797,6 +4801,125 @@ Empty object.
 
 ---
 
+### 3.5 media-service
+
+| RPC subject | Method |
+|---|---|
+| `chat.user.{account}.request.emoji.{siteID}.list` | [`emoji.list`](#emojilist--list-a-sites-custom-emoji) |
+| `chat.user.{account}.request.emoji.{siteID}.delete` | [`emoji.delete`](#emojidelete--delete-a-custom-emoji) |
+
+#### `emoji.list` — list a site's custom emoji
+
+**Subject:** `chat.user.{account}.request.emoji.{siteID}.list`
+**Reply subject:** auto-generated `_INBOX.>` (NATS request/reply)
+
+**Auth:** the `{account}` in the subject is the authenticated identity. `{siteID}` is the **target site whose emoji set you want** — for a room's emoji picker, pass the room's origin `siteId` (a room's usable custom emoji are always its origin site's set; see [React to Message](#react-to-message)). The supercluster routes the request to that site's media-service.
+
+##### Request body
+
+Empty. Send `{}` or no payload.
+
+##### Success response
+
+| Field | Type | Notes |
+|---|---|---|
+| `emojis` | [EmojiEntry](#emojientry)[] | Sorted by `shortcode`. `[]` when the site has none. |
+
+###### EmojiEntry
+
+| Field | Type | Notes |
+|---|---|---|
+| `shortcode` | string | Bare shortcode (no colons), `^[a-z0-9_+-]{1,32}$`. |
+| `imageUrl` | string | Relative serve path `/api/v1/emoji/{shortcode}?siteid={siteID}` — resolve against your media-service base URL; the `?siteid=` param is self-describing (the FE only ever fetches the local site's list in v1) and defaults to local when absent; append `&v={etag}` to cache-bust. |
+| `contentType` | string | `image/png`, `image/jpeg`, or `image/gif` (GIFs may be animated). |
+| `etag` | string | Storage ETag of the current image. |
+| `createdBy` | string | Account that first uploaded the shortcode (audit; unauthenticated in v1). |
+| `updatedAt` | number | Epoch ms (UTC) of the last upload. |
+
+```json
+{
+  "emojis": [
+    {
+      "shortcode": "acme_party",
+      "imageUrl": "/api/v1/emoji/acme_party?siteid=site-a",
+      "contentType": "image/gif",
+      "etag": "9a0364b9e99bb480dd25e1f0284c8555",
+      "createdBy": "alice",
+      "updatedAt": 1746518900000
+    }
+  ]
+}
+```
+
+##### Error response
+
+See [Error envelope](#6-error-envelope-reference).
+
+| Code | Reason |
+|---|---|
+| `internal` | Store failure. |
+
+##### Triggered events — success path
+
+`None — reply only.`
+
+##### Triggered events — error path
+
+`None — error returned only via the reply subject.`
+
+---
+
+#### `emoji.delete` — delete a custom emoji
+
+**Subject:** `chat.user.{account}.request.emoji.{siteID}.delete`
+**Reply subject:** auto-generated `_INBOX.>` (NATS request/reply)
+
+**Auth:** the `{account}` in the subject is the authenticated identity. Any authenticated user may delete (v1). `{siteID}` targets the owning site. Disabled by default — gated by media-service's `EMOJI_DELETE_ENABLED` (default `false`).
+
+##### Request body
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `shortcode` | string | yes | Bare shortcode of the emoji to delete. |
+
+```json
+{ "shortcode": "acme_party" }
+```
+
+##### Success response
+
+| Field | Type | Notes |
+|---|---|---|
+| `shortcode` | string | Canonical (NFC) form of the deleted shortcode. |
+| `deleted` | boolean | Always `true` on success. |
+
+```json
+{ "shortcode": "acme_party", "deleted": true }
+```
+
+Existing reactions that reference the deleted shortcode are not rewritten; the reaction validator stops accepting new uses within its cache TTL (≤ 60 s by default).
+
+##### Error response
+
+See [Error envelope](#6-error-envelope-reference).
+
+| Code | Reason |
+|---|---|
+| `bad_request` | `shortcode` is missing or fails `^[a-z0-9_+-]{1,32}$` after NFC. |
+| `not_found` | No custom emoji with that shortcode on this site. |
+| `forbidden` + reason `emoji_delete_disabled` | The delete RPC is switched off (EMOJI_DELETE_ENABLED=false, the default). |
+| `internal` | Store failure. |
+
+##### Triggered events — success path
+
+`None — reply only.`
+
+##### Triggered events — error path
+
+`None — error returned only via the reply subject.`
+
+---
+
 ## 4. Message Send
 
 ### Send Message
@@ -5315,6 +5438,8 @@ Every error response — NATS reply subjects, JetStream async results, and HTTP 
 | `invalid_dm_target` | bad_request | user-service `subscription.getDM` (target is a bot or platform account) |
 | `subscription_not_found` | not_found | user-service `subscription.getDM` (no DM subscription exists for the account pair) |
 | `response_too_large` | internal | any RPC whose reply would exceed the transport `max_payload` (most often large history reads — retry with a smaller `limit`) |
+| `emoji_shortcode_reserved` | bad_request | media-service `PUT /api/v1/emoji/…` (shortcode collides with a built-in standard emoji) |
+| `emoji_delete_disabled` | forbidden | media-service `emoji.delete` (kill-switch `EMOJI_DELETE_ENABLED=false`, the default) |
 
 ### Where envelopes are sent
 
@@ -5460,6 +5585,71 @@ The service decodes the image bytes to verify they are a valid PNG or JPEG — m
 On `409`, the response body carries a human-readable message indicating which cluster to re-upload to (e.g. `"bot is owned by site-b — upload to https://media-service-site-b"`). The client must re-issue the `PUT` to the correct domain.
 
 On success, the custom image takes effect immediately: subsequent `GET /api/v1/avatar/:accountName` calls for that bot will stream it (or return `304`). A re-upload overwrites the previous image; there is no delete/reset in v1.
+
+---
+
+### GET /api/v1/emoji/:shortcode
+
+Serves a custom emoji image. The path no longer carries siteID: v1's FE only ever fetches the local site's emoji list and never renders non-local shortcodes, so the endpoint defaults to this cluster's site. An optional lowercase `?siteid=` query param (matching the avatar endpoints' `?siteid=` hint) names a specific site — absent or equal to this cluster's site serves locally; a known remote site 307-redirects to its owning cluster. Clients normally just use the `imageUrl` returned by [`emoji.list`](#emojilist--list-a-sites-custom-emoji) as-is; append `&v={etag}` to cache-bust after re-uploads.
+
+#### Response
+
+| Status | Condition | Notes |
+|---|---|---|
+| `200 OK` | Local and registered | Streams the stored image bytes (`image/png`, `image/jpeg`, or `image/gif`) with `ETag` / `Cache-Control` / `X-Content-Type-Options: nosniff`. |
+| `304 Not Modified` | `If-None-Match` matches the current `ETag` | Empty body. |
+| `307 Temporary Redirect` | `?siteid=` names a known remote cluster | Redirect to `{remote base}/api/v1/emoji/{shortcode}` — no query param on the target, so it resolves locally there. |
+| `400 Bad Request` | Malformed shortcode | |
+| `404 Not Found` | `?siteid=` names a site not in this cluster's domain map (unknown); or local and unregistered | Custom emoji have **no generated default** (unlike avatars). |
+
+**Decision logic:**
+
+- `?siteid=` absent or equal to this cluster's site → local lookup.
+- `?siteid=` names a known remote site → `307` redirect to that cluster's media-service at `/api/v1/emoji/{shortcode}` (param dropped). The target always defaults to local, so there is no redirect loop and no `fwd` guard.
+- `?siteid=` names a site not in this cluster's domain map → `404`.
+- Local and registered → streams the stored image with `ETag` / `Cache-Control` / `X-Content-Type-Options: nosniff`; honours `If-None-Match` with `304`.
+- Local and unknown → `404`. Custom emoji have **no generated default** (unlike avatars).
+- Malformed shortcode → `400`.
+
+---
+
+### PUT /api/v1/emoji/:shortcode
+
+Uploads (or replaces — PUT is an upsert) a custom emoji. v1: no auth; the optional `?uploader={account}` query parameter is recorded for audit only. Values longer than 64 bytes are truncated. The upload always writes to **this** cluster's site — there is no cross-cluster upload in v1, so there is no declared-intent check to fail.
+
+#### Request
+
+Raw image bytes as the body. PNG, JPEG, or GIF (animated GIFs are stored and served verbatim). Limits (env-configurable): body ≤ `EMOJI_MAX_UPLOAD_BYTES` (default 256 KiB), width/height ≤ `EMOJI_MAX_DIMENSION` (default 512).
+
+#### Response
+
+| Status | Condition |
+|---|---|
+| `200 OK` | Upload accepted and stored. Body returns the new emoji metadata (below). |
+| `400 Bad Request` | Malformed shortcode; body not a valid PNG/JPEG/GIF; body or dimensions over the limits. |
+| `400 Bad Request` | Reason `emoji_shortcode_reserved` — shortcode collides with a built-in standard emoji (would be permanently shadowed). |
+
+##### Success response (`200`)
+
+| Field | Type | Notes |
+|---|---|---|
+| `shortcode` | string | Canonical (NFC) shortcode. |
+| `etag` | string | New storage ETag — use as the `?v=` cache-buster. |
+| `contentType` | string | Detected type (`image/png`, `image/jpeg`, `image/gif`). |
+| `size` | int | Stored size in bytes. |
+| `updatedAt` | number | Epoch ms (UTC). |
+
+```json
+{
+  "shortcode": "acme_party",
+  "etag": "9a0364b9e99bb480dd25e1f0284c8555",
+  "contentType": "image/gif",
+  "size": 20480,
+  "updatedAt": 1746518900000
+}
+```
+
+A newly uploaded emoji becomes reactable once the reaction validator's per-site cache expires (≤ 60 s by default).
 
 ## 8. Presence
 

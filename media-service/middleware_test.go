@@ -39,6 +39,18 @@ func TestRequestIDMiddleware_PassesThroughInbound(t *testing.T) {
 	assert.Equal(t, id, w.Header().Get(natsutil.RequestIDHeader))
 }
 
+func TestRequestIDMiddleware_InvalidInboundIsReplaced(t *testing.T) {
+	r := newMiddlewareRouter()
+	req := httptest.NewRequest(http.MethodGet, "/ping", nil)
+	req.Header.Set(natsutil.RequestIDHeader, "not-a-valid-uuid")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+	got := w.Header().Get(natsutil.RequestIDHeader)
+	assert.NotEqual(t, "not-a-valid-uuid", got, "an invalid inbound id must be replaced, not echoed")
+	assert.NotEmpty(t, got)
+}
+
 func TestCorsMiddleware_OptionsShortCircuits(t *testing.T) {
 	r := newMiddlewareRouter()
 	w := httptest.NewRecorder()

@@ -64,8 +64,19 @@ type config struct {
 	MinioUseSSL    bool   `env:"MINIO_USE_SSL" envDefault:"false"`
 	MinioBucket    string `env:"MINIO_BUCKET" envDefault:"avatars"`
 
+	NatsURL       string `env:"NATS_URL,required"`
+	NatsCredsFile string `env:"NATS_CREDS_FILE"`
+
 	MaxUploadBytes     int64 `env:"MAX_UPLOAD_BYTES" envDefault:"1048576"`
 	CacheMaxAgeSeconds int   `env:"CACHE_MAX_AGE_SECONDS" envDefault:"21600"`
+
+	// Custom-emoji upload limits. Bytes cap the raw body; dimension caps the
+	// decoded width AND height independently.
+	EmojiMaxUploadBytes int64 `env:"EMOJI_MAX_UPLOAD_BYTES" envDefault:"262144"`
+	EmojiMaxDimension   int   `env:"EMOJI_MAX_DIMENSION" envDefault:"512"`
+
+	// EmojiDeleteEnabled gates the emoji.delete RPC (kill-switch, default off).
+	EmojiDeleteEnabled bool `env:"EMOJI_DELETE_ENABLED" envDefault:"false"`
 
 	// account→employeeId in-memory cache. The mapping is near-immutable, so the
 	// TTL is long (re-fetch is cheap and self-heals rare changes); capacity is

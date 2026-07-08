@@ -14,6 +14,8 @@ import (
 
 	"github.com/hmchangw/chat/pkg/minioutil"
 	"github.com/hmchangw/chat/pkg/mongoutil"
+	"github.com/hmchangw/chat/pkg/natsrouter"
+	"github.com/hmchangw/chat/pkg/natsutil"
 	"github.com/hmchangw/chat/pkg/shutdown"
 )
 
@@ -46,13 +48,26 @@ func run() error {
 	store := newMongoStore(mongoClient.Database(cfg.MongoDB))
 	defer mongoutil.Disconnect(ctx, mongoClient)
 
+	if err := store.EnsureEmojiIndexes(ctx); err != nil {
+		return fmt.Errorf("ensure emoji indexes: %w", err)
+	}
+
 	minioClient, err := minioutil.Connect(ctx, cfg.MinioEndpoint, cfg.MinioUseSSL, cfg.MinioAccessKey, cfg.MinioSecretKey)
 	if err != nil {
 		return fmt.Errorf("connect minio: %w", err)
 	}
 	blobs := newMinioBlobStore(minioClient, cfg.MinioBucket)
 
-	h := newHandler(store, blobs, &cfg)
+	nc, err := natsutil.Connect(cfg.NatsURL, cfg.NatsCredsFile)
+	if err != nil {
+		return fmt.Errorf("connect nats: %w", err)
+	}
+
+	h := newHandler(store, store, blobs, &cfg)
+
+	router := natsrouter.New(nc, "media-service")
+	router.Use(natsrouter.Recovery(), natsrouter.RequestID(), natsrouter.Logging())
+	registerEmojiNATS(router, h, cfg.SiteID)
 
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
@@ -69,10 +84,14 @@ func run() error {
 		WriteTimeout: 30 * time.Second,
 	}
 
-	go shutdown.Wait(ctx, 25*time.Second, func(ctx context.Context) error {
-		slog.Info("shutting down media-service")
-		return srv.Shutdown(ctx)
-	})
+	go shutdown.Wait(ctx, 25*time.Second,
+		func(ctx context.Context) error { return router.Shutdown(ctx) },
+		func(_ context.Context) error { return nc.Drain() },
+		func(ctx context.Context) error {
+			slog.Info("shutting down media-service")
+			return srv.Shutdown(ctx)
+		},
+	)
 
 	slog.Info("media-service listening", "port", cfg.Port, "site", cfg.SiteID)
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {

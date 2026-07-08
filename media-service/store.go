@@ -25,3 +25,21 @@ type avatarStore interface {
 	// SetBotAvatar upserts a bot's avatars doc (by _id).
 	SetBotAvatar(ctx context.Context, av *model.Avatar) error
 }
+
+// emojiStore is the custom-emoji data access this service needs. It reads and
+// writes the site-local custom_emojis collection — the same collection the
+// pkg/emoji reaction validator (history-service) reads existence from.
+type emojiStore interface {
+	// EmojiDoc returns one emoji doc projecting only what the serve path needs
+	// (minioKey, etag). found=false when the emoji is not registered.
+	EmojiDoc(ctx context.Context, siteID, shortcode string) (*model.CustomEmoji, bool, error)
+	// ListEmojis returns a site's emoji sorted by shortcode, projecting only
+	// the wire fields (shortcode, imageUrl, contentType, etag, createdBy, updatedAt).
+	ListEmojis(ctx context.Context, siteID string) ([]model.CustomEmoji, error)
+	// UpsertEmoji inserts or overwrites by (siteId, shortcode). createdBy and
+	// createdAt are set on insert only; all blob fields update on overwrite.
+	UpsertEmoji(ctx context.Context, e *model.CustomEmoji) error
+	// DeleteEmoji removes the doc and returns its minioKey so the caller can
+	// clean up the blob. found=false when no such emoji exists.
+	DeleteEmoji(ctx context.Context, siteID, shortcode string) (minioKey string, found bool, err error)
+}

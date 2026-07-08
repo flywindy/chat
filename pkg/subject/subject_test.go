@@ -102,6 +102,14 @@ func TestSubjectBuilders(t *testing.T) {
 			"chat.user.alice.request.search.site-a.users"},
 		{"SearchUsersPattern", subject.SearchUsersPattern("site-a"),
 			"chat.user.{account}.request.search.site-a.users"},
+		{"EmojiList", subject.EmojiList("alice", "site-a"),
+			"chat.user.alice.request.emoji.site-a.list"},
+		{"EmojiListPattern", subject.EmojiListPattern("site-a"),
+			"chat.user.{account}.request.emoji.site-a.list"},
+		{"EmojiDelete", subject.EmojiDelete("alice", "site-a"),
+			"chat.user.alice.request.emoji.site-a.delete"},
+		{"EmojiDeletePattern", subject.EmojiDeletePattern("site-a"),
+			"chat.user.{account}.request.emoji.site-a.delete"},
 		{"MsgEditPattern", subject.MsgEditPattern("site-a"),
 			"chat.user.{account}.request.room.{roomID}.site-a.msg.edit"},
 		{"MsgDeletePattern", subject.MsgDeletePattern("site-a"),
@@ -709,6 +717,23 @@ func TestRoomAppAndOrgMembersBuildersRejectWildcards(t *testing.T) {
 		{"OrgMembers star account", func() { subject.OrgMembers("*", "o1", "s1") }},
 		{"OrgMembers star orgID", func() { subject.OrgMembers("a1", "*", "s1") }},
 		{"OrgMembers gt siteID", func() { subject.OrgMembers("a1", "o1", ">") }},
+	}
+	for _, b := range builders {
+		t.Run(b.name, func(t *testing.T) {
+			assert.Panics(t, b.fn)
+		})
+	}
+}
+
+func TestEmojiBuildersRejectWildcardAccounts(t *testing.T) {
+	builders := []struct {
+		name string
+		fn   func()
+	}{
+		{"EmojiList star account", func() { subject.EmojiList("*", "s1") }},
+		{"EmojiList gt account", func() { subject.EmojiList(">", "s1") }},
+		{"EmojiDelete star account", func() { subject.EmojiDelete("*", "s1") }},
+		{"EmojiDelete gt account", func() { subject.EmojiDelete(">", "s1") }},
 	}
 	for _, b := range builders {
 		t.Run(b.name, func(t *testing.T) {

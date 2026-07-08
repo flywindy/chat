@@ -37,15 +37,15 @@ func NewValidator(lookup CustomEmojiLookup) *Validator {
 	return &Validator{lookup: lookup}
 }
 
-// Validate reports whether shortcode is acceptable and returns the
-// NFC-normalised canonical form. Callers MUST use the returned string —
-// not the raw input — for any storage key or wire echo, because Cassandra
-// map-key equality is byte-exact.
-func (v *Validator) Validate(ctx context.Context, siteID, shortcode string) (string, error) {
+// Canonicalize returns the NFC-canonical form of a bare shortcode, or
+// ErrInvalidShortcode when it fails the input-length cap or wire-format regex.
+// Callers MUST use the returned string — not the raw input — for any storage
+// key or wire echo, because storage-key equality is byte-exact.
+func Canonicalize(shortcode string) (string, error) {
 	// Cap input bytes before NFC so a pathological input can't allocate a large output buffer.
 	const maxInputBytes = 256
 	if len(shortcode) > maxInputBytes {
-		return "", fmt.Errorf("validate shortcode (%d bytes): %w", len(shortcode), ErrInvalidShortcode)
+		return "", fmt.Errorf("canonicalize shortcode (%d bytes): %w", len(shortcode), ErrInvalidShortcode)
 	}
 
 	// IsNormalString skips the allocating transform on already-NFC inputs (ASCII always is).
@@ -54,12 +54,33 @@ func (v *Validator) Validate(ctx context.Context, siteID, shortcode string) (str
 	}
 
 	if !shortcodeRe.MatchString(shortcode) {
-		return "", fmt.Errorf("validate shortcode %q: %w", shortcode, ErrInvalidShortcode)
+		return "", fmt.Errorf("canonicalize shortcode %q: %w", shortcode, ErrInvalidShortcode)
 	}
+	return shortcode, nil
+}
+
+// IsStandard reports whether an already-canonical shortcode is one of the
+// built-in standard emoji (gemoji set). Custom emoji colliding with these are
+// permanently shadowed by the validator, so uploads should reject them.
+func IsStandard(shortcode string) bool {
+	_, ok := standardEmoji[shortcode]
+	return ok
+}
+
+// Validate reports whether shortcode is acceptable and returns the
+// NFC-normalised canonical form. Callers MUST use the returned string —
+// not the raw input — for any storage key or wire echo, because Cassandra
+// map-key equality is byte-exact.
+func (v *Validator) Validate(ctx context.Context, siteID, shortcode string) (string, error) {
+	canonical, err := Canonicalize(shortcode)
+	if err != nil {
+		return "", err
+	}
+	shortcode = canonical
 
 	// Built-in standard emoji are accepted without a custom-store lookup; the
 	// custom_emojis collection is an additive per-site extension (issue #382).
-	if _, ok := standardEmoji[shortcode]; ok {
+	if IsStandard(shortcode) {
 		return shortcode, nil
 	}
 

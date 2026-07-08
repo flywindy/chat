@@ -16,13 +16,19 @@ type mongoStore struct {
 	users         *mongo.Collection
 	subscriptions *mongo.Collection
 	avatars       *mongo.Collection
+	customEmojis  *mongo.Collection
 }
+
+// Compile-time assertion that *mongoStore satisfies emojiStore. avatarStore
+// is already referenced as a handler field type, so it doesn't need one.
+var _ emojiStore = (*mongoStore)(nil)
 
 func newMongoStore(db *mongo.Database) *mongoStore {
 	return &mongoStore{
 		users:         db.Collection("users"),
 		subscriptions: db.Collection("subscriptions"),
 		avatars:       db.Collection("avatars"),
+		customEmojis:  db.Collection("custom_emojis"),
 	}
 }
 
@@ -90,4 +96,92 @@ func (s *mongoStore) SetBotAvatar(ctx context.Context, av *model.Avatar) error {
 		return fmt.Errorf("upsert bot avatar: %w", err)
 	}
 	return nil
+}
+
+// EnsureEmojiIndexes creates the (siteId, shortcode) unique index; idempotent.
+// Mirrors history-service's CustomEmojiRepo.EnsureIndexes (same index name) so
+// either service can start first.
+func (s *mongoStore) EnsureEmojiIndexes(ctx context.Context) error {
+	_, err := s.customEmojis.Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys:    bson.D{{Key: "siteId", Value: 1}, {Key: "shortcode", Value: 1}},
+		Options: options.Index().SetUnique(true).SetName("siteId_shortcode_unique"),
+	})
+	if err != nil {
+		return fmt.Errorf("ensure custom_emojis indexes: %w", err)
+	}
+	return nil
+}
+
+func (s *mongoStore) EmojiDoc(ctx context.Context, siteID, shortcode string) (*model.CustomEmoji, bool, error) {
+	var e model.CustomEmoji
+	err := s.customEmojis.FindOne(ctx, bson.M{"siteId": siteID, "shortcode": shortcode},
+		options.FindOne().SetProjection(bson.M{"minioKey": 1, "etag": 1})).Decode(&e)
+	if errors.Is(err, mongo.ErrNoDocuments) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("find custom emoji: %w", err)
+	}
+	return &e, true, nil
+}
+
+func (s *mongoStore) ListEmojis(ctx context.Context, siteID string) ([]model.CustomEmoji, error) {
+	cur, err := s.customEmojis.Find(ctx, bson.M{"siteId": siteID},
+		options.Find().
+			SetProjection(bson.M{"shortcode": 1, "imageUrl": 1, "contentType": 1, "etag": 1, "createdBy": 1, "updatedAt": 1}).
+			SetSort(bson.D{{Key: "shortcode", Value: 1}}))
+	if err != nil {
+		return nil, fmt.Errorf("list custom emojis: %w", err)
+	}
+	var out []model.CustomEmoji
+	if err := cur.All(ctx, &out); err != nil {
+		return nil, fmt.Errorf("decode custom emojis: %w", err)
+	}
+	return out, nil
+}
+
+func (s *mongoStore) UpsertEmoji(ctx context.Context, e *model.CustomEmoji) error {
+	filter := bson.M{"siteId": e.SiteID, "shortcode": e.Shortcode}
+	update := bson.M{
+		"$set": bson.M{
+			"imageUrl":    e.ImageURL,
+			"updatedBy":   e.UpdatedBy,
+			"updatedAt":   e.UpdatedAt,
+			"minioKey":    e.MinioKey,
+			"contentType": e.ContentType,
+			"size":        e.Size,
+			"etag":        e.ETag,
+		},
+		"$setOnInsert": bson.M{
+			"_id":       e.ID,
+			"siteId":    e.SiteID,
+			"shortcode": e.Shortcode,
+			"createdBy": e.CreatedBy,
+			"createdAt": e.CreatedAt,
+		},
+	}
+	opts := options.UpdateOne().SetUpsert(true)
+	_, err := s.customEmojis.UpdateOne(ctx, filter, update, opts)
+	if mongo.IsDuplicateKeyError(err) {
+		// Two concurrent first-time creates raced the unique index; the retry
+		// hits the now-existing doc as a plain update.
+		_, err = s.customEmojis.UpdateOne(ctx, filter, update, opts)
+	}
+	if err != nil {
+		return fmt.Errorf("upsert custom emoji: %w", err)
+	}
+	return nil
+}
+
+func (s *mongoStore) DeleteEmoji(ctx context.Context, siteID, shortcode string) (string, bool, error) {
+	var e model.CustomEmoji
+	err := s.customEmojis.FindOneAndDelete(ctx, bson.M{"siteId": siteID, "shortcode": shortcode},
+		options.FindOneAndDelete().SetProjection(bson.M{"minioKey": 1})).Decode(&e)
+	if errors.Is(err, mongo.ErrNoDocuments) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("delete custom emoji: %w", err)
+	}
+	return e.MinioKey, true, nil
 }

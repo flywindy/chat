@@ -3256,32 +3256,67 @@ func TestReactRoomEventJSON(t *testing.T) {
 
 func TestCustomEmojiRoundtrip(t *testing.T) {
 	e := model.CustomEmoji{
-		ID:        "0190a0f000007c9aabcde0123456789f",
-		SiteID:    "site-a",
-		Shortcode: "acme_party",
-		ImageURL:  "https://cdn.example.com/emoji/acme_party.png",
-		CreatedBy: "alice",
-		CreatedAt: 1747800000000,
+		ID:          "site-a:acme_party",
+		SiteID:      "site-a",
+		Shortcode:   "acme_party",
+		ImageURL:    "/api/v1/emoji/acme_party?siteid=site-a",
+		CreatedBy:   "alice",
+		CreatedAt:   1747800000000,
+		UpdatedBy:   "bob",
+		UpdatedAt:   1747900000000,
+		MinioKey:    "emoji/site-a/acme_party",
+		ContentType: "image/gif",
+		Size:        20480,
+		ETag:        "abc123",
 	}
 	var dst model.CustomEmoji
 	roundTrip(t, &e, &dst)
 	assert.Equal(t, "acme_party", dst.Shortcode)
+	assert.Equal(t, "emoji/site-a/acme_party", dst.MinioKey)
 }
 
 func TestCustomEmojiBSON(t *testing.T) {
 	e := model.CustomEmoji{
-		ID:        "0190a0f000007c9aabcde0123456789f",
-		SiteID:    "site-a",
-		Shortcode: "acme_party",
-		ImageURL:  "https://cdn.example.com/emoji/acme_party.png",
-		CreatedBy: "alice",
-		CreatedAt: 1747800000000,
+		ID:          "site-a:acme_party",
+		SiteID:      "site-a",
+		Shortcode:   "acme_party",
+		ImageURL:    "/api/v1/emoji/acme_party?siteid=site-a",
+		CreatedBy:   "alice",
+		CreatedAt:   1747800000000,
+		UpdatedBy:   "bob",
+		UpdatedAt:   1747900000000,
+		MinioKey:    "emoji/site-a/acme_party",
+		ContentType: "image/gif",
+		Size:        20480,
+		ETag:        "abc123",
 	}
 	data, err := bson.Marshal(&e)
 	require.NoError(t, err)
 	var dst model.CustomEmoji
 	require.NoError(t, bson.Unmarshal(data, &dst))
 	assert.Equal(t, e, dst)
+}
+
+func TestEmojiListResponseRoundtrip(t *testing.T) {
+	src := model.EmojiListResponse{Emojis: []model.EmojiEntry{{
+		Shortcode:   "acme_party",
+		ImageURL:    "/api/v1/emoji/acme_party?siteid=site-a",
+		ContentType: "image/png",
+		ETag:        "abc123",
+		CreatedBy:   "alice",
+		UpdatedAt:   1747900000000,
+	}}}
+	roundTrip(t, &src, &model.EmojiListResponse{})
+}
+
+func TestEmojiDeleteRequestRoundtrip(t *testing.T) {
+	src := model.EmojiDeleteRequest{Shortcode: "acme_party"}
+	roundTrip(t, &src, &model.EmojiDeleteRequest{})
+}
+
+func TestEmojiDeleteResponseRoundtrip(t *testing.T) {
+	src := model.EmojiDeleteResponse{Shortcode: "acme_party", Deleted: true}
+	roundTrip(t, &src, &model.EmojiDeleteResponse{})
 }
 
 func TestMessageThreadReadRequestJSON(t *testing.T) {

@@ -18,6 +18,8 @@ var allReasons = []Reason{
 	AuthTokenExpired, AuthInvalidToken, AuthInvalidRequest, AuthInvalidNKey, AuthMissingFields,
 	PortalAccountNotReady,
 	RequestIDRequired,
+	EmojiShortcodeReserved,
+	EmojiDeleteDisabled,
 }
 
 func TestReasons_SnakeCase(t *testing.T) {

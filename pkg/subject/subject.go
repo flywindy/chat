@@ -699,6 +699,36 @@ func SearchUsersPattern(siteID string) string {
 	return fmt.Sprintf("chat.user.{account}.request.search.%s.users", siteID)
 }
 
+// --- custom emoji (media-service) ---
+
+// EmojiList builds the concrete subject for listing a site's custom emoji.
+func EmojiList(account, siteID string) string {
+	if !isValidAccountToken(account) {
+		panic("invalid account token: contains NATS wildcard characters")
+	}
+	return fmt.Sprintf("chat.user.%s.request.emoji.%s.list", account, siteID)
+}
+
+// EmojiListPattern is the natsrouter pattern for the emoji list RPC. siteID is
+// baked in so each site's media-service only serves its own emoji set —
+// clients target the room's origin site.
+func EmojiListPattern(siteID string) string {
+	return fmt.Sprintf("chat.user.{account}.request.emoji.%s.list", siteID)
+}
+
+// EmojiDelete builds the concrete subject for deleting a custom emoji.
+func EmojiDelete(account, siteID string) string {
+	if !isValidAccountToken(account) {
+		panic("invalid account token: contains NATS wildcard characters")
+	}
+	return fmt.Sprintf("chat.user.%s.request.emoji.%s.delete", account, siteID)
+}
+
+// EmojiDeletePattern is the natsrouter pattern for the emoji delete RPC.
+func EmojiDeletePattern(siteID string) string {
+	return fmt.Sprintf("chat.user.{account}.request.emoji.%s.delete", siteID)
+}
+
 // --- room-service natsrouter pattern builders (siteID baked in) ---
 
 func RoomCreatePattern(siteID string) string {

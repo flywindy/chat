@@ -21,6 +21,7 @@ type blobInfo struct {
 type blobStore interface {
 	Get(ctx context.Context, key string) (io.ReadCloser, blobInfo, error)
 	Put(ctx context.Context, key string, r io.Reader, size int64, contentType string) (etag string, err error)
+	Delete(ctx context.Context, key string) error
 }
 
 type minioBlobStore struct {
@@ -54,4 +55,11 @@ func (m *minioBlobStore) Put(ctx context.Context, key string, r io.Reader, size 
 		return "", fmt.Errorf("put object: %w", err)
 	}
 	return info.ETag, nil
+}
+
+func (m *minioBlobStore) Delete(ctx context.Context, key string) error {
+	if err := m.client.RemoveObject(ctx, m.bucket, key, minio.RemoveObjectOptions{}); err != nil {
+		return fmt.Errorf("remove object: %w", err)
+	}
+	return nil
 }

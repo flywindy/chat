@@ -18,7 +18,7 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	testutil.RunTestsWithPrewarm(m, testutil.EnsureMongo, testutil.EnsureMinIO)
+	testutil.RunTestsWithPrewarm(m, testutil.EnsureMongo, testutil.EnsureMinIO, testutil.EnsureNATS)
 }
 
 func TestMongoStore_EmployeeID(t *testing.T) {

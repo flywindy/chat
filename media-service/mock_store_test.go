@@ -120,3 +120,88 @@ func (mr *MockavatarStoreMockRecorder) SetBotAvatar(ctx, av any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetBotAvatar", reflect.TypeOf((*MockavatarStore)(nil).SetBotAvatar), ctx, av)
 }
+
+// MockemojiStore is a mock of emojiStore interface.
+type MockemojiStore struct {
+	ctrl     *gomock.Controller
+	recorder *MockemojiStoreMockRecorder
+	isgomock struct{}
+}
+
+// MockemojiStoreMockRecorder is the mock recorder for MockemojiStore.
+type MockemojiStoreMockRecorder struct {
+	mock *MockemojiStore
+}
+
+// NewMockemojiStore creates a new mock instance.
+func NewMockemojiStore(ctrl *gomock.Controller) *MockemojiStore {
+	mock := &MockemojiStore{ctrl: ctrl}
+	mock.recorder = &MockemojiStoreMockRecorder{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use.
+func (m *MockemojiStore) EXPECT() *MockemojiStoreMockRecorder {
+	return m.recorder
+}
+
+// DeleteEmoji mocks base method.
+func (m *MockemojiStore) DeleteEmoji(ctx context.Context, siteID, shortcode string) (string, bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "DeleteEmoji", ctx, siteID, shortcode)
+	ret0, _ := ret[0].(string)
+	ret1, _ := ret[1].(bool)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
+}
+
+// DeleteEmoji indicates an expected call of DeleteEmoji.
+func (mr *MockemojiStoreMockRecorder) DeleteEmoji(ctx, siteID, shortcode any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteEmoji", reflect.TypeOf((*MockemojiStore)(nil).DeleteEmoji), ctx, siteID, shortcode)
+}
+
+// EmojiDoc mocks base method.
+func (m *MockemojiStore) EmojiDoc(ctx context.Context, siteID, shortcode string) (*model.CustomEmoji, bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "EmojiDoc", ctx, siteID, shortcode)
+	ret0, _ := ret[0].(*model.CustomEmoji)
+	ret1, _ := ret[1].(bool)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
+}
+
+// EmojiDoc indicates an expected call of EmojiDoc.
+func (mr *MockemojiStoreMockRecorder) EmojiDoc(ctx, siteID, shortcode any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "EmojiDoc", reflect.TypeOf((*MockemojiStore)(nil).EmojiDoc), ctx, siteID, shortcode)
+}
+
+// ListEmojis mocks base method.
+func (m *MockemojiStore) ListEmojis(ctx context.Context, siteID string) ([]model.CustomEmoji, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListEmojis", ctx, siteID)
+	ret0, _ := ret[0].([]model.CustomEmoji)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListEmojis indicates an expected call of ListEmojis.
+func (mr *MockemojiStoreMockRecorder) ListEmojis(ctx, siteID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListEmojis", reflect.TypeOf((*MockemojiStore)(nil).ListEmojis), ctx, siteID)
+}
+
+// UpsertEmoji mocks base method.
+func (m *MockemojiStore) UpsertEmoji(ctx context.Context, e *model.CustomEmoji) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UpsertEmoji", ctx, e)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// UpsertEmoji indicates an expected call of UpsertEmoji.
+func (mr *MockemojiStoreMockRecorder) UpsertEmoji(ctx, e any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpsertEmoji", reflect.TypeOf((*MockemojiStore)(nil).UpsertEmoji), ctx, e)
+}

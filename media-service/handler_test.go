@@ -19,32 +19,41 @@ import (
 )
 
 func newTestRouter(t *testing.T) (*gin.Engine, *MockavatarStore, *fakeBlobStore) {
+	r, store, _, blobs := newEmojiTestRouter(t)
+	return r, store, blobs
+}
+
+func newEmojiTestRouter(t *testing.T) (*gin.Engine, *MockavatarStore, *MockemojiStore, *fakeBlobStore) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	ctrl := gomock.NewController(t)
 	store := NewMockavatarStore(ctrl)
+	emojis := NewMockemojiStore(ctrl)
 	blobs := &fakeBlobStore{}
-	h := newHandler(store, blobs, &config{
+	h := newHandler(store, emojis, blobs, &config{
 		SiteID:               "s1",
 		EmployeePhotoBaseURL: "https://photos.example.com",
 		CacheMaxAgeSeconds:   3600,
 		MinioBucket:          "avatars",
-		ClusterDomains:       clusterDomains{byID: map[string]string{"s2": "https://avatar-s2"}},
+		ClusterDomains:       clusterDomains{byID: map[string]string{"s2": "https://avatar-s2"}}, // keep the original s2 value — existing avatar tests assert on it
 		MaxUploadBytes:       1048576,
+		EmojiMaxUploadBytes:  262144,
+		EmojiMaxDimension:    512,
 		EIDCacheCapacity:     1000,
 		EIDCacheTTL:          time.Minute,
 	})
 	r := gin.New()
 	registerRoutes(r, h)
-	return r, store, blobs
+	return r, store, emojis, blobs
 }
 
 // fakeBlobStore is an in-memory blobStore for handler tests.
 type fakeBlobStore struct {
-	objects map[string][]byte
-	info    map[string]blobInfo
-	putErr  error
-	getErr  error
+	objects   map[string][]byte
+	info      map[string]blobInfo
+	putErr    error
+	getErr    error
+	deleteErr error
 }
 
 func (f *fakeBlobStore) Get(_ context.Context, key string) (io.ReadCloser, blobInfo, error) {
@@ -75,6 +84,15 @@ func (f *fakeBlobStore) Put(_ context.Context, key string, r io.Reader, _ int64,
 	return "etag-" + key, nil
 }
 
+func (f *fakeBlobStore) Delete(_ context.Context, key string) error {
+	if f.deleteErr != nil {
+		return f.deleteErr
+	}
+	delete(f.objects, key)
+	delete(f.info, key)
+	return nil
+}
+
 func TestHandleHealth(t *testing.T) {
 	r, _, _ := newTestRouter(t)
 	w := httptest.NewRecorder()
@@ -101,6 +119,17 @@ func TestEndpoint1_UserNoEmployeeID_ServesDefault(t *testing.T) {
 	assert.Equal(t, "image/svg+xml", w.Header().Get("Content-Type"))
 	assert.Equal(t, "nosniff", w.Header().Get("X-Content-Type-Options"))
 	assert.Contains(t, w.Body.String(), "<svg")
+}
+
+func TestEndpoint1_UserNoEmployeeID_NotModified(t *testing.T) {
+	r, store, _ := newTestRouter(t)
+	store.EXPECT().EmployeeID(gomock.Any(), "alice").Return("", false, nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/avatar/alice", nil)
+	req.Header.Set("If-None-Match", defaultETag("alice", "alice"))
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusNotModified, w.Code)
+	assert.Empty(t, w.Body.String())
 }
 
 func TestEndpoint1_BotLocalCustomImage_Streams(t *testing.T) {
@@ -214,6 +243,19 @@ func TestEndpoint2_RemoteCluster_Redirects(t *testing.T) {
 	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/avatar/room/room-1", nil))
 	assert.Equal(t, http.StatusTemporaryRedirect, w.Code)
 	assert.Equal(t, "https://avatar-s2/api/v1/avatar/room/room-1?fwd=1", w.Header().Get("Location"))
+}
+
+func TestEndpoint2_UnknownRemoteSite_FallsThroughToLocal(t *testing.T) {
+	// "s3" is a real, non-local site the store returns, but it has no entry in
+	// ClusterDomains — redirectCrossCluster must not redirect to an unresolvable
+	// base URL and instead falls through to the normal local serving path.
+	r, store, _ := newTestRouter(t)
+	store.EXPECT().RoomSite(gomock.Any(), "room-1").Return("s3", model.RoomTypeChannel, "General", true, nil)
+	store.EXPECT().Avatar(gomock.Any(), model.AvatarSubjectRoom, "room-1").Return(nil, false, nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/avatar/room/room-1", nil))
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "image/svg+xml", w.Header().Get("Content-Type"))
 }
 
 func TestEndpoint2_SiteidHint_RemoteRedirect_SkipsRoomSite(t *testing.T) {

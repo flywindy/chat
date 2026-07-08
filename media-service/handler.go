@@ -14,14 +14,16 @@ import (
 
 type handler struct {
 	store    avatarStore
+	emojis   emojiStore
 	blobs    blobStore
 	cfg      config
 	eidCache *eidCache
 }
 
-func newHandler(store avatarStore, blobs blobStore, cfg *config) *handler {
+func newHandler(store avatarStore, emojis emojiStore, blobs blobStore, cfg *config) *handler {
 	return &handler{
 		store:    store,
+		emojis:   emojis,
 		blobs:    blobs,
 		cfg:      *cfg,
 		eidCache: newEIDCache(store, cfg.EIDCacheCapacity, cfg.EIDCacheTTL),
