@@ -3443,7 +3443,7 @@ See [Error envelope](#6-error-envelope-reference). Common errors: `"messageId is
 |---|---|---|
 | `shortcode` | string | The emoji shortcode reacted with. |
 | `action` | string | Always `"added"` here (the notification only fires on add). |
-| `actor` | [Participant](#participant) | The user who reacted. |
+| `actor` | [Participant](#participant) | The user who reacted. `displayName` is populated (`CombineWithFallback(engName, chineseName, account)`); for a bot account (`.bot` suffix) it's the app's display name instead, falling back to the composed name if no app matches. |
 
 To reconcile this delta with the grouped per-message `reactions` map returned by history endpoints (`map<emoji, [{account, displayName}]>`), clients append or remove one entry under `reactions[shortcode]` keyed on `actor.account`. See the "Message schema" section for the history-side shape.
 

@@ -467,7 +467,7 @@ Live reaction toggle event. Triggered by [React to Message](request-reply.md#rea
 | `messageId` | string | The reacted-to message's ID. |
 | `shortcode` | string | The bare reaction shortcode. |
 | `action` | string | `"added"` or `"removed"`. |
-| `actor` | [Participant](../client-api.md#participant) | The user whose toggle produced this event. Full Participant — includes display names. |
+| `actor` | [Participant](../client-api.md#participant) | The user whose toggle produced this event. Full Participant — includes display names; for a bot actor, `displayName` is the app's name (falls back to composed name if no app matches). |
 | `reactedAt` | string (RFC 3339) | Domain time of the toggle. |
 | `updatedAt` | string (RFC 3339) | Mirrors `reactedAt`. |
 
@@ -729,7 +729,7 @@ and the actor is not the author. Not emitted for reaction removals.
 |---|---|---|
 | `shortcode` | string | The emoji shortcode reacted with. |
 | `action` | string | Always `"added"` here (notification only fires on add). |
-| `actor` | [Participant](../client-api.md#participant) | The user who reacted. |
+| `actor` | [Participant](../client-api.md#participant) | The user who reacted. `displayName` is populated (`CombineWithFallback(engName, chineseName, account)`); for a bot account (`.bot` suffix) it's the app's display name instead, falling back to the composed name if no app matches. |
 
 ---
 

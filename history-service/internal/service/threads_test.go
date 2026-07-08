@@ -377,13 +377,14 @@ func TestHistoryService_GetThreadMessages_NoRoomTimesDependency(t *testing.T) {
 	threadSubs := mocks.NewMockThreadSubscriptionRepository(ctrl)
 	users := mocks.NewMockUserStore(ctrl)
 	customEmojis := mocks.NewMockCustomEmojiStore(ctrl)
+	apps := mocks.NewMockAppStore(ctrl)
 	cfg := &config.Config{
 		MessageHistoryFloorDays: 90,
 		LargeRoomThreshold:      500,
 		MaxPinnedPerRoom:        10,
 		PinEnabled:              true,
 	}
-	svc := service.New(msgs, subs, rooms, pub, threadRooms, threadSubs, users, customEmojis, cfg)
+	svc := service.New(msgs, subs, rooms, pub, threadRooms, threadSubs, users, customEmojis, apps, cfg)
 	c := testContext()
 
 	parent := &models.Message{MessageID: "m-parent", RoomID: "r1", CreatedAt: joinTime.Add(5 * time.Minute), ThreadRoomID: "tr-1", TCount: intPtr(1)}
@@ -888,7 +889,7 @@ func TestHistoryService_GetThreadMessages_ParentMessage_QuoteRedacted(t *testing
 // newServiceForFloor builds a HistoryService with strict thread-room mock (no AnyTimes default for
 // GetMinThreadUserLastSeenAt) so floor-specific tests can assert exact mock calls.
 func newServiceForFloor(t *testing.T) (*service.HistoryService, *mocks.MockMessageRepository, *mocks.MockSubscriptionRepository, *mocks.MockThreadRoomRepository) {
-	svc, msgs, subs, rooms, _, threadRooms, _, _ := newServiceWithRoomMock(t)
+	svc, msgs, subs, rooms, _, threadRooms, _, _, _ := newServiceWithRoomMock(t)
 	rooms.EXPECT().GetMinUserLastSeenAt(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 	return svc, msgs, subs, threadRooms
 }

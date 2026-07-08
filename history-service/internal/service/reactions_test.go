@@ -13,6 +13,7 @@ import (
 
 	"github.com/hmchangw/chat/history-service/internal/models"
 	"github.com/hmchangw/chat/history-service/internal/service/mocks"
+	"github.com/hmchangw/chat/pkg/displayfmt"
 	"github.com/hmchangw/chat/pkg/errcode"
 	"github.com/hmchangw/chat/pkg/model"
 	"github.com/hmchangw/chat/pkg/natsrouter"
@@ -29,13 +30,14 @@ type reactFixture struct {
 	pub          *mocks.MockEventPublisher
 	users        *mocks.MockUserStore
 	customEmojis *mocks.MockCustomEmojiStore
+	apps         *mocks.MockAppStore
 }
 
 func newReactFixture(t *testing.T) reactFixture {
-	svc, msgs, subs, rooms, pub, _, users, customEmojis := newServiceWithRoomMock(t)
+	svc, msgs, subs, rooms, pub, _, users, customEmojis, apps := newServiceWithRoomMock(t)
 	rooms.EXPECT().GetMinUserLastSeenAt(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 	rooms.EXPECT().GetRoomTimes(gomock.Any(), gomock.Any()).Return(defaultRoomLastMsgAt, defaultRoomCreatedAt, nil).AnyTimes()
-	return reactFixture{svc: svc, msgs: msgs, subs: subs, pub: pub, users: users, customEmojis: customEmojis}
+	return reactFixture{svc: svc, msgs: msgs, subs: subs, pub: pub, users: users, customEmojis: customEmojis, apps: apps}
 }
 
 // stubShortcodeKnown makes the validator's lookup return true for shortcode.
@@ -265,6 +267,7 @@ func TestHistoryService_ReactMessage_Add_Success_PublishesEvent(t *testing.T) {
 	assert.Equal(t, model.ReactionActionAdded, evt.ReactionDelta.Action)
 	assert.Equal(t, "user-alice", evt.ReactionDelta.Actor.UserID)
 	assert.Equal(t, "u1", evt.ReactionDelta.Actor.Account)
+	assert.Equal(t, displayfmt.CombineWithFallback(aliceUser().EngName, aliceUser().ChineseName, aliceUser().Account), evt.ReactionDelta.Actor.DisplayName)
 	// CLAUDE.md §6: event Timestamp must be set and match resp.ReactedAt.
 	assert.Positive(t, evt.Timestamp)
 	assert.Equal(t, resp.ReactedAt, evt.Timestamp)
@@ -398,4 +401,71 @@ func TestHistoryService_ReactMessage_CustomEmojiFound_Success(t *testing.T) {
 		models.ReactMessageRequest{MessageID: "m1", Shortcode: "acme_party"})
 	require.NoError(t, err)
 	assert.Equal(t, model.ReactionActionAdded, resp.Action)
+}
+
+// --- Bot reactor displayName resolution (chat#460) ---
+
+func botUser() *model.User {
+	return &model.User{ID: "user-acme-bot", Account: "acme.bot", SiteID: "site-test", EngName: "acme.bot"}
+}
+
+// reactAsFixture drives a full ADD react as actor and returns the response plus the
+// decoded canonical event, so callers can assert Actor.DisplayName resolution.
+func reactAsFixture(t *testing.T, f reactFixture, actor *model.User) (*models.ReactMessageResponse, model.MessageEvent) {
+	t.Helper()
+	f.stubShortcodeKnown("thumbsup")
+	createdAt := joinTime.Add(1 * time.Minute)
+	f.subs.EXPECT().GetHistorySharedSince(gomock.Any(), actor.Account, "r1").Return(nil, true, nil)
+	target := &models.Message{
+		MessageID: "m1", RoomID: "r1", CreatedAt: createdAt,
+		Sender: models.Participant{ID: "user-bob", Account: "bob"},
+	}
+	f.msgs.EXPECT().GetMessageByID(gomock.Any(), "m1").Return(target, nil)
+	f.users.EXPECT().FindUserByAccount(gomock.Any(), actor.Account).Return(actor, nil)
+	f.msgs.EXPECT().AddReaction(gomock.Any(), target, gomock.Any(), gomock.Any()).Return(nil)
+
+	var payload []byte
+	f.pub.EXPECT().
+		Publish(gomock.Any(), subject.MsgCanonicalReacted("site-test"), gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, _ string, data []byte, _ string) error {
+			payload = data
+			return nil
+		})
+
+	ctx := natsrouter.NewContext(map[string]string{"account": actor.Account, "roomID": "r1"})
+	resp, err := f.svc.ReactMessage(ctx, "site-test", models.ReactMessageRequest{MessageID: "m1", Shortcode: "thumbsup"})
+	require.NoError(t, err)
+	require.NotEmpty(t, payload)
+	var evt model.MessageEvent
+	require.NoError(t, json.Unmarshal(payload, &evt))
+	return resp, evt
+}
+
+func TestHistoryService_ReactMessage_HumanReactor_ComposedName_AppStoreNotCalled(t *testing.T) {
+	f := newReactFixture(t)
+	f.apps.EXPECT().AppNameByAccount(gomock.Any(), gomock.Any()).Times(0)
+	_, evt := reactAsFixture(t, f, aliceUserPtr())
+	assert.Equal(t, displayfmt.CombineWithFallback(aliceUser().EngName, aliceUser().ChineseName, aliceUser().Account), evt.ReactionDelta.Actor.DisplayName)
+}
+
+func TestHistoryService_ReactMessage_BotReactor_UsesAppName(t *testing.T) {
+	f := newReactFixture(t)
+	f.apps.EXPECT().AppNameByAccount(gomock.Any(), "acme.bot").Return("Acme Assistant", nil)
+	_, evt := reactAsFixture(t, f, botUser())
+	assert.Equal(t, "Acme Assistant", evt.ReactionDelta.Actor.DisplayName)
+}
+
+func TestHistoryService_ReactMessage_BotReactor_AppStoreMiss_FallsBackToComposed(t *testing.T) {
+	f := newReactFixture(t)
+	f.apps.EXPECT().AppNameByAccount(gomock.Any(), "acme.bot").Return("", nil)
+	_, evt := reactAsFixture(t, f, botUser())
+	assert.Equal(t, displayfmt.CombineWithFallback(botUser().EngName, botUser().ChineseName, botUser().Account), evt.ReactionDelta.Actor.DisplayName)
+}
+
+func TestHistoryService_ReactMessage_BotReactor_AppStoreError_DegradesToComposed(t *testing.T) {
+	f := newReactFixture(t)
+	f.apps.EXPECT().AppNameByAccount(gomock.Any(), "acme.bot").Return("", errors.New("mongo down"))
+	resp, evt := reactAsFixture(t, f, botUser())
+	require.NotNil(t, resp)
+	assert.Equal(t, displayfmt.CombineWithFallback(botUser().EngName, botUser().ChineseName, botUser().Account), evt.ReactionDelta.Actor.DisplayName)
 }

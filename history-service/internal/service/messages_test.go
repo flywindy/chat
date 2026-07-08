@@ -43,7 +43,7 @@ var defaultRoomLastMsgAt = joinTime.Add(24 * time.Hour)
 var defaultRoomCreatedAt = joinTime.Add(-30 * 24 * time.Hour)
 
 func newService(t *testing.T) (*service.HistoryService, *mocks.MockMessageRepository, *mocks.MockSubscriptionRepository, *mocks.MockEventPublisher, *mocks.MockThreadRoomRepository) {
-	svc, msgs, subs, rooms, pub, threadRooms, _, _ := newServiceWithRoomMock(t)
+	svc, msgs, subs, rooms, pub, threadRooms, _, _, _ := newServiceWithRoomMock(t)
 	// Permissive defaults: existing tests don't care about the room reads.
 	rooms.EXPECT().GetMinUserLastSeenAt(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 	rooms.EXPECT().
@@ -56,8 +56,8 @@ func newService(t *testing.T) (*service.HistoryService, *mocks.MockMessageReposi
 }
 
 // newServiceWithRoomMock additionally exposes the room mock, pre-stubbed with a permissive
-// GetRoomTimes default (override with Times(N) to assert resolver behaviour); no UserStore/CustomEmojiStore pre-stubs.
-func newServiceWithRoomMock(t *testing.T) (*service.HistoryService, *mocks.MockMessageRepository, *mocks.MockSubscriptionRepository, *mocks.MockRoomRepository, *mocks.MockEventPublisher, *mocks.MockThreadRoomRepository, *mocks.MockUserStore, *mocks.MockCustomEmojiStore) {
+// GetRoomTimes default (override with Times(N) to assert resolver behaviour); no UserStore/CustomEmojiStore/AppStore pre-stubs.
+func newServiceWithRoomMock(t *testing.T) (*service.HistoryService, *mocks.MockMessageRepository, *mocks.MockSubscriptionRepository, *mocks.MockRoomRepository, *mocks.MockEventPublisher, *mocks.MockThreadRoomRepository, *mocks.MockUserStore, *mocks.MockCustomEmojiStore, *mocks.MockAppStore) {
 	ctrl := gomock.NewController(t)
 	msgs := mocks.NewMockMessageRepository(ctrl)
 	subs := mocks.NewMockSubscriptionRepository(ctrl)
@@ -67,6 +67,7 @@ func newServiceWithRoomMock(t *testing.T) (*service.HistoryService, *mocks.MockM
 	threadSubs := mocks.NewMockThreadSubscriptionRepository(ctrl)
 	users := mocks.NewMockUserStore(ctrl)
 	customEmojis := mocks.NewMockCustomEmojiStore(ctrl)
+	apps := mocks.NewMockAppStore(ctrl)
 	rooms.EXPECT().
 		GetRoomTimes(gomock.Any(), gomock.Any()).
 		Return(defaultRoomLastMsgAt, defaultRoomCreatedAt, nil).
@@ -81,7 +82,7 @@ func newServiceWithRoomMock(t *testing.T) (*service.HistoryService, *mocks.MockM
 		MaxPinnedPerRoom:        10,
 		PinEnabled:              true,
 	}
-	return service.New(msgs, subs, rooms, pub, threadRooms, threadSubs, users, customEmojis, cfg), msgs, subs, rooms, pub, threadRooms, users, customEmojis
+	return service.New(msgs, subs, rooms, pub, threadRooms, threadSubs, users, customEmojis, apps, cfg), msgs, subs, rooms, pub, threadRooms, users, customEmojis, apps
 }
 
 // assertInternalErr verifies err collapses to the generic "internal error" envelope at the
@@ -223,7 +224,7 @@ func TestHistoryService_LoadHistory_WithBeforeTimestamp(t *testing.T) {
 }
 
 func TestHistoryService_LoadHistory_ReturnsMinUserLastSeenAt(t *testing.T) {
-	svc, msgs, subs, rooms, _, _, _, _ := newServiceWithRoomMock(t)
+	svc, msgs, subs, rooms, _, _, _, _, _ := newServiceWithRoomMock(t)
 	c := testContext()
 
 	floor := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
@@ -238,7 +239,7 @@ func TestHistoryService_LoadHistory_ReturnsMinUserLastSeenAt(t *testing.T) {
 }
 
 func TestHistoryService_LoadHistory_NoMinUserLastSeenAt(t *testing.T) {
-	svc, msgs, subs, rooms, _, _, _, _ := newServiceWithRoomMock(t)
+	svc, msgs, subs, rooms, _, _, _, _, _ := newServiceWithRoomMock(t)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(&joinTime, true, nil)
@@ -256,7 +257,7 @@ func TestHistoryService_LoadHistory_NoMinUserLastSeenAt(t *testing.T) {
 }
 
 func TestHistoryService_LoadHistory_RoomReadError_DegradesGracefully(t *testing.T) {
-	svc, msgs, subs, rooms, _, _, _, _ := newServiceWithRoomMock(t)
+	svc, msgs, subs, rooms, _, _, _, _, _ := newServiceWithRoomMock(t)
 	c := testContext()
 
 	pageMessages := []models.Message{
@@ -285,13 +286,14 @@ func TestHistoryService_LoadHistory_AccessErrorTakesPrecedence(t *testing.T) {
 	threadSubs := mocks.NewMockThreadSubscriptionRepository(ctrl)
 	users := mocks.NewMockUserStore(ctrl)
 	customEmojis := mocks.NewMockCustomEmojiStore(ctrl)
+	apps := mocks.NewMockAppStore(ctrl)
 	cfg := &config.Config{
 		MessageHistoryFloorDays: 90,
 		LargeRoomThreshold:      500,
 		MaxPinnedPerRoom:        10,
 		PinEnabled:              true,
 	}
-	svc := service.New(msgs, subs, rooms, pub, threadRooms, threadSubs, users, customEmojis, cfg)
+	svc := service.New(msgs, subs, rooms, pub, threadRooms, threadSubs, users, customEmojis, apps, cfg)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, false, errors.New("access db error"))
@@ -305,7 +307,7 @@ func TestHistoryService_LoadHistory_AccessErrorTakesPrecedence(t *testing.T) {
 }
 
 func TestHistoryService_LoadNextMessages_ReturnsMinUserLastSeenAt(t *testing.T) {
-	svc, msgs, subs, rooms, _, _, _, _ := newServiceWithRoomMock(t)
+	svc, msgs, subs, rooms, _, _, _, _, _ := newServiceWithRoomMock(t)
 	c := testContext()
 
 	floor := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
@@ -320,7 +322,7 @@ func TestHistoryService_LoadNextMessages_ReturnsMinUserLastSeenAt(t *testing.T) 
 }
 
 func TestHistoryService_LoadNextMessages_NoMinUserLastSeenAt(t *testing.T) {
-	svc, msgs, subs, rooms, _, _, _, _ := newServiceWithRoomMock(t)
+	svc, msgs, subs, rooms, _, _, _, _, _ := newServiceWithRoomMock(t)
 	c := testContext()
 
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(&joinTime, true, nil)
@@ -338,7 +340,7 @@ func TestHistoryService_LoadNextMessages_NoMinUserLastSeenAt(t *testing.T) {
 }
 
 func TestHistoryService_LoadNextMessages_RoomReadError_DegradesGracefully(t *testing.T) {
-	svc, msgs, subs, rooms, _, _, _, _ := newServiceWithRoomMock(t)
+	svc, msgs, subs, rooms, _, _, _, _, _ := newServiceWithRoomMock(t)
 	c := testContext()
 
 	pageMessages := []models.Message{{MessageID: "m1", RoomID: "r1", CreatedAt: joinTime.Add(time.Minute)}}
@@ -353,7 +355,7 @@ func TestHistoryService_LoadNextMessages_RoomReadError_DegradesGracefully(t *tes
 }
 
 func TestHistoryService_LoadSurroundingMessages_ReturnsMinUserLastSeenAt(t *testing.T) {
-	svc, msgs, subs, rooms, _, _, _, _ := newServiceWithRoomMock(t)
+	svc, msgs, subs, rooms, _, _, _, _, _ := newServiceWithRoomMock(t)
 	c := testContext()
 
 	floor := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
@@ -371,7 +373,7 @@ func TestHistoryService_LoadSurroundingMessages_ReturnsMinUserLastSeenAt(t *test
 }
 
 func TestHistoryService_LoadSurroundingMessages_NoMinUserLastSeenAt(t *testing.T) {
-	svc, msgs, subs, rooms, _, _, _, _ := newServiceWithRoomMock(t)
+	svc, msgs, subs, rooms, _, _, _, _, _ := newServiceWithRoomMock(t)
 	c := testContext()
 
 	central := models.Message{MessageID: "mC", RoomID: "r1", CreatedAt: joinTime.Add(2 * time.Minute)}
@@ -392,7 +394,7 @@ func TestHistoryService_LoadSurroundingMessages_NoMinUserLastSeenAt(t *testing.T
 }
 
 func TestHistoryService_LoadSurroundingMessages_RoomReadError_DegradesGracefully(t *testing.T) {
-	svc, msgs, subs, rooms, _, _, _, _ := newServiceWithRoomMock(t)
+	svc, msgs, subs, rooms, _, _, _, _, _ := newServiceWithRoomMock(t)
 	c := testContext()
 
 	central := models.Message{MessageID: "mC", RoomID: "r1", CreatedAt: joinTime.Add(2 * time.Minute)}
@@ -409,7 +411,7 @@ func TestHistoryService_LoadSurroundingMessages_RoomReadError_DegradesGracefully
 }
 
 func TestHistoryService_LoadSurroundingMessages_Limit1_ReturnsMinUserLastSeenAt(t *testing.T) {
-	svc, msgs, subs, rooms, _, _, _, _ := newServiceWithRoomMock(t)
+	svc, msgs, subs, rooms, _, _, _, _, _ := newServiceWithRoomMock(t)
 	c := testContext()
 
 	floor := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)

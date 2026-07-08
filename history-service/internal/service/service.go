@@ -15,7 +15,7 @@ import (
 	"github.com/hmchangw/chat/pkg/subject"
 )
 
-//go:generate mockgen -destination=mocks/mock_repository.go -package=mocks . MessageReader,MessageWriter,MessageRepository,SubscriptionRepository,RoomRepository,EventPublisher,ThreadRoomRepository,ThreadSubscriptionRepository,UserStore,CustomEmojiStore
+//go:generate mockgen -destination=mocks/mock_repository.go -package=mocks . MessageReader,MessageWriter,MessageRepository,SubscriptionRepository,RoomRepository,EventPublisher,ThreadRoomRepository,ThreadSubscriptionRepository,UserStore,CustomEmojiStore,AppStore
 
 type MessageReader interface {
 	GetMessagesBefore(ctx context.Context, roomID string, before time.Time, floor time.Time, pageReq cassrepo.PageRequest) (cassrepo.Page[models.Message], error)
@@ -99,6 +99,12 @@ type CustomEmojiStore interface {
 	CustomEmojiExists(ctx context.Context, siteID, shortcode string) (bool, error)
 }
 
+// AppStore resolves a bot account's app display name for reaction Actor rendering.
+type AppStore interface {
+	// AppNameByAccount returns ("", nil) when no app matches botAccount.
+	AppNameByAccount(ctx context.Context, botAccount string) (string, error)
+}
+
 // HistoryService handles message history queries and mutations. Transport-agnostic.
 type HistoryService struct {
 	msgReader          MessageReader
@@ -109,6 +115,7 @@ type HistoryService struct {
 	threadRooms        ThreadRoomRepository
 	threadSubs         ThreadSubscriptionRepository
 	users              UserStore
+	apps               AppStore
 	emojiValidator     *emoji.Validator // owns the CustomEmojiStore lookup; reused per request
 	historyFloor       time.Duration    // from MESSAGE_HISTORY_FLOOR_DAYS
 	largeRoomThreshold int
@@ -125,6 +132,7 @@ func New(
 	threadSubs ThreadSubscriptionRepository,
 	users UserStore,
 	customEmojis CustomEmojiStore,
+	apps AppStore,
 	cfg *config.Config,
 ) *HistoryService {
 	return &HistoryService{
@@ -136,6 +144,7 @@ func New(
 		threadRooms:        threadRooms,
 		threadSubs:         threadSubs,
 		users:              users,
+		apps:               apps,
 		emojiValidator:     emoji.NewValidator(customEmojis),
 		historyFloor:       time.Duration(cfg.MessageHistoryFloorDays) * 24 * time.Hour,
 		largeRoomThreshold: cfg.LargeRoomThreshold,

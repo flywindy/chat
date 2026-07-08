@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/hmchangw/chat/history-service/internal/models"
+	"github.com/hmchangw/chat/pkg/displayfmt"
 	"github.com/hmchangw/chat/pkg/emoji"
 	"github.com/hmchangw/chat/pkg/errcode"
 	pkgmodel "github.com/hmchangw/chat/pkg/model"
@@ -93,6 +94,16 @@ func (s *HistoryService) ReactMessage(c *natsrouter.Context, siteID string, req 
 		}
 	}
 
+	// Bot reactor: prefer the app's display name; degrade to composed on miss/error.
+	displayName := displayfmt.CombineWithFallback(actor.EngName, actor.ChineseName, actor.Account)
+	if pkgmodel.IsBot(actor.Account) {
+		if appName, err := s.apps.AppNameByAccount(c, actor.Account); err != nil {
+			slog.WarnContext(c, "react: app name lookup failed, using composed name", "account", actor.Account, "error", err)
+		} else if appName != "" {
+			displayName = appName
+		}
+	}
+
 	canonicalEvt := pkgmodel.MessageEvent{
 		Event: pkgmodel.EventReacted,
 		Message: pkgmodel.Message{
@@ -114,6 +125,7 @@ func (s *HistoryService) ReactMessage(c *natsrouter.Context, siteID string, req 
 				SiteID:      actor.SiteID,
 				ChineseName: actor.ChineseName,
 				EngName:     actor.EngName,
+				DisplayName: displayName,
 			},
 		},
 	}

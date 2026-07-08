@@ -141,6 +141,7 @@ func main() {
 	threadSubRepo := mongorepo.NewThreadSubscriptionRepo(db)
 	customEmojiRepo := mongorepo.NewCustomEmojiRepo(db)
 	userStore := userstore.NewMongoStore(db.Collection("users"))
+	appRepo := mongorepo.NewAppRepo(db)
 
 	if err := threadRoomRepo.EnsureIndexes(ctx); err != nil {
 		slog.Error("ensure thread_rooms indexes failed", "error", err)
@@ -189,7 +190,7 @@ func main() {
 	}
 
 	pub := publisher.New(js)
-	svc := service.New(cassRepo, subSource, roomSource, pub, threadRoomRepo, threadSubRepo, userStore, cachedEmojis, &cfg)
+	svc := service.New(cassRepo, subSource, roomSource, pub, threadRoomRepo, threadSubRepo, userStore, cachedEmojis, appRepo, &cfg)
 	router := natsrouter.New(nc, "history-service")
 	router.Use(natsrouter.Recovery())
 	// RequestID must precede any handler that reads request_id from ctx —
