@@ -28,6 +28,7 @@ import (
 	"github.com/hmchangw/chat/pkg/msgraph"
 	"github.com/hmchangw/chat/pkg/natsrouter"
 	"github.com/hmchangw/chat/pkg/natsutil"
+	"github.com/hmchangw/chat/pkg/outbox"
 	"github.com/hmchangw/chat/pkg/roomkeystore"
 	"github.com/hmchangw/chat/pkg/subject"
 )
@@ -780,19 +781,8 @@ func (h *Handler) updateRole(c *natsrouter.Context, req model.UpdateRoleRequest)
 		return nil, fmt.Errorf("get user siteId: %w", err)
 	}
 	if userSiteID != "" && userSiteID != h.siteID {
-		externalEvt := model.InboxEvent{
-			Type:       "role_updated",
-			SiteID:     h.siteID,
-			DestSiteID: userSiteID,
-			Payload:    subEvtData, // inbox-worker.handleRoleUpdated decodes a SubscriptionUpdateEvent
-			Timestamp:  now.UnixMilli(),
-		}
-		externalData, err := json.Marshal(externalEvt)
-		if err != nil {
-			return nil, fmt.Errorf("marshal inbox event: %w", err)
-		}
-		if err := h.publishToStream(ctx, subject.InboxExternal(userSiteID, "role_updated"), externalData, ""); err != nil {
-			return nil, fmt.Errorf("publish role-updated inbox: %w", err)
+		if err := h.federateOne(ctx, roomID, userSiteID, model.InboxRoleUpdated, subEvtData, req.Account, now.UnixMilli()); err != nil {
+			return nil, fmt.Errorf("federate role-updated: %w", err)
 		}
 	}
 
@@ -821,6 +811,18 @@ func (h *Handler) publishSubscriptionUpdate(ctx context.Context, account, action
 			"request_id", natsutil.RequestIDFromContext(ctx), "error", err, "account", account)
 	}
 	return data, nil
+}
+
+// federateOne durably relays one cross-site event onto the local OUTBOX stream
+// (the durability boundary — only a local publish failure reaches the client);
+// outbox-worker forwards it to destSiteID's INBOX. No-op when destSiteID is
+// empty or local (outbox.Publish owns that guard, and the envelope build). The
+// dedupID derived from dedupSeed is the OUTBOX publish's Nats-Msg-Id too, so a
+// client retry can't double-enqueue the same (destination, event) into the
+// outbox.
+func (h *Handler) federateOne(ctx context.Context, roomID, destSiteID string, eventType model.InboxEventType, payload []byte, dedupSeed string, ts int64) error {
+	dedupID := natsutil.InboxDedupID(ctx, destSiteID, dedupSeed)
+	return outbox.Publish(ctx, h.publishToStream, h.siteID, roomID, destSiteID, eventType, payload, dedupID, ts)
 }
 
 func (h *Handler) addMembers(c *natsrouter.Context, req model.AddMembersRequest) (*model.StatusReply, error) { //nolint:gocritic // hugeParam: req is passed by value to satisfy the natsrouter.Register handler signature
@@ -1317,19 +1319,8 @@ func (h *Handler) messageRead(c *natsrouter.Context) (*model.StatusReply, error)
 		if err != nil {
 			return nil, fmt.Errorf("marshal subscription_read payload: %w", err)
 		}
-		externalEvt := model.InboxEvent{
-			Type:       model.InboxSubscriptionRead,
-			SiteID:     h.siteID,
-			DestSiteID: userSiteID,
-			Payload:    payloadData,
-			Timestamp:  now.UnixMilli(),
-		}
-		externalData, err := json.Marshal(externalEvt)
-		if err != nil {
-			return nil, fmt.Errorf("marshal inbox event: %w", err)
-		}
-		if err := h.publishToStream(ctx, subject.InboxExternal(userSiteID, model.InboxSubscriptionRead), externalData, ""); err != nil {
-			return nil, fmt.Errorf("publish subscription_read inbox: %w", err)
+		if err := h.federateOne(ctx, roomID, userSiteID, model.InboxSubscriptionRead, payloadData, roomID+":"+account, now.UnixMilli()); err != nil {
+			return nil, fmt.Errorf("federate subscription_read: %w", err)
 		}
 	}
 
@@ -1606,19 +1597,8 @@ func (h *Handler) messageThreadRead(c *natsrouter.Context, req model.MessageThre
 		if err != nil {
 			return nil, fmt.Errorf("marshal thread_read payload: %w", err)
 		}
-		externalEvt := model.InboxEvent{
-			Type:       model.InboxThreadRead,
-			SiteID:     h.siteID,
-			DestSiteID: userSiteID,
-			Payload:    payloadData,
-			Timestamp:  now.UnixMilli(),
-		}
-		externalData, err := json.Marshal(externalEvt)
-		if err != nil {
-			return nil, fmt.Errorf("marshal inbox event: %w", err)
-		}
-		if err := h.publishToStream(ctx, subject.InboxExternal(userSiteID, model.InboxThreadRead), externalData, ""); err != nil {
-			return nil, fmt.Errorf("publish thread_read inbox: %w", err)
+		if err := h.federateOne(ctx, roomID, userSiteID, model.InboxThreadRead, payloadData, tsub.ThreadRoomID+":"+account, now.UnixMilli()); err != nil {
+			return nil, fmt.Errorf("federate thread_read: %w", err)
 		}
 	}
 
@@ -1982,16 +1962,8 @@ func (h *Handler) roomRestricted(c *natsrouter.Context, req model.RoomRestricted
 			return nil, fmt.Errorf("marshal restricted inbox payload: %w", err)
 		}
 		for _, remoteSiteID := range remoteSites {
-			evt := model.InboxEvent{
-				Type: model.InboxRoomRestricted, SiteID: h.siteID, DestSiteID: remoteSiteID,
-				Payload: payload, Timestamp: time.Now().UTC().UnixMilli(),
-			}
-			evtData, mErr := json.Marshal(evt)
-			if mErr != nil {
-				return nil, fmt.Errorf("marshal restricted inbox event: %w", mErr)
-			}
-			if err := h.publishToStream(ctx, subject.InboxExternal(remoteSiteID, model.InboxRoomRestricted), evtData, natsutil.InboxDedupID(ctx, remoteSiteID, requestID)); err != nil {
-				return nil, fmt.Errorf("publish restricted inbox to %s: %w", remoteSiteID, err)
+			if err := h.federateOne(ctx, req.RoomID, remoteSiteID, model.InboxRoomRestricted, payload, requestID, req.Timestamp); err != nil {
+				return nil, fmt.Errorf("federate room_restricted to %s: %w", remoteSiteID, err)
 			}
 		}
 	}
@@ -2058,19 +2030,8 @@ func (h *Handler) muteToggle(c *natsrouter.Context) (*model.MuteToggleResponse, 
 		if err != nil {
 			return nil, fmt.Errorf("marshal mute-toggled payload: %w", err)
 		}
-		externalEvt := model.InboxEvent{
-			Type:       model.InboxSubscriptionMuteToggled,
-			SiteID:     h.siteID,
-			DestSiteID: userSiteID,
-			Payload:    payloadData,
-			Timestamp:  now.UnixMilli(),
-		}
-		externalData, err := json.Marshal(externalEvt)
-		if err != nil {
-			return nil, fmt.Errorf("marshal inbox event: %w", err)
-		}
-		if err := h.publishToStream(ctx, subject.InboxExternal(userSiteID, model.InboxSubscriptionMuteToggled), externalData, ""); err != nil {
-			return nil, fmt.Errorf("publish mute-toggled inbox: %w", err)
+		if err := h.federateOne(ctx, roomID, userSiteID, model.InboxSubscriptionMuteToggled, payloadData, roomID+":"+account, now.UnixMilli()); err != nil {
+			return nil, fmt.Errorf("federate mute-toggled: %w", err)
 		}
 	}
 
@@ -2121,19 +2082,8 @@ func (h *Handler) favoriteToggle(c *natsrouter.Context) (*model.FavoriteToggleRe
 		if err != nil {
 			return nil, fmt.Errorf("marshal favorite-toggled payload: %w", err)
 		}
-		externalEvt := model.InboxEvent{
-			Type:       model.InboxSubscriptionFavoriteToggled,
-			SiteID:     h.siteID,
-			DestSiteID: userSiteID,
-			Payload:    payloadData,
-			Timestamp:  now.UnixMilli(),
-		}
-		externalData, err := json.Marshal(externalEvt)
-		if err != nil {
-			return nil, fmt.Errorf("marshal inbox event: %w", err)
-		}
-		if err := h.publishToStream(ctx, subject.InboxExternal(userSiteID, model.InboxSubscriptionFavoriteToggled), externalData, ""); err != nil {
-			return nil, fmt.Errorf("publish favorite-toggled inbox: %w", err)
+		if err := h.federateOne(ctx, roomID, userSiteID, model.InboxSubscriptionFavoriteToggled, payloadData, roomID+":"+account, now.UnixMilli()); err != nil {
+			return nil, fmt.Errorf("federate favorite-toggled: %w", err)
 		}
 	}
 

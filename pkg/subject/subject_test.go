@@ -267,6 +267,10 @@ func TestWildcardPatterns(t *testing.T) {
 			"chat.user.*.request.room.*.site-a.member.role-update"},
 		{"RoomCanonicalWild", subject.RoomCanonicalWildcard("site-a"),
 			"chat.room.canonical.site-a.>"},
+		{"Outbox", subject.Outbox("site-a", "site-b", "subscription_read"),
+			"chat.outbox.site-a.site-b.subscription_read"},
+		{"OutboxWildcard", subject.OutboxWildcard("site-a"),
+			"chat.outbox.site-a.>"},
 		{"MsgHistoryWild", subject.MsgHistoryWildcard("site-a"),
 			"chat.user.*.request.room.*.site-a.msg.history"},
 		{"MsgCanonicalWild", subject.MsgCanonicalWildcard("site-a"),
@@ -851,6 +855,27 @@ func TestParseSubscriptionUpdateAccount(t *testing.T) {
 
 	_, ok = subject.ParseSubscriptionUpdateAccount("chat.user.*.event.subscription.update")
 	assert.False(t, ok) // wildcard token rejected
+}
+
+func TestParseOutbox(t *testing.T) {
+	// Round-trips with the builder.
+	origin, dest, evt, ok := subject.ParseOutbox(subject.Outbox("site-a", "site-b", "subscription_read"))
+	require.True(t, ok)
+	assert.Equal(t, "site-a", origin)
+	assert.Equal(t, "site-b", dest)
+	assert.Equal(t, "subscription_read", evt)
+
+	// Malformed subjects are rejected.
+	for _, bad := range []string{
+		"chat.outbox.site-a.site-b", // missing eventType
+		"chat.outbox.site-a",        // too short
+		"chat.inbox.site-a.site-b.x",
+		"chat.outbox..site-b.x", // empty origin
+		"",
+	} {
+		_, _, _, ok := subject.ParseOutbox(bad)
+		assert.False(t, ok, "should reject %q", bad)
+	}
 }
 
 func TestRoomPatternsMatchWildcards(t *testing.T) {

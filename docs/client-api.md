@@ -81,7 +81,7 @@ This doc covers the public client-facing API surface only.
 
 **Out of scope (backend-internal — clients never see these):**
 
-- Backend-only JetStream subjects (MESSAGES, MESSAGES_CANONICAL, INBOX, ROOMS streams).
+- Backend-only JetStream subjects (MESSAGES, MESSAGES_CANONICAL, INBOX, ROOMS, OUTBOX streams).
 - Server-to-server subjects (`chat.server.request.…`).
 
 Room-encryption key events that clients consume are documented under the RPC that triggers them (Create Room, Add Members, Remove Member) and in [§5 Room Encryption](#5-room-encryption). Multi-site federation is transparent to clients: a cross-site action delivers the **same** events on the same `chat.user.{account}.…` / `chat.room.…` subjects as a same-site action, so this doc does not distinguish them.
@@ -1284,6 +1284,8 @@ See [Error envelope](#6-error-envelope-reference). Returned synchronously when v
 
 **`chat.user.{targetAccount}.event.subscription.update`** — emitted once for the user whose role changed, `action: "role_updated"`. Delivered to the target user only (not the requester, not other members). See the [subscription.update schema](#subscriptionupdate-event); the embedded `Subscription` reflects the updated `roles`. No `AsyncJobResult` and no room-key event fire for role updates.
 
+**Cross-site federation:** when the target user's home site differs from the room's site, `room-service` emits an `OutboxEvent` on the OUTBOX stream and `outbox-worker` forwards the cross-site `role_updated` event (at-least-once) to `chat.inbox.{userSite}.external.role_updated`, where `inbox-worker` applies the updated `roles` to the local `Subscription` (guarded by `rolesUpdatedAt`).
+
 ```json
 {
   "userId": "01970a4f8c2d7c9a01970a4f8c2d7c9a",
@@ -1411,7 +1413,7 @@ When the synchronous reply is an error envelope, the request was rejected before
 > - `externalAccess` — whether the room is reachable from outside the company network (e.g. internet-side / off-VPN clients). This is a network-access gate, NOT a cross-site federation flag
 > - `ownerAccount` — required on the unrestricted-to-restricted transition
 >
-> room-service does the Mongo writes, fans out an `InboxRoomRestricted` event per remote federated site (published to `chat.inbox.{remoteSiteID}.external.room_restricted`), and replies `{"status":"ok","requestId":"…"}` once the work is committed. No `AsyncJobResult` is emitted — the reply *is* the result.
+> room-service does the Mongo writes, emits a single `OutboxEvent` on the OUTBOX stream (one target per remote federated site), and replies `{"status":"ok","requestId":"…"}` once the work is committed. `outbox-worker` forwards the cross-site `room_restricted` event (at-least-once) to each remote site's `chat.inbox.{remoteSiteID}.external.room_restricted`. No `AsyncJobResult` is emitted — the reply *is* the result.
 >
 > Clients learn about the change via a **`RoomRestrictedRoomEvent`** (`type: "room_restricted"`) on the same `chat.room.{roomID}.event` stream they already subscribe to for chat messages. Like `RoomRenamedRoomEvent`, it's a flat struct with no zero-valued envelope fields:
 >
@@ -1741,6 +1743,8 @@ See [Error envelope](#6-error-envelope-reference). Common errors:
 }
 ```
 
+**3. Cross-site federation** — when the reader's home site differs from the room's site, `room-service` emits an `OutboxEvent` on the OUTBOX stream and `outbox-worker` forwards the cross-site `subscription_read` event (at-least-once) to `chat.inbox.{userSite}.external.subscription_read`, where `inbox-worker` applies `lastSeenAt`/`alert` to the local `Subscription` (guarded by `lastSeenAt`).
+
 ##### Triggered events — error path
 
 `None — error returned only via the reply subject.`
@@ -1752,7 +1756,7 @@ See [Error envelope](#6-error-envelope-reference). Common errors:
 **Subject:** `chat.user.{account}.request.room.{roomID}.{siteID}.message.thread.read`
 **Reply subject:** auto-generated `_INBOX.>` (NATS request/reply)
 
-A **synchronous RPC** that clears a single thread's unread state for the caller. `room-service` validates room membership and thread-subscription existence, removes the threadId from the user's `Subscription.ThreadUnread`, recomputes the per-subscription `alert` flag, refreshes the `ThreadSubscription` (`lastSeenAt`, `updatedAt`, `hasMention=false`), and — for cross-site users — publishes a `thread_read` event directly to the user's home-site INBOX so the destination `inbox-worker` can mirror both updates.
+A **synchronous RPC** that clears a single thread's unread state for the caller. `room-service` validates room membership and thread-subscription existence, removes the threadId from the user's `Subscription.ThreadUnread`, recomputes the per-subscription `alert` flag, refreshes the `ThreadSubscription` (`lastSeenAt`, `updatedAt`, `hasMention=false`), and — for cross-site users — emits an `OutboxEvent` on the OUTBOX stream; `outbox-worker` forwards the cross-site `thread_read` event to the user's home site (at-least-once) so the destination `inbox-worker` can mirror both updates.
 
 ##### Request body
 
@@ -1787,7 +1791,7 @@ See [Error envelope](#6-error-envelope-reference). Common errors:
 
 - **Alert recomputation:** `alert = oldSub.alert && len(newThreadUnread) > 0`. A thread-read can only clear an alert, never set one. When the post-removal `threadUnread` is empty, `alert` becomes false. This computation runs atomically inside the MongoDB aggregation pipeline on the handler's site — not derived client-side.
 - **Concurrent local writes:** the room-`Subscription` update and the `ThreadSubscription` update run in parallel inside an `errgroup`. Both must succeed before the handler proceeds.
-- **Cross-site federation:** if the user's home site differs from the handler's site, a `thread_read` event is published directly to `chat.inbox.{userSite}.external.thread_read` with payload `{account, roomId, threadRoomId, parentMessageId, newThreadUnread, alert, lastSeenAt, timestamp}` (timestamps as `int64` UnixMilli). The destination `inbox-worker` applies the supplied `newThreadUnread`+`alert` to the local Subscription cache and applies `lastSeenAt`+`updatedAt`+`hasMention=false` to the local ThreadSubscription with an `$lt` order-safety guard so out-of-order delivery cannot regress the thread's read position.
+- **Cross-site federation:** if the user's home site differs from the handler's site, the handler emits an `OutboxEvent` on the OUTBOX stream and `outbox-worker` forwards the cross-site `thread_read` event (at-least-once) to `chat.inbox.{userSite}.external.thread_read` with payload `{account, roomId, threadRoomId, parentMessageId, newThreadUnread, alert, lastSeenAt, timestamp}` (timestamps as `int64` UnixMilli). The destination `inbox-worker` applies the supplied `newThreadUnread`+`alert` to the local Subscription cache and applies `lastSeenAt`+`updatedAt`+`hasMention=false` to the local ThreadSubscription with an `$lt` order-safety guard so out-of-order delivery cannot regress the thread's read position.
 - **Defensive `roomId` filter:** the thread-subscription lookup additionally enforces that the supplied `threadId` belongs to the room named in the subject. Mismatches return `thread subscription not found` (rather than silently clearing an unrelated thread).
 - **Thread-room read-floor recompute:** after both writes succeed, `room-service` recomputes `thread_rooms.minUserLastSeenAt` = `MIN(lastSeenAt)` across all `thread_subscriptions` for the thread room. The floor is set only when every subscriber has a usable `lastSeenAt`; otherwise it is cleared. The recompute is best-effort — a failure is logged but does not fail the RPC. The stored value is also available via [Get Thread Messages](#get-thread-messages).
 - **Read-floor fan-out:** when (and only when) the recompute above changes `thread_rooms.minUserLastSeenAt`, the server publishes a `thread_message_read` event (routed by the **parent** room's type) carrying the new floor, so peers can advance thread read-receipt UI live. Best-effort (a publish failure does not fail the RPC); never fires when the floor is unchanged or the thread room is missing.
@@ -1874,6 +1878,7 @@ See [Error envelope](#6-error-envelope-reference). Common errors:
 ##### Behaviour notes
 
 - **Notification delivery:** `notification-worker` respects `muted` flags when deciding whether to send mobile push notifications (see [Notification fan-out](#notification-fan-out-mobile-push-only) below).
+- **Cross-site federation:** when the requester's home site differs from the room's site, `room-service` emits an `OutboxEvent` on the OUTBOX stream and `outbox-worker` forwards the cross-site `subscription_mute_toggled` event (at-least-once) to `chat.inbox.{userSite}.external.subscription_mute_toggled`, where `inbox-worker` applies `muted` to the local `Subscription` (guarded by `muteUpdatedAt`).
 
 ---
 
@@ -1923,7 +1928,7 @@ See [Error envelope](#6-error-envelope-reference). Common errors:
 
 ##### Cross-site behaviour
 
-When the requester's home site differs from the room's site, `room-service` additionally publishes a `subscription_favorite_toggled` InboxEvent directly to `chat.inbox.{userSite}.external.subscription_favorite_toggled`. `inbox-worker` on the user's home site mirrors the flip onto the local `Subscription` document. Missing-subscription on the home site (e.g., a federation race) is a silent no-op — no NACK, no redelivery loop.
+When the requester's home site differs from the room's site, `room-service` emits an `OutboxEvent` on the OUTBOX stream and `outbox-worker` forwards the cross-site `subscription_favorite_toggled` event (at-least-once) to `chat.inbox.{userSite}.external.subscription_favorite_toggled`. `inbox-worker` on the user's home site mirrors the flip onto the local `Subscription` document. Missing-subscription on the home site (e.g., a federation race) is a silent no-op — no NACK, no redelivery loop.
 
 ---
 

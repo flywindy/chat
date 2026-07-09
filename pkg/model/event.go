@@ -150,6 +150,7 @@ type InboxEventType = string
 const (
 	InboxMemberAdded                 InboxEventType = "member_added"
 	InboxMemberRemoved               InboxEventType = "member_removed"
+	InboxRoleUpdated                 InboxEventType = "role_updated"
 	InboxSubscriptionRead            InboxEventType = "subscription_read"
 	InboxSubscriptionMuteToggled     InboxEventType = "subscription_mute_toggled"
 	InboxSubscriptionFavoriteToggled InboxEventType = "subscription_favorite_toggled"
@@ -192,6 +193,23 @@ type InboxEvent struct {
 	DestSiteID string         `json:"destSiteId"`
 	Payload    []byte         `json:"payload"` // JSON-encoded inner event
 	Timestamp  int64          `json:"timestamp" bson:"timestamp"`
+}
+
+// OutboxEvent is the federation relay published by room-service and
+// room-worker onto the OUTBOX stream
+// (chat.outbox.{originSiteID}.{destSiteID}.{eventType}); outbox-worker
+// forwards Envelope to the destination site's INBOX with at-least-once retry.
+// Destination and event type ride the subject (so a per-destination consumer can
+// filter/pause on a single peer); the body carries only the pre-marshaled
+// InboxEvent (byte-identical to a direct publish) and the forward's Nats-Msg-Id.
+// Envelope is json.RawMessage, not []byte, so the already-JSON envelope embeds
+// verbatim instead of being base64-encoded a second time into a durable,
+// replicated stream body.
+type OutboxEvent struct {
+	RoomID    string          `json:"roomId"    bson:"roomId"`
+	Envelope  json.RawMessage `json:"envelope"  bson:"envelope"`
+	DedupID   string          `json:"dedupId"   bson:"dedupId"`
+	Timestamp int64           `json:"timestamp" bson:"timestamp"`
 }
 
 type MemberAddEvent struct {

@@ -73,6 +73,18 @@ func Inbox(siteID string) Config {
 	}
 }
 
+// Outbox returns the OUTBOX_{siteID} stream config: the durable federation-relay
+// lane. room-service (and other same-site publishers) write OutboxEvents
+// on chat.outbox.{siteID}.{eventType}; outbox-worker consumes the stream and
+// forwards each target to the destination site's INBOX. Owned by outbox-worker
+// (dev bootstrap; ops/IaC in prod).
+func Outbox(siteID string) Config {
+	return Config{
+		Name:     fmt.Sprintf("OUTBOX_%s", siteID),
+		Subjects: []string{subject.OutboxWildcard(siteID)},
+	}
+}
+
 // MigrationOplog returns the MIGRATION_OPLOG_{siteID} stream config: raw CDC events from the legacy source Mongo. Owned by the oplog-connector (dev bootstrap; ops/IaC in prod).
 func MigrationOplog(siteID string) Config {
 	return Config{

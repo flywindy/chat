@@ -400,20 +400,19 @@ func TestHandler_ProcessAddMembers(t *testing.T) {
 	// 2 SubscriptionUpdate + 1 MemberAddEvent + 1 system msg + 1 batched inbox (site-b)
 	assert.GreaterOrEqual(t, len(published), 4)
 
-	// Verify exactly 1 inbox event for site-b (batched, not per-member)
+	// Verify exactly 1 outbox relay event for site-b (batched, not per-member)
 	var inboxCount int
 	for _, p := range published {
-		if strings.Contains(p.subj, ".external.") {
+		if strings.HasPrefix(p.subj, "chat.outbox.") {
 			inboxCount++
 			assert.Contains(t, p.subj, "site-b")
-			var inboxEvt model.InboxEvent
-			require.NoError(t, json.Unmarshal(p.data, &inboxEvt))
+			_, inboxEvt := unwrapOutbox(t, p.data)
 			var change model.MemberAddEvent
 			require.NoError(t, json.Unmarshal(inboxEvt.Payload, &change))
 			assert.Equal(t, []string{"charlie"}, change.Accounts)
 		}
 	}
-	assert.Equal(t, 1, inboxCount, "should publish exactly 1 batched inbox event per destination site")
+	assert.Equal(t, 1, inboxCount, "should publish exactly 1 batched outbox relay event per destination site")
 }
 
 // TestHandler_ProcessAddMembers_PublishesSubscriptionUpdateBeforeRoomKey locks in
@@ -582,22 +581,21 @@ func TestHandler_ProcessAddMembers_RestrictedPropagatesPointer(t *testing.T) {
 		"restricted room must publish non-nil HistorySharedSince")
 	assert.Equal(t, reqTS, *memberAddEvt.HistorySharedSince)
 
-	// Batched inbox to site-b: same HSS pointer on the payload.
+	// Batched outbox relay to site-b: same HSS pointer on the payload.
 	var foundInbox bool
 	for _, p := range published {
-		if !strings.Contains(p.subj, ".external.") {
+		if !strings.HasPrefix(p.subj, "chat.outbox.") {
 			continue
 		}
 		foundInbox = true
-		var inboxEvt model.InboxEvent
-		require.NoError(t, json.Unmarshal(p.data, &inboxEvt))
+		_, inboxEvt := unwrapOutbox(t, p.data)
 		var change model.MemberAddEvent
 		require.NoError(t, json.Unmarshal(inboxEvt.Payload, &change))
 		require.NotNil(t, change.HistorySharedSince,
 			"inbox restricted payload must carry HistorySharedSince")
 		assert.Equal(t, reqTS, *change.HistorySharedSince)
 	}
-	assert.True(t, foundInbox, "expected a batched inbox publish for site-b")
+	assert.True(t, foundInbox, "expected a batched outbox relay publish for site-b")
 }
 
 // TestHandler_ProcessAddMembers_UnrestrictedOmitsFieldFromWire verifies that
@@ -825,15 +823,14 @@ func TestHandler_ProcessAddMembers_MultipleSiteInbox(t *testing.T) {
 
 	var inboxEvents []publishedMsg
 	for _, p := range published {
-		if strings.Contains(p.subj, ".external.") {
+		if strings.HasPrefix(p.subj, "chat.outbox.") {
 			inboxEvents = append(inboxEvents, p)
 		}
 	}
-	assert.Len(t, inboxEvents, 2, "should batch cross-site inbox by site: 1 for site-b, 1 for site-c")
+	assert.Len(t, inboxEvents, 2, "should batch cross-site outbox relay by site: 1 for site-b, 1 for site-c")
 
 	for _, p := range inboxEvents {
-		var inboxEvt model.InboxEvent
-		require.NoError(t, json.Unmarshal(p.data, &inboxEvt))
+		_, inboxEvt := unwrapOutbox(t, p.data)
 		var change model.MemberAddEvent
 		require.NoError(t, json.Unmarshal(inboxEvt.Payload, &change))
 
@@ -963,15 +960,15 @@ func TestHandler_ProcessRemoveMember_CrossSiteInbox(t *testing.T) {
 	err := h.processRemoveMember(context.Background(), data)
 	require.NoError(t, err)
 
-	// Expect: sub update + member event + local INBOX + sys msg + inbox = 5 publishes
-	assert.Len(t, published, 5, "expected 5 publishes including local INBOX and inbox for federated user")
+	// Expect: sub update + member event + local INBOX + sys msg + outbox relay = 5 publishes
+	assert.Len(t, published, 5, "expected 5 publishes including local INBOX and outbox relay for federated user")
 
-	inboxSubj := subject.InboxExternal(userSite, "member_removed")
+	inboxSubj := subject.Outbox(localSite, userSite, "member_removed")
 	subjSet := make(map[string]bool)
 	for _, p := range published {
 		subjSet[p.subj] = true
 	}
-	assert.True(t, subjSet[inboxSubj], "expected inbox event published for remote user")
+	assert.True(t, subjSet[inboxSubj], "expected outbox relay event published for remote user")
 }
 
 func TestHandler_ProcessRemoveMember_UnmarshalError(t *testing.T) {
@@ -1243,10 +1240,10 @@ func TestHandler_ProcessRemoveIndividual_InboxFailurePropagates(t *testing.T) {
 	store.EXPECT().
 		GetSubscriptionAccounts(gomock.Any(), roomID).Return(nil, nil)
 
-	inboxSubj := subject.InboxExternal(userSite, "member_removed")
+	inboxSubj := subject.Outbox(localSite, userSite, "member_removed")
 	publish := func(_ context.Context, subj string, _ []byte, _ string) error {
 		if subj == inboxSubj {
-			return fmt.Errorf("inbox publish broken")
+			return fmt.Errorf("outbox publish broken")
 		}
 		return nil
 	}
@@ -1256,8 +1253,8 @@ func TestHandler_ProcessRemoveIndividual_InboxFailurePropagates(t *testing.T) {
 	data, _ := json.Marshal(req)
 
 	err := h.processRemoveMember(context.Background(), data)
-	require.Error(t, err, "inbox failure must return error so JetStream NAKs and retries")
-	assert.Contains(t, err.Error(), "inbox")
+	require.Error(t, err, "outbox failure must return error so JetStream NAKs and retries")
+	assert.Contains(t, err.Error(), "outbox")
 }
 
 func TestHandler_ProcessRemoveOrg_InboxFailurePropagates(t *testing.T) {
@@ -1284,10 +1281,10 @@ func TestHandler_ProcessRemoveOrg_InboxFailurePropagates(t *testing.T) {
 	store.EXPECT().GetUser(gomock.Any(), requester).
 		Return(&model.User{ID: "u_alice", Account: requester, SiteID: localSite, EngName: "Alice", ChineseName: "愛"}, nil)
 
-	inboxSubj := subject.InboxExternal(remoteSite, "member_removed")
+	inboxSubj := subject.Outbox(localSite, remoteSite, "member_removed")
 	publish := func(_ context.Context, subj string, _ []byte, _ string) error {
 		if subj == inboxSubj {
-			return fmt.Errorf("inbox publish broken")
+			return fmt.Errorf("outbox publish broken")
 		}
 		return nil
 	}
@@ -1297,8 +1294,8 @@ func TestHandler_ProcessRemoveOrg_InboxFailurePropagates(t *testing.T) {
 	data, _ := json.Marshal(req)
 
 	err := h.processRemoveMember(context.Background(), data)
-	require.Error(t, err, "inbox failure must return error so JetStream NAKs and retries")
-	assert.Contains(t, err.Error(), "inbox")
+	require.Error(t, err, "outbox failure must return error so JetStream NAKs and retries")
+	assert.Contains(t, err.Error(), "outbox")
 }
 
 func TestHandler_processAddMembers_PublishesSuccessEventToRequesterSubject(t *testing.T) {
@@ -1678,21 +1675,20 @@ func TestProcessAddMembers_InboxCarriesRoomName(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, h.processAddMembers(ctx, body))
 
-	// Find inbox publish to site-B with member_added.
+	// Find outbox relay publish to site-B with member_added.
 	pub := getPublished()
 	var found bool
 	for _, m := range pub {
-		if !strings.HasPrefix(m.subj, "chat.inbox.site-B.external.member_added") {
+		if m.subj != subject.Outbox("site-A", "site-B", model.InboxMemberAdded) {
 			continue
 		}
 		found = true
-		var envelope model.InboxEvent
-		require.NoError(t, json.Unmarshal(m.data, &envelope))
+		_, envelope := unwrapOutbox(t, m.data)
 		var evt model.MemberAddEvent
 		require.NoError(t, json.Unmarshal(envelope.Payload, &evt))
 		assert.Equal(t, "deal team", evt.RoomName)
 	}
-	require.True(t, found, "expected inbox publish to site-B with member_added subject")
+	require.True(t, found, "expected outbox relay publish for site-B with member_added subject")
 }
 
 // Task 16: successful processAddMembers must publish AsyncJobResult with status "ok".
@@ -1805,16 +1801,29 @@ func messagesCanonical(published []publishedMsg, siteID string) []publishedMsg {
 	return out
 }
 
-// inboxFor filters published messages to the inbox stream for a specific destSiteID and eventType.
-func inboxFor(published []publishedMsg, destSiteID, eventType string) []publishedMsg {
+// memberOutboxFor filters published messages to the OUTBOX relay subject for a
+// destination + membership event type (membership federation rides the durable
+// OUTBOX, not a direct INBOX publish).
+func memberOutboxFor(published []publishedMsg, originSiteID, destSiteID, eventType string) []publishedMsg {
 	var out []publishedMsg
-	subj := fmt.Sprintf("chat.inbox.%s.external.%s", destSiteID, eventType)
+	subj := subject.Outbox(originSiteID, destSiteID, eventType)
 	for _, p := range published {
 		if p.subj == subj {
 			out = append(out, p)
 		}
 	}
 	return out
+}
+
+// unwrapOutbox decodes an OutboxEvent published on the OUTBOX relay and the
+// inner InboxEvent envelope it carries.
+func unwrapOutbox(t *testing.T, data []byte) (model.OutboxEvent, model.InboxEvent) {
+	t.Helper()
+	var relay model.OutboxEvent
+	require.NoError(t, json.Unmarshal(data, &relay))
+	var env model.InboxEvent
+	require.NoError(t, json.Unmarshal(relay.Envelope, &env))
+	return relay, env
 }
 
 // userResponseFor filters published messages to the async-job result for an account.
@@ -2497,11 +2506,10 @@ func TestProcessCreateRoom_Channel_InboxPerRemoteSite(t *testing.T) {
 	})
 	require.NoError(t, h.processCreateRoom(ctx, body))
 
-	inboxMsgs := inboxFor(getPublished(), "site-B", model.InboxMemberAdded)
+	inboxMsgs := memberOutboxFor(getPublished(), "site-A", "site-B", model.InboxMemberAdded)
 	require.Len(t, inboxMsgs, 1)
 
-	var envelope model.InboxEvent
-	require.NoError(t, json.Unmarshal(inboxMsgs[0].data, &envelope))
+	_, envelope := unwrapOutbox(t, inboxMsgs[0].data)
 	assert.Equal(t, model.InboxMemberAdded, envelope.Type)
 	assert.Equal(t, "site-A", envelope.SiteID)
 	assert.Equal(t, "site-B", envelope.DestSiteID)
@@ -3153,18 +3161,19 @@ func TestHandleSyncCreateDM_CrossSite_EmitsInbox(t *testing.T) {
 
 	var inbox *dmCapturedPublish
 	for i := range capture.captured {
-		if capture.captured[i].subject == subject.InboxExternal("site-b", model.InboxMemberAdded) {
+		if capture.captured[i].subject == subject.Outbox("site-a", "site-b", model.InboxMemberAdded) {
 			inbox = &capture.captured[i]
 			break
 		}
 	}
-	require.NotNil(t, inbox, "expected a member_added inbox publish to site-b")
+	require.NotNil(t, inbox, "expected a member_added outbox relay publish for site-b")
 
-	var env model.InboxEvent
-	require.NoError(t, json.Unmarshal(inbox.data, &env))
+	relay, env := unwrapOutbox(t, inbox.data)
 	assert.Equal(t, model.InboxMemberAdded, env.Type)
 	assert.Equal(t, "site-a", env.SiteID)
 	assert.Equal(t, "site-b", env.DestSiteID)
+	assert.Equal(t, inbox.msgID, relay.DedupID,
+		"the OUTBOX publish's Nats-Msg-Id must equal the forward's DedupID")
 
 	var payload model.MemberAddEvent
 	require.NoError(t, json.Unmarshal(env.Payload, &payload))
@@ -3215,12 +3224,12 @@ func TestHandleSyncCreateDM_CrossSite_NoRequestID_PayloadDerivedDedup(t *testing
 
 	var inbox *dmCapturedPublish
 	for i := range capture.captured {
-		if capture.captured[i].subject == subject.InboxExternal("site-b", model.InboxMemberAdded) {
+		if capture.captured[i].subject == subject.Outbox("site-a", "site-b", model.InboxMemberAdded) {
 			inbox = &capture.captured[i]
 			break
 		}
 	}
-	require.NotNil(t, inbox, "expected a member_added inbox publish to site-b")
+	require.NotNil(t, inbox, "expected a member_added outbox relay publish for site-b")
 
 	require.NotNil(t, insertedRoom)
 	wantSeed := fmt.Sprintf("%s:%s:%d", insertedRoom.ID, "alice", insertedRoom.CreatedAt.UnixMilli())
@@ -3247,16 +3256,17 @@ func TestHandleSyncCreateDM_SameSite_NoInbox(t *testing.T) {
 
 	for _, p := range capture.captured {
 		assert.NotContains(t, p.subject, ".external.", "no cross-site inbox publish expected for same-site DM")
+		assert.NotContains(t, p.subject, "chat.outbox.", "no outbox relay publish expected for same-site DM")
 	}
 }
 
-// Inbox publish failure must fail the request — otherwise the requester sees success
-// while the remote site never learns about the room.
+// Outbox relay publish failure must fail the request — otherwise the requester
+// sees success while the remote site never learns about the room.
 func TestHandleSyncCreateDM_InboxPublishFails_FailsRequest(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	store := NewMockSubscriptionStore(ctrl)
 	failingPublish := func(_ context.Context, subj string, _ []byte, _ string) error {
-		if strings.Contains(subj, ".external.") {
+		if strings.HasPrefix(subj, "chat.outbox.") {
 			return errors.New("jetstream pubAck failed")
 		}
 		return nil
@@ -3543,12 +3553,11 @@ func TestProcessCreateRoom_Channel_PublishesCrossSiteMemberAdded(t *testing.T) {
 	})
 	require.NoError(t, h.processCreateRoom(ctx, body))
 
-	memberAddedInbox := inboxFor(getPublished(), "site-B", model.InboxMemberAdded)
+	memberAddedInbox := memberOutboxFor(getPublished(), "site-A", "site-B", model.InboxMemberAdded)
 	require.Len(t, memberAddedInbox, 1,
-		"finishCreateRoom must emit inbox.{origin}.to.{remote}.member_added alongside room_created so the remote site's search-sync-worker updates its MV")
+		"finishCreateRoom must emit an OUTBOX member_added relay alongside room_created so the remote site's search-sync-worker updates its MV")
 
-	var envelope model.InboxEvent
-	require.NoError(t, json.Unmarshal(memberAddedInbox[0].data, &envelope))
+	_, envelope := unwrapOutbox(t, memberAddedInbox[0].data)
 	assert.Equal(t, model.InboxMemberAdded, envelope.Type)
 	assert.Equal(t, "site-A", envelope.SiteID)
 	assert.Equal(t, "site-B", envelope.DestSiteID)
@@ -5334,9 +5343,12 @@ func TestProcessRoomRename_HappyPathWithRemoteSite(t *testing.T) {
 	var inboxPayloads []model.RoomRenamedInboxPayload
 	publish := func(_ context.Context, subj string, data []byte, _ string) error {
 		publishedSubjects = append(publishedSubjects, subj)
-		if strings.Contains(subj, ".external.") {
-			var env model.InboxEvent
-			require.NoError(t, json.Unmarshal(data, &env))
+		// room_renamed now relays through the OUTBOX ordered lane (shares the
+		// per-destination FIFO consumer with member_added so it cannot overtake
+		// the add that creates a new member's subscription), not a direct INBOX
+		// publish. The body is an OutboxEvent wrapping the InboxEvent envelope.
+		if strings.HasPrefix(subj, "chat.outbox.") {
+			_, env := unwrapOutbox(t, data)
 			var payload model.RoomRenamedInboxPayload
 			require.NoError(t, json.Unmarshal(env.Payload, &payload))
 			inboxPayloads = append(inboxPayloads, payload)
@@ -5356,17 +5368,18 @@ func TestProcessRoomRename_HappyPathWithRemoteSite(t *testing.T) {
 	assert.Contains(t, publishedSubjects, subject.UserResponse("alice", requestID))
 	for _, subj := range publishedSubjects {
 		assert.NotContains(t, subj, ".event.subscription.update", "rename publishes a single room-scoped sys message; no per-subscription fan-out")
+		assert.NotContains(t, subj, ".external.", "rename federates via OUTBOX, not a direct INBOX publish")
 	}
 
-	// Exactly one inbox publish to site-b.
-	inboxSubjects := make([]string, 0)
+	// Exactly one OUTBOX relay to site-b.
+	relaySubjects := make([]string, 0)
 	for _, s := range publishedSubjects {
-		if strings.Contains(s, ".external.") {
-			inboxSubjects = append(inboxSubjects, s)
+		if strings.HasPrefix(s, "chat.outbox.") {
+			relaySubjects = append(relaySubjects, s)
 		}
 	}
-	require.Len(t, inboxSubjects, 1)
-	assert.Contains(t, inboxSubjects[0], "site-b")
+	require.Len(t, relaySubjects, 1)
+	assert.Equal(t, subject.Outbox("site-a", "site-b", model.InboxRoomRenamed), relaySubjects[0])
 	require.Len(t, inboxPayloads, 1)
 	assert.Equal(t, roomID, inboxPayloads[0].RoomID)
 	assert.Equal(t, newName, inboxPayloads[0].NewName)

@@ -24,6 +24,7 @@ func TestStreamConfigs(t *testing.T) {
 		{"Messages", stream.Messages(siteID), "MESSAGES_site-a", "chat.user.*.room.*.site-a.msg.>"},
 		{"MessagesCanonical", stream.MessagesCanonical(siteID), "MESSAGES_CANONICAL_site-a", "chat.msg.canonical.site-a.>"},
 		{"Rooms", stream.Rooms(siteID), "ROOMS_site-a", "chat.room.canonical.site-a.>"},
+		{"Outbox", stream.Outbox(siteID), "OUTBOX_site-a", "chat.outbox.site-a.>"},
 		{"PushNotification", stream.PushNotification(siteID), "PUSH_NOTIFICATION_site-a", "chat.server.notification.push.site-a.>"},
 		{"OrgSyncStream", stream.OrgSyncStream(siteID), "HR_site-a", "chat.hr.site-a.>"},
 	}

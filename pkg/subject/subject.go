@@ -134,6 +134,37 @@ func RoomCanonicalMemberEvent(siteID, eventType string) string {
 	return fmt.Sprintf("chat.room.canonical.%s.event.member.%s", siteID, eventType)
 }
 
+// Outbox returns the OUTBOX-stream subject a service publishes a federation relay
+// event on: chat.outbox.{originSiteID}.{destSiteID}.{eventType}. outbox-worker
+// consumes the OUTBOX stream and forwards each event's Envelope to the
+// destination site's INBOX. Destination and event type ride the subject so a
+// per-destination consumer can filter (or pause) on a single peer.
+func Outbox(originSiteID, destSiteID, eventType string) string {
+	return fmt.Sprintf("chat.outbox.%s.%s.%s", originSiteID, destSiteID, eventType)
+}
+
+// OutboxWildcard matches every event on a site's OUTBOX stream:
+// chat.outbox.{originSiteID}.>. Use as the OUTBOX_{siteID} stream's subject
+// pattern and for a consumer draining all destinations; a per-destination
+// consumer filters chat.outbox.{originSiteID}.{destSiteID}.> instead.
+func OutboxWildcard(originSiteID string) string {
+	return fmt.Sprintf("chat.outbox.%s.>", originSiteID)
+}
+
+// ParseOutbox extracts (originSiteID, destSiteID, eventType) from an OUTBOX
+// subject of the form chat.outbox.{origin}.{dest}.{eventType}. Returns ok=false
+// on any malformed subject. Event types are single dot-free tokens (the
+// pkg/outbox partition and the consumer FilterSubjects both treat them as one
+// token), so the subject is always exactly five tokens.
+func ParseOutbox(subj string) (originSiteID, destSiteID, eventType string, ok bool) {
+	parts := strings.Split(subj, ".")
+	if len(parts) != 5 || parts[0] != "chat" || parts[1] != "outbox" ||
+		parts[2] == "" || parts[3] == "" || parts[4] == "" {
+		return "", "", "", false
+	}
+	return parts[2], parts[3], parts[4], true
+}
+
 func SubscriptionUpdate(account string) string {
 	return fmt.Sprintf("chat.user.%s.event.subscription.update", account)
 }

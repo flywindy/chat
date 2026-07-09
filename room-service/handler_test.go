@@ -324,10 +324,13 @@ func TestHandler_UpdateRole_CrossSiteInbox(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NotNil(t, inboxData, "cross-site target must publish a role_updated inbox event")
-	assert.Equal(t, subject.InboxExternal("site-b", "role_updated"), inboxSubj)
+	// role_updated federates via the OUTBOX relay, not a direct INBOX publish.
+	assert.Equal(t, subject.Outbox("site-a", "site-b", "role_updated"), inboxSubj)
+	var fed model.OutboxEvent
+	require.NoError(t, json.Unmarshal(inboxData, &fed))
 	var inboxEnv model.InboxEvent
-	require.NoError(t, json.Unmarshal(inboxData, &inboxEnv))
-	assert.Equal(t, "role_updated", inboxEnv.Type)
+	require.NoError(t, json.Unmarshal(fed.Envelope, &inboxEnv))
+	assert.Equal(t, model.InboxEventType("role_updated"), inboxEnv.Type)
 	assert.Equal(t, "site-a", inboxEnv.SiteID)
 	assert.Equal(t, "site-b", inboxEnv.DestSiteID)
 	var evt model.SubscriptionUpdateEvent
@@ -2956,10 +2959,13 @@ func TestHandler_MessageRead_CrossSite_PublishesInbox(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, f.publishCalls)
-	assert.Equal(t, "chat.inbox.site-b.external.subscription_read", f.publishedSubj)
+	assert.Equal(t, subject.Outbox("site-a", "site-b", model.InboxSubscriptionRead), f.publishedSubj)
+
+	var fed model.OutboxEvent
+	require.NoError(t, json.Unmarshal(f.publishedData, &fed))
 
 	var inboxEnv model.InboxEvent
-	require.NoError(t, json.Unmarshal(f.publishedData, &inboxEnv))
+	require.NoError(t, json.Unmarshal(fed.Envelope, &inboxEnv))
 	assert.Equal(t, model.InboxSubscriptionRead, inboxEnv.Type)
 	assert.Equal(t, "site-a", inboxEnv.SiteID)
 	assert.Equal(t, "site-b", inboxEnv.DestSiteID)
@@ -3836,10 +3842,11 @@ func TestHandler_MessageThreadRead_CrossSite_PublishesInbox(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Equal(t, 1, f.publishCalls)
-	assert.Equal(t, "chat.inbox.site-b.external.thread_read", f.publishedSubj)
-
+	assert.Equal(t, subject.Outbox("site-a", "site-b", model.InboxThreadRead), f.publishedSubj)
+	var fed model.OutboxEvent
+	require.NoError(t, json.Unmarshal(f.publishedData, &fed))
 	var outer model.InboxEvent
-	require.NoError(t, json.Unmarshal(f.publishedData, &outer))
+	require.NoError(t, json.Unmarshal(fed.Envelope, &outer))
 	assert.Equal(t, model.InboxThreadRead, outer.Type)
 	assert.Equal(t, "site-a", outer.SiteID)
 	assert.Equal(t, "site-b", outer.DestSiteID)
@@ -4285,10 +4292,13 @@ func TestHandler_MuteToggle_CrossSitePublishesInbox(t *testing.T) {
 	_, err := h.muteToggle(ctxParams(map[string]string{"account": "alice", "roomID": "r1"}))
 	require.NoError(t, err)
 
-	assert.Equal(t, subject.InboxExternal("site-b", model.InboxSubscriptionMuteToggled), streamSubj)
+	// mute_toggled federates via the OUTBOX relay, not a direct INBOX publish.
+	assert.Equal(t, subject.Outbox("site-a", "site-b", model.InboxSubscriptionMuteToggled), streamSubj)
+	var fed model.OutboxEvent
+	require.NoError(t, json.Unmarshal(streamData, &fed))
 
 	var inboxEnv model.InboxEvent
-	require.NoError(t, json.Unmarshal(streamData, &inboxEnv))
+	require.NoError(t, json.Unmarshal(fed.Envelope, &inboxEnv))
 	assert.Equal(t, model.InboxSubscriptionMuteToggled, inboxEnv.Type)
 	assert.Equal(t, "site-a", inboxEnv.SiteID)
 	assert.Equal(t, "site-b", inboxEnv.DestSiteID)
@@ -4394,7 +4404,7 @@ func TestHandler_MuteToggle_CrossSiteInboxPublishFailure(t *testing.T) {
 
 	_, err := h.muteToggle(ctxParams(map[string]string{"account": "alice", "roomID": "r1"}))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "publish mute-toggled inbox")
+	assert.Contains(t, err.Error(), "federate mute-toggled")
 }
 
 func TestHandler_natsGetRoomKey(t *testing.T) {
@@ -4840,6 +4850,68 @@ func TestHandleRoomRestricted_Validation(t *testing.T) {
 	}
 }
 
+// TestHandleRoomRestricted_MultiSite_FederatesPerDestination verifies the
+// cross-site fan-out publishes one OutboxEvent per remote site, each on its own
+// destination-scoped OUTBOX subject.
+func TestHandleRoomRestricted_MultiSite_FederatesPerDestination(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	store := NewMockRoomStore(ctrl)
+
+	store.EXPECT().GetUser(gomock.Any(), "admin1").Return(&model.User{Account: "admin1", Roles: []model.UserRole{model.UserRoleAdmin}}, nil)
+	store.EXPECT().GetRoom(gomock.Any(), "r1").Return(&model.Room{ID: "r1", Type: model.RoomTypeChannel, Restricted: true, UserCount: 10}, nil)
+	store.EXPECT().UpdateRoomVisibility(gomock.Any(), "r1", false, false).Return(nil)
+	store.EXPECT().ApplySubscriptionRestriction(gomock.Any(), "r1", false, false, gomock.Any(), gomock.Any()).Return(nil)
+	store.EXPECT().ListSubscriptionsByRoom(gomock.Any(), "r1").Return([]model.Subscription{
+		{User: model.SubscriptionUser{Account: "alice"}},
+		{User: model.SubscriptionUser{Account: "bob"}},
+		{User: model.SubscriptionUser{Account: "carol"}},
+	}, nil)
+	store.EXPECT().FindUsersByAccounts(gomock.Any(), gomock.Any()).Return([]model.User{
+		{Account: "alice", SiteID: "site-a"},
+		{Account: "bob", SiteID: "site-b"},
+		{Account: "carol", SiteID: "site-c"},
+	}, nil)
+
+	type pub struct {
+		subj string
+		data []byte
+	}
+	var publishes []pub
+	h := NewHandler(store, nil, nil, nil, "site-a", 1000, 500, 5*time.Second, 5,
+		func(_ context.Context, subj string, data []byte, _ string) error {
+			publishes = append(publishes, pub{subj: subj, data: append([]byte(nil), data...)})
+			return nil
+		}, nil, nil, 0)
+
+	req := model.RoomRestrictedRequest{RoomID: "r1", Account: "admin1", Restricted: false}
+	resp, err := h.roomRestricted(ctxParams(map[string]string{}), req)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+
+	// One OUTBOX publish per remote site; destination + event type ride the subject.
+	gotSites := make([]string, 0, 2)
+	for _, p := range publishes {
+		origin, dest, evt, ok := subject.ParseOutbox(p.subj)
+		if !ok {
+			continue // non-outbox publishes (subscription.update fan-out) are ignored
+		}
+		assert.Equal(t, "site-a", origin)
+		assert.Equal(t, model.InboxRoomRestricted, evt)
+		var fed model.OutboxEvent
+		require.NoError(t, json.Unmarshal(p.data, &fed))
+		var env model.InboxEvent
+		require.NoError(t, json.Unmarshal(fed.Envelope, &env))
+		assert.Equal(t, model.InboxRoomRestricted, env.Type)
+		assert.Equal(t, "site-a", env.SiteID)
+		assert.Equal(t, dest, env.DestSiteID)
+		var payload model.RoomRestrictedInboxPayload
+		require.NoError(t, json.Unmarshal(env.Payload, &payload))
+		assert.Equal(t, "r1", payload.RoomID)
+		gotSites = append(gotSites, dest)
+	}
+	assert.ElementsMatch(t, []string{"site-b", "site-c"}, gotSites)
+}
+
 func TestHandler_ListMemberStatuses(t *testing.T) {
 	const siteID = "site-a"
 	const roomID = "r1"
@@ -5235,10 +5307,12 @@ func TestHandler_FavoriteToggle_CrossSitePublishesInbox(t *testing.T) {
 	_, err := h.favoriteToggle(ctxParams(map[string]string{"account": "alice", "roomID": "r1"}))
 	require.NoError(t, err)
 
-	assert.Equal(t, subject.InboxExternal("site-b", model.InboxSubscriptionFavoriteToggled), streamSubj)
+	assert.Equal(t, subject.Outbox("site-a", "site-b", model.InboxSubscriptionFavoriteToggled), streamSubj)
+	var fed model.OutboxEvent
+	require.NoError(t, json.Unmarshal(streamData, &fed))
 
 	var inboxEnv model.InboxEvent
-	require.NoError(t, json.Unmarshal(streamData, &inboxEnv))
+	require.NoError(t, json.Unmarshal(fed.Envelope, &inboxEnv))
 	assert.Equal(t, model.InboxSubscriptionFavoriteToggled, inboxEnv.Type)
 	assert.Equal(t, "site-a", inboxEnv.SiteID)
 	assert.Equal(t, "site-b", inboxEnv.DestSiteID)
@@ -5345,7 +5419,7 @@ func TestHandler_FavoriteToggle_CrossSiteInboxPublishFailure(t *testing.T) {
 
 	_, err := h.favoriteToggle(ctxParams(map[string]string{"account": "alice", "roomID": "r1"}))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "publish favorite-toggled inbox")
+	assert.Contains(t, err.Error(), "federate favorite-toggled")
 }
 
 func TestHandler_FavoriteToggle_CorePublishFailureIsNonFatal(t *testing.T) {
@@ -6405,4 +6479,44 @@ func TestHandler_FavoriteToggle_OmitsRoomName(t *testing.T) {
 	var evt model.SubscriptionUpdateEvent
 	require.NoError(t, json.Unmarshal(coreBodies[0], &evt))
 	assert.Empty(t, evt.RoomName, "favorite must not look up or set roomName")
+}
+
+func TestFederateOne_PublishesEnvelopeToOutbox(t *testing.T) {
+	var gotSubj, gotMsgID string
+	var gotData []byte
+	h := &Handler{
+		siteID: "site-a",
+		publishToStream: func(_ context.Context, subj string, data []byte, msgID string) error {
+			gotSubj, gotData, gotMsgID = subj, data, msgID
+			return nil
+		},
+	}
+
+	require.NoError(t, h.federateOne(ctxParams(map[string]string{"account": "alice", "roomID": "r1"}),
+		"r1", "site-b", model.InboxSubscriptionMuteToggled, []byte(`{"x":1}`), "seed", 7))
+
+	// Destination + event type ride the subject; the OUTBOX Nats-Msg-Id is the forward's DedupID.
+	assert.Equal(t, subject.Outbox("site-a", "site-b", model.InboxSubscriptionMuteToggled), gotSubj)
+	assert.NotEmpty(t, gotMsgID)
+
+	var evt model.OutboxEvent
+	require.NoError(t, json.Unmarshal(gotData, &evt))
+	assert.Equal(t, "r1", evt.RoomID)
+	assert.Equal(t, gotMsgID, evt.DedupID, "OUTBOX msgID must equal the forwarded DedupID")
+
+	var env model.InboxEvent
+	require.NoError(t, json.Unmarshal(evt.Envelope, &env))
+	assert.Equal(t, model.InboxSubscriptionMuteToggled, env.Type)
+	assert.Equal(t, "site-a", env.SiteID)
+	assert.Equal(t, "site-b", env.DestSiteID)
+	assert.Equal(t, int64(7), env.Timestamp)
+	assert.JSONEq(t, `{"x":1}`, string(env.Payload))
+}
+
+func TestFederateOne_NoopWhenLocalOrEmpty(t *testing.T) {
+	called := false
+	h := &Handler{siteID: "site-a", publishToStream: func(_ context.Context, _ string, _ []byte, _ string) error { called = true; return nil }}
+	require.NoError(t, h.federateOne(context.Background(), "r1", "", model.InboxSubscriptionRead, []byte(`{}`), "seed", 1))
+	require.NoError(t, h.federateOne(context.Background(), "r1", "site-a", model.InboxSubscriptionRead, []byte(`{}`), "seed", 1))
+	assert.False(t, called, "empty or local destination must not publish")
 }

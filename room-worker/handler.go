@@ -24,6 +24,7 @@ import (
 	"github.com/hmchangw/chat/pkg/model"
 	"github.com/hmchangw/chat/pkg/natsrouter"
 	"github.com/hmchangw/chat/pkg/natsutil"
+	"github.com/hmchangw/chat/pkg/outbox"
 	"github.com/hmchangw/chat/pkg/roomkeymetrics"
 	"github.com/hmchangw/chat/pkg/roomkeysender"
 	"github.com/hmchangw/chat/pkg/roomkeystore"
@@ -286,6 +287,19 @@ func (h *Handler) processRemoveMember(ctx context.Context, data []byte) (err err
 	return h.processRemoveIndividual(ctx, &req, currentPair)
 }
 
+// federate durably relays one cross-site event onto the local OUTBOX stream;
+// outbox-worker forwards it to destSiteID's INBOX with retry-forever, so a
+// destination outage delays — never drops — the event. Order-sensitive event
+// types (membership, room rename) ride a per-destination FIFO lane and cannot
+// overtake each other. payload is the pre-marshaled inner event; outbox.Publish
+// builds the InboxEvent envelope (byte-identical to the previous direct INBOX
+// publish). dedupID is the OUTBOX publish's Nats-Msg-Id (a JetStream redelivery
+// of the ROOMS message can't double-enqueue) and the forward's Nats-Msg-Id at
+// the destination.
+func (h *Handler) federate(ctx context.Context, roomID, destSiteID string, eventType model.InboxEventType, payload []byte, dedupID string, ts int64) error {
+	return outbox.Publish(ctx, h.publish, h.siteID, roomID, destSiteID, eventType, payload, dedupID, ts)
+}
+
 // rotateAndFanOut generates v+1, fans it out to survivors, then commits via Rotate.
 // Fan-out before Rotate is intentional so survivors hold v+1 before broadcast-worker switches.
 // survivorAccounts is a pre-computed post-deletion snapshot of the room's member accounts.
@@ -476,22 +490,15 @@ func (h *Handler) processRemoveIndividual(ctx context.Context, req *model.Remove
 		return fmt.Errorf("publish individual removal system message: %w", err)
 	}
 
-	// Cross-site inbox for federated users. Skip blank destination sites
+	// Cross-site membership relay for federated users, via the durable OUTBOX
+	// (per-destination FIFO in outbox-worker). Skip blank destination sites
 	// (missing/legacy metadata) so we never build an invalid subject path,
 	// matching the add/create/DM paths.
 	if user.SiteID != "" && user.SiteID != h.siteID {
-		externalEvt := model.InboxEvent{
-			Type:       model.InboxMemberRemoved,
-			SiteID:     h.siteID,
-			DestSiteID: user.SiteID,
-			Payload:    memberEvtData,
-			Timestamp:  now.UnixMilli(),
-		}
-		externalData, _ := json.Marshal(externalEvt)
 		payloadSeed := fmt.Sprintf("%s:%s:%d", req.RoomID, req.Account, req.Timestamp)
 		dedupID := natsutil.InboxDedupID(ctx, user.SiteID, payloadSeed)
-		if err := h.publish(ctx, subject.InboxExternal(user.SiteID, model.InboxMemberRemoved), externalData, dedupID); err != nil {
-			return fmt.Errorf("inbox publish to %s: %w", user.SiteID, err)
+		if err := h.federate(ctx, req.RoomID, user.SiteID, model.InboxMemberRemoved, memberEvtData, dedupID, now.UnixMilli()); err != nil {
+			return err
 		}
 	}
 
@@ -671,7 +678,8 @@ func (h *Handler) processRemoveOrg(ctx context.Context, req *model.RemoveMemberR
 		return fmt.Errorf("publish org removal system message: %w", err)
 	}
 
-	// Cross-site inbox grouped by destination site. Skip blank destination
+	// Cross-site membership relay grouped by destination site, via the durable
+	// OUTBOX (per-destination FIFO in outbox-worker). Skip blank destination
 	// sites (missing/legacy metadata) so an empty SiteID never becomes a map
 	// key and an invalid subject path.
 	siteAccounts := make(map[string][]string)
@@ -689,18 +697,10 @@ func (h *Handler) processRemoveOrg(ctx context.Context, req *model.RemoveMemberR
 			OrgID:     req.OrgID,
 			Timestamp: now.UnixMilli(),
 		}
-		externalEvt := model.InboxEvent{
-			Type:       model.InboxMemberRemoved,
-			SiteID:     h.siteID,
-			DestSiteID: destSiteID,
-			Payload:    mustMarshal(evt),
-			Timestamp:  now.UnixMilli(),
-		}
-		externalData, _ := json.Marshal(externalEvt)
 		payloadSeed := fmt.Sprintf("%s:%s:%d", req.RoomID, req.OrgID, req.Timestamp)
 		dedupID := natsutil.InboxDedupID(ctx, destSiteID, payloadSeed)
-		if err := h.publish(ctx, subject.InboxExternal(destSiteID, model.InboxMemberRemoved), externalData, dedupID); err != nil {
-			return fmt.Errorf("inbox publish to %s: %w", destSiteID, err)
+		if err := h.federate(ctx, req.RoomID, destSiteID, model.InboxMemberRemoved, mustMarshal(evt), dedupID, now.UnixMilli()); err != nil {
+			return err
 		}
 	}
 
@@ -1176,15 +1176,10 @@ func (h *Handler) processAddMembers(ctx context.Context, data []byte) (err error
 			Timestamp:          now.UnixMilli(),
 		}
 		siteEvtData, _ := json.Marshal(siteEvt)
-		externalEvt := model.InboxEvent{
-			Type: model.InboxMemberAdded, SiteID: room.SiteID, DestSiteID: destSiteID,
-			Payload: siteEvtData, Timestamp: now.UnixMilli(),
-		}
-		externalData, _ := json.Marshal(externalEvt)
 		payloadSeed := fmt.Sprintf("%s:%s:%d", req.RoomID, req.RequesterAccount, req.Timestamp)
 		dedupID := natsutil.InboxDedupID(ctx, destSiteID, payloadSeed)
-		if err := h.publish(ctx, subject.InboxExternal(destSiteID, model.InboxMemberAdded), externalData, dedupID); err != nil {
-			return fmt.Errorf("inbox publish to %s failed: %w", destSiteID, err)
+		if err := h.federate(ctx, req.RoomID, destSiteID, model.InboxMemberAdded, siteEvtData, dedupID, now.UnixMilli()); err != nil {
+			return err
 		}
 	}
 
@@ -1647,17 +1642,9 @@ func (h *Handler) finishCreateRoom(ctx context.Context, req *model.CreateRoomReq
 			Timestamp:          now.UnixMilli(),
 		}
 		memberData, _ := json.Marshal(memberEvt)
-		memberEnvelope := model.InboxEvent{
-			Type:       model.InboxMemberAdded,
-			SiteID:     room.SiteID,
-			DestSiteID: destSiteID,
-			Payload:    memberData,
-			Timestamp:  now.UnixMilli(),
-		}
-		memberExternalData, _ := json.Marshal(memberEnvelope)
 		memberSeed := fmt.Sprintf("%s:%s:%d", room.ID, requester.Account, req.Timestamp)
-		if err := h.publish(ctx, subject.InboxExternal(destSiteID, model.InboxMemberAdded), memberExternalData, natsutil.InboxDedupID(ctx, destSiteID, memberSeed)); err != nil {
-			return fmt.Errorf("publish member_added inbox to %s: %w", destSiteID, err)
+		if err := h.federate(ctx, room.ID, destSiteID, model.InboxMemberAdded, memberData, natsutil.InboxDedupID(ctx, destSiteID, memberSeed), now.UnixMilli()); err != nil {
+			return err
 		}
 	}
 
@@ -2100,18 +2087,19 @@ func (h *Handler) processRoomRename(ctx context.Context, data []byte) (err error
 	if err != nil {
 		return fmt.Errorf("marshal rename inbox payload: %w", err)
 	}
+	// Relay room_renamed through the OUTBOX ordered lane (not a direct INBOX
+	// publish) so it shares the per-destination FIFO consumer with member_added
+	// and cannot overtake the add that creates a new member's subscription — a
+	// direct rename would apply to zero docs and be lost. NOTE: this removes the
+	// transport-latency skew but not the producer-side race — room-worker has no
+	// per-room ordering, so member.add and room.rename (separate ROOMS messages,
+	// concurrent workers) can still enqueue out of causal order. Full ordering
+	// awaits producer per-room lanes / reconciliation (design doc §5, §7).
+	now := time.Now().UTC().UnixMilli()
 	for _, remoteSiteID := range remoteSites {
-		evt := model.InboxEvent{
-			Type: model.InboxRoomRenamed, SiteID: h.siteID, DestSiteID: remoteSiteID,
-			Payload: renamedPayload, Timestamp: time.Now().UTC().UnixMilli(),
-		}
-		evtData, mErr := json.Marshal(evt)
-		if mErr != nil {
-			return fmt.Errorf("marshal rename inbox event: %w", mErr)
-		}
-		if err = h.publish(ctx, subject.InboxExternal(remoteSiteID, model.InboxRoomRenamed),
-			evtData, natsutil.InboxDedupID(ctx, remoteSiteID, requestID)); err != nil {
-			return fmt.Errorf("publish rename inbox to %s: %w", remoteSiteID, err)
+		if err := h.federate(ctx, req.RoomID, remoteSiteID, model.InboxRoomRenamed,
+			renamedPayload, natsutil.InboxDedupID(ctx, remoteSiteID, requestID), now); err != nil {
+			return err
 		}
 	}
 
@@ -2156,17 +2144,6 @@ func (h *Handler) publishSyncDMInbox(ctx context.Context, room *model.Room, requ
 	if err != nil {
 		return fmt.Errorf("marshal member_added inbox payload: %w", err)
 	}
-	envelope := model.InboxEvent{
-		Type:       model.InboxMemberAdded,
-		SiteID:     room.SiteID,
-		DestSiteID: other.SiteID,
-		Payload:    pData,
-		Timestamp:  now,
-	}
-	eData, err := json.Marshal(envelope)
-	if err != nil {
-		return fmt.Errorf("marshal inbox envelope: %w", err)
-	}
 	// Dedup keys on intrinsic room identity (stable across retries and
 	// re-subscribes) plus the destination site, NOT the request ID — the router
 	// now mints a fresh X-Request-ID when absent, which must not change the
@@ -2174,11 +2151,7 @@ func (h *Handler) publishSyncDMInbox(ctx context.Context, room *model.Room, requ
 	// duplicate-key reconcile path resolves room to the existing record); using
 	// joinedAt would break dedup because botDM re-subscribes carry a fresh value.
 	payloadSeed := fmt.Sprintf("%s:%s:%d", room.ID, requester.Account, room.CreatedAt.UnixMilli())
-	return h.publish(ctx,
-		subject.InboxExternal(other.SiteID, model.InboxMemberAdded),
-		eData,
-		payloadSeed+":"+other.SiteID,
-	)
+	return h.federate(ctx, room.ID, other.SiteID, model.InboxMemberAdded, pData, payloadSeed+":"+other.SiteID, now)
 }
 
 // fanOutRoomKeyToSurvivors sends the already-fetched room key to every survivor

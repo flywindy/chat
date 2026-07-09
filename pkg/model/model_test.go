@@ -4232,3 +4232,28 @@ func TestThreadUnreadRowJSON(t *testing.T) {
 	}
 	roundTrip(t, &r, &model.ThreadUnreadRow{})
 }
+
+func TestOutboxEvent_RoundTrip(t *testing.T) {
+	inner := model.InboxEvent{
+		Type:       model.InboxSubscriptionMuteToggled,
+		SiteID:     "site-a",
+		DestSiteID: "site-b",
+		Payload:    []byte(`{"account":"alice","roomId":"r1","muted":true,"timestamp":1}`),
+		Timestamp:  1,
+	}
+	innerData, err := json.Marshal(inner)
+	require.NoError(t, err)
+
+	evt := model.OutboxEvent{
+		RoomID:    "r1",
+		Envelope:  innerData,
+		DedupID:   "req-1:site-b",
+		Timestamp: 2,
+	}
+	data, err := json.Marshal(evt)
+	require.NoError(t, err)
+
+	var got model.OutboxEvent
+	require.NoError(t, json.Unmarshal(data, &got))
+	require.Equal(t, evt, got)
+}

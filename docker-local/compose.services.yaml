@@ -15,6 +15,7 @@ include:
   - ../message-gatekeeper/deploy/docker-compose.yml
   - ../message-worker/deploy/docker-compose.yml
   - ../notification-worker/deploy/docker-compose.yml
+  - ../outbox-worker/deploy/docker-compose.yml
   - ../portal-service/deploy/docker-compose.yml
   - ../room-service/deploy/docker-compose.yml
   - ../room-worker/deploy/docker-compose.yml
