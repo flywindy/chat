@@ -21,7 +21,7 @@ make obs-up
 
 Then open Grafana: **http://localhost:3001**
 
-Two dashboards are pre-loaded and refresh every 5 seconds (Anonymous Admin is
+Three dashboards are pre-loaded and refresh every 5 seconds (Anonymous Admin is
 enabled, so no login is required):
 
 - **Containers - CPU & Memory** — per-container CPU/memory from cAdvisor.
@@ -29,6 +29,19 @@ enabled, so no login is required):
   in-flight/unacked (`num_ack_pending`), and redelivered (`num_redelivered`),
   broken out by stream + durable, plus total messages per stream. This is where
   you answer "how many messages are pending?".
+- **NATS - JetStream Overview** — a single-pane summary: publish rate and ack
+  rate (msg/s, derived from `jetstream_stream_last_seq` /
+  `jetstream_consumer_ack_floor_stream_seq`), delivery-vs-ack throughput per
+  consumer, the same pending / ack-pending / redelivered backlog, plus stream
+  sizing (messages + bytes retained) and pull-requests-waiting. A `Stream`
+  template variable filters every panel to one or more streams. This is where
+  you answer "what's the message rate?" and "is any consumer falling behind?".
+
+  Note on "by subject": `prometheus-nats-exporter` (via jsz) does **not** emit
+  per-subject message counts, so there is no true per-subject breakdown. The
+  practical axes are **per-stream** (each stream owns a subject namespace, e.g.
+  `MESSAGES_*` carries `chat.user.*...msg.>`) and **per-consumer** (durables are
+  named after the consuming service) — both dashboards break out along these.
 
 The JetStream dashboard only has data once a NATS server is running
 (`make deps-up`) and streams/consumers exist (`make up` and send some traffic).
@@ -89,6 +102,7 @@ When a service exposes `/metrics`, add a scrape job to `prometheus/prometheus.ym
 | `grafana/provisioning/dashboards/dashboards.yml` | Tells Grafana to load every JSON file in `./dashboards`. |
 | `grafana/dashboards/containers-cpu.json` | Container CPU/memory dashboard. |
 | `grafana/dashboards/jetstream-pending.json` | JetStream pending/backlog dashboard. |
+| `grafana/dashboards/nats-jetstream-overview.json` | JetStream overview: message rate, throughput, backlog, and stream sizing. |
 
 ## Scope
 
