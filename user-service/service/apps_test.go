@@ -187,3 +187,36 @@ func TestListApps_Empty(t *testing.T) {
 	assert.False(t, resp.HasMore)
 	assert.Empty(t, resp.Apps)
 }
+
+func TestListAppCategories_Success(t *testing.T) {
+	svc, _, _, apps, _, _ := newSvc(t)
+	apps.EXPECT().ListAppCategories(gomock.Any()).Return([]models.AppCategory{
+		{ID: "m1", Name: "F22", SiteID: "00600000"},
+		{ID: "m2", Name: "F14", SiteID: "00700000"},
+	}, nil)
+
+	resp, err := svc.ListAppCategories(ctx("alice", "site-a"))
+	require.NoError(t, err)
+	assert.Equal(t, []models.AppCategory{
+		{ID: "m1", Name: "F22", SiteID: "00600000"},
+		{ID: "m2", Name: "F14", SiteID: "00700000"},
+	}, resp.Categories)
+}
+
+func TestListAppCategories_EmptyIsArrayNotNull(t *testing.T) {
+	svc, _, _, apps, _, _ := newSvc(t)
+	apps.EXPECT().ListAppCategories(gomock.Any()).Return(nil, nil)
+
+	resp, err := svc.ListAppCategories(ctx("alice", "site-a"))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Categories, "a nil slice marshals to JSON null; the contract is []")
+	assert.Empty(t, resp.Categories)
+}
+
+func TestListAppCategories_RepoError(t *testing.T) {
+	svc, _, _, apps, _, _ := newSvc(t)
+	apps.EXPECT().ListAppCategories(gomock.Any()).Return(nil, errors.New("mongo down"))
+
+	_, err := svc.ListAppCategories(ctx("alice", "site-a"))
+	requireCode(t, err, errcode.CodeInternal)
+}

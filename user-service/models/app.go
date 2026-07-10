@@ -32,3 +32,16 @@ type AppsListResponse struct {
 type OKResponse struct {
 	Success bool `json:"success"`
 }
+
+// AppCategory maps a fab/domain name to its site. ID is the hex form of the
+// Mongo ObjectID, exposed as "id" to match model.App and the repo convention.
+type AppCategory struct {
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	SiteID string `json:"siteId"`
+}
+
+// AppCategoriesResponse is returned by apps.categories, sorted by name; Categories is never null.
+type AppCategoriesResponse struct {
+	Categories []AppCategory `json:"categories"`
+}

@@ -13,6 +13,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 
 	"github.com/hmchangw/chat/pkg/mongoutil"
+	"github.com/hmchangw/chat/user-service/models"
 )
 
 func seedApps(t *testing.T, db *mongo.Database) {
@@ -155,4 +156,79 @@ func TestListApps_FieldPathAccountTreatedAsLiteral_Integration(t *testing.T) {
 	for _, app := range page.Data {
 		assert.False(t, app.IsSubscribed, "field-path-shaped account must match no subscription (app %s)", app.Name)
 	}
+}
+
+func TestListAppCategories_Integration(t *testing.T) {
+	r, db := newTestAppRepo(t)
+	ctx := context.Background()
+
+	// Native ObjectID _ids mirror the legacy collection (exercising the ObjectID→hex
+	// decode path). _id order deliberately OPPOSES name order (F02 carries the largest
+	// OID) so this fails unless name — not _id — is the primary sort key. internalNote
+	// is a stored-but-undeclared field — appCategoryDoc drops it during decode
+	// regardless of the projection, so this test does not by itself prove WithProjection.
+	oidF02 := mustObjectID(t, "6422644600000000000000c8")
+	oidF14 := mustObjectID(t, "642264460000000000000064")
+	oidF22 := mustObjectID(t, "642264460000000000000001")
+	seed(t, db, "fab_domain_mapping",
+		bson.M{"_id": oidF14, "name": "F14", "siteId": "00700000", "internalNote": "do-not-serve"},
+		bson.M{"_id": oidF02, "name": "F02", "siteId": "00600000"},
+		bson.M{"_id": oidF22, "name": "F22", "siteId": "00600000"},
+	)
+
+	got, err := r.ListAppCategories(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, []models.AppCategory{
+		{ID: oidF02.Hex(), Name: "F02", SiteID: "00600000"},
+		{ID: oidF14.Hex(), Name: "F14", SiteID: "00700000"},
+		{ID: oidF22.Hex(), Name: "F22", SiteID: "00600000"},
+	}, got)
+}
+
+// mustObjectID parses a fixed hex ObjectID for deterministic sort fixtures.
+func mustObjectID(t *testing.T, hex string) bson.ObjectID {
+	t.Helper()
+	oid, err := bson.ObjectIDFromHex(hex)
+	require.NoError(t, err)
+	return oid
+}
+
+func TestListAppCategories_Integration_DuplicateNamesOrderedByID(t *testing.T) {
+	r, db := newTestAppRepo(t)
+	ctx := context.Background()
+
+	// Two rows share a name; the _id sort tiebreaker must order them deterministically.
+	lo, hi := bson.NewObjectID(), bson.NewObjectID()
+	if hi.Hex() < lo.Hex() {
+		lo, hi = hi, lo
+	}
+	seed(t, db, "fab_domain_mapping",
+		bson.M{"_id": hi, "name": "F30", "siteId": "00800000"},
+		bson.M{"_id": lo, "name": "F30", "siteId": "00900000"},
+	)
+
+	got, err := r.ListAppCategories(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, []models.AppCategory{
+		{ID: lo.Hex(), Name: "F30", SiteID: "00900000"},
+		{ID: hi.Hex(), Name: "F30", SiteID: "00800000"},
+	}, got)
+}
+
+func TestListAppCategories_Integration_Empty(t *testing.T) {
+	r, _ := newTestAppRepo(t)
+
+	got, err := r.ListAppCategories(context.Background())
+	require.NoError(t, err)
+	assert.Empty(t, got)
+}
+
+func TestListAppCategories_Integration_CancelledContext(t *testing.T) {
+	r, _ := newTestAppRepo(t)
+
+	cctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := r.ListAppCategories(cctx)
+	assert.Error(t, err)
 }

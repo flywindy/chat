@@ -1264,6 +1264,7 @@ No client-facing events are emitted.
 | `chat.user.{account}.request.user.{siteID}.subscription.count` | [subscription.count](#subscriptioncount) |
 | `chat.user.{account}.request.user.{siteID}.subscription.setAppSubscription` | [subscription.setAppSubscription](#subscriptionsetappsubscription) |
 | `chat.user.{account}.request.user.{siteID}.apps.list` | [apps.list](#appslist) |
+| `chat.user.{account}.request.user.{siteID}.apps.categories` | [apps.categories](#appscategories) |
 | `chat.user.{account}.request.user.{siteID}.thread.list` | [List User Threads](#list-user-threads) |
 | `chat.user.{account}.request.user.{siteID}.thread.unread.summary` | [Get Thread Unread Summary](#get-thread-unread-summary) |
 
@@ -1519,6 +1520,34 @@ Returns a page of apps, each annotated with `isSubscribed`. Sorted by name.
 `{ "apps": AppListItem[], "hasMore": boolean }` where `AppListItem` is an `App` record
 plus `isSubscribed: boolean`, and `hasMore` signals another page follows (offset-based;
 advance `offset` by your `limit`). See [../client-api.md §3.4](../client-api.md#appslist).
+
+**Emits:** None.
+
+---
+
+### apps.categories
+
+**Subject:** `chat.user.{account}.request.user.{siteID}.apps.categories`
+
+Returns the full fab-domain → site mapping used to group apps in the UI,
+sorted by `name` ascending (rows sharing a `name` are ordered by `id`, so
+ordering is deterministic across calls). Global, slow-changing reference
+data, populated out-of-band; an unpopulated site returns `{ "categories": [] }`.
+
+#### Request body
+
+None — send an empty payload.
+
+#### Success response
+
+`{ "categories": AppCategory[] }` where `AppCategory` is `{ "id", "name", "siteId" }`
+(`id` is the hex form of the Mongo ObjectID, exposed under the `id` key per the
+API-wide `_id`→`id` convention), sorted by `name`; always an array (`[]` when
+empty, never `null`). See [../client-api.md §3.4](../client-api.md#appscategories).
+
+#### Errors
+
+`internal` (Mongo read failed).
 
 **Emits:** None.
 

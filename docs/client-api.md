@@ -59,7 +59,7 @@ paths.
      - [`search.messages`](#searchmessages--full-text-message-search) · [Search Rooms](#search-rooms) · [Search Apps](#search-apps) · [Search Users](#search-users)
    - [3.4 user-service](#34-user-service)
      - [`me`](#me) · [`status.getByName`](#statusgetbyname) · [`profile.getByName`](#profilegetbyname) · [`status.set`](#statusset) · [`subscription.list`](#subscriptionlist) · [`subscription.getChannels`](#subscriptiongetchannels)
-     - [`subscription.getDM`](#subscriptiongetdm) · [`subscription.getByRoomID`](#subscriptiongetbyroomid) · [`subscription.count`](#subscriptioncount) · [`subscription.setAppSubscription`](#subscriptionsetappsubscription) · [`apps.list`](#appslist)
+     - [`subscription.getDM`](#subscriptiongetdm) · [`subscription.getByRoomID`](#subscriptiongetbyroomid) · [`subscription.count`](#subscriptioncount) · [`subscription.setAppSubscription`](#subscriptionsetappsubscription) · [`apps.list`](#appslist) · [`apps.categories`](#appscategories)
    - [3.5 media-service](#35-media-service)
      - [`emoji.list`](#emojilist--list-a-sites-custom-emoji) · [`emoji.delete`](#emojidelete--delete-a-custom-emoji)
 4. [Message Send](#4-message-send)
@@ -3934,7 +3934,7 @@ Additional legacy fields may be present, mirroring the `GET /api/v3/users` respo
 
 ### 3.4 user-service
 
-`user-service` exposes 13 NATS request/reply endpoints over **core NATS** (no JetStream consumers). Subjects follow the pattern `chat.user.{account}.request.user.{siteID}.<area>.<action>`, except `me`, which is a single-token self-lookup (`chat.user.{account}.request.user.{siteID}.me`).
+`user-service` exposes 14 NATS request/reply endpoints over **core NATS** (no JetStream consumers). Subjects follow the pattern `chat.user.{account}.request.user.{siteID}.<area>.<action>`, except `me`, which is a single-token self-lookup (`chat.user.{account}.request.user.{siteID}.me`).
 
 > **Events:** these endpoints emit no client-facing events. (`status.set` triggers a server-side cross-site federation update, which is internal and not delivered to clients.)
 
@@ -3951,6 +3951,7 @@ Additional legacy fields may be present, mirroring the `GET /api/v3/users` respo
 | `chat.user.{account}.request.user.{siteID}.subscription.count` | [`subscription.count`](#subscriptioncount) |
 | `chat.user.{account}.request.user.{siteID}.subscription.setAppSubscription` | [`subscription.setAppSubscription`](#subscriptionsetappsubscription) |
 | `chat.user.{account}.request.user.{siteID}.apps.list` | [`apps.list`](#appslist) |
+| `chat.user.{account}.request.user.{siteID}.apps.categories` | [`apps.categories`](#appscategories) |
 | `chat.user.{account}.request.user.{siteID}.thread.list` | [List User Threads](#list-user-threads) |
 | `chat.user.{account}.request.user.{siteID}.thread.unread.summary` | [Get Thread Unread Summary](#get-thread-unread-summary) |
 
@@ -4635,6 +4636,48 @@ Optional — an empty body returns the first page with defaults.
     }
   ],
   "hasMore": false
+}
+```
+
+##### Error response
+
+| Condition | `code` | Notes |
+|-----------|--------|-------|
+| Internal failure | `internal` | — |
+
+---
+
+#### apps.categories
+
+**Subject:** `chat.user.{account}.request.user.{siteID}.apps.categories`
+**Reply subject:** auto-generated `_INBOX.>` (NATS request/reply)
+
+Returns the full fab-domain → site mapping used to group apps in the UI, sorted by `name` ascending (rows sharing a `name` are ordered by `id`, so ordering is deterministic across calls). Global, slow-changing reference data — no filtering, no pagination. The mapping is populated out-of-band (legacy migration); a site whose collection is unpopulated returns `{ "categories": [] }`.
+
+##### Request body
+
+None — send an empty payload.
+
+##### Success response
+
+| Field | Type | Notes |
+|---|---|---|
+| `categories` | [AppCategory](#appcategory)[] | All mappings, sorted by `name` ascending then `id` ascending. Always an array — `[]` when empty, never `null`. |
+
+###### AppCategory
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | string | Mapping ID — the hex form of the Mongo ObjectID, exposed under the `id` key per the API-wide `_id`→`id` convention. (Unlike `apps.list` ids, which are plain strings.) |
+| `name` | string | Fab/domain name; the array is sorted by this field. |
+| `siteId` | string | Site the fab/domain belongs to. |
+
+```json
+{
+  "categories": [
+    { "id": "64226446224a1b2c3d4e5f61", "name": "F14", "siteId": "00700000" },
+    { "id": "64226446224a1b2c3d4e5f60", "name": "F22", "siteId": "00600000" }
+  ]
 }
 ```
 

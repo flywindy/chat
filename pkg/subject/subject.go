@@ -972,6 +972,15 @@ func UserAppsList(account, siteID string) string {
 	return fmt.Sprintf("chat.user.%s.request.user.%s.apps.list", account, siteID)
 }
 
+// UserAppsCategories keeps the legacy panic-on-wildcard style of its User*
+// siblings (not the F12 error-return style) for family consistency.
+func UserAppsCategories(account, siteID string) string {
+	if !isValidAccountToken(account) {
+		panic("invalid account token: contains NATS wildcard characters")
+	}
+	return fmt.Sprintf("chat.user.%s.request.user.%s.apps.categories", account, siteID)
+}
+
 // --- natsrouter pattern builders (siteID baked in, account left as {account} placeholder) ---
 
 func UserStatusGetByNamePattern(siteID string) string {
@@ -1000,6 +1009,10 @@ func UserSubscriptionCountPattern(siteID string) string {
 
 func UserAppsListPattern(siteID string) string {
 	return fmt.Sprintf("chat.user.{account}.request.user.%s.apps.list", siteID)
+}
+
+func UserAppsCategoriesPattern(siteID string) string {
+	return fmt.Sprintf("chat.user.{account}.request.user.%s.apps.categories", siteID)
 }
 
 // UserMe is the concrete subject for the /me self-info endpoint — a deliberate

@@ -535,6 +535,7 @@ func TestUserServiceBuilders(t *testing.T) {
 		{"subscription.getDM", subject.UserSubscriptionGetDM("alice", "s1"), "chat.user.alice.request.user.s1.subscription.getDM"},
 		{"subscription.count", subject.UserSubscriptionCount("alice", "s1"), "chat.user.alice.request.user.s1.subscription.count"},
 		{"apps.list", subject.UserAppsList("alice", "s1"), "chat.user.alice.request.user.s1.apps.list"},
+		{"apps.categories", subject.UserAppsCategories("alice", "s1"), "chat.user.alice.request.user.s1.apps.categories"},
 		{"subscription.list", subject.UserSubscriptionList("alice", "s1"), "chat.user.alice.request.user.s1.subscription.list"},
 		{"subscription.setAppSubscription", subject.UserSubscriptionSetAppSubscription("alice", "s1"), "chat.user.alice.request.user.s1.subscription.setAppSubscription"},
 		{"subscription.getByRoomID", subject.UserSubscriptionGetByRoomID("alice", "s1"), "chat.user.alice.request.user.s1.subscription.getByRoomID"},
@@ -608,6 +609,11 @@ func TestParseAppsSubject(t *testing.T) {
 	assert.True(t, ok)
 	assert.Equal(t, "alice", account)
 	assert.Equal(t, "list", action)
+
+	account, action, ok = subject.ParseAppsSubject(subject.UserAppsCategories("bob", "s2"))
+	assert.True(t, ok)
+	assert.Equal(t, "bob", account)
+	assert.Equal(t, "categories", action)
 
 	_, _, ok = subject.ParseAppsSubject(subject.UserStatusSet("alice", "s1"))
 	assert.False(t, ok)
@@ -697,6 +703,7 @@ func TestUserServiceBuildersRejectWildcardAccounts(t *testing.T) {
 		{"UserSubscriptionGetDM", func() { subject.UserSubscriptionGetDM(">", "s1") }},
 		{"UserSubscriptionCount", func() { subject.UserSubscriptionCount(">", "s1") }},
 		{"UserAppsList", func() { subject.UserAppsList(">", "s1") }},
+		{"UserAppsCategories", func() { subject.UserAppsCategories(">", "s1") }},
 		{"UserSubscriptionList", func() { subject.UserSubscriptionList("*", "s1") }},
 		{"UserSubscriptionSetAppSubscription", func() { subject.UserSubscriptionSetAppSubscription("*", "s1") }},
 		{"UserSubscriptionGetByRoomID", func() { subject.UserSubscriptionGetByRoomID(">", "s1") }},
@@ -815,6 +822,7 @@ func TestUserServicePatternBuilders(t *testing.T) {
 		{"subscription.getDM", subject.UserSubscriptionGetDMPattern("s1"), "chat.user.{account}.request.user.s1.subscription.getDM"},
 		{"subscription.count", subject.UserSubscriptionCountPattern("s1"), "chat.user.{account}.request.user.s1.subscription.count"},
 		{"apps.list", subject.UserAppsListPattern("s1"), "chat.user.{account}.request.user.s1.apps.list"},
+		{"apps.categories", subject.UserAppsCategoriesPattern("s1"), "chat.user.{account}.request.user.s1.apps.categories"},
 		{"subscription.list", subject.UserSubscriptionListPattern("s1"), "chat.user.{account}.request.user.s1.subscription.list"},
 		{"subscription.setAppSubscription", subject.UserSubscriptionSetAppSubscriptionPattern("s1"), "chat.user.{account}.request.user.s1.subscription.setAppSubscription"},
 		{"subscription.getByRoomID", subject.UserSubscriptionGetByRoomIDPattern("s1"), "chat.user.{account}.request.user.s1.subscription.getByRoomID"},

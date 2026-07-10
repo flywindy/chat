@@ -58,3 +58,18 @@ func (s *UserService) ListApps(c *natsrouter.Context, req models.AppsListRequest
 	}
 	return &models.AppsListResponse{Apps: page.Data, HasMore: page.HasMore}, nil
 }
+
+// ListAppCategories returns the fab-domain → app-category mapping sorted by name; no request body.
+func (s *UserService) ListAppCategories(c *natsrouter.Context) (*models.AppCategoriesResponse, error) {
+	account := c.Param("account")
+	c.WithLogValues("account", account)
+	cats, err := s.apps.ListAppCategories(c)
+	if err != nil {
+		return nil, fmt.Errorf("list app categories: %w", err)
+	}
+	if cats == nil {
+		// A nil slice marshals to JSON null; clients expect an array.
+		cats = []models.AppCategory{}
+	}
+	return &models.AppCategoriesResponse{Categories: cats}, nil
+}
