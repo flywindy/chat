@@ -20,7 +20,10 @@ type Store interface {
 	ListSubscriptions(ctx context.Context, roomID string) ([]model.Subscription, error)
 	GetThreadFollowers(ctx context.Context, parentMessageID string) (map[string]struct{}, error)
 	UpdateRoomLastMessage(ctx context.Context, roomID, msgID string, msgAt time.Time, mentionAll bool) error
-	SetSubscriptionMentions(ctx context.Context, roomID string, accounts []string) error
+	// SetSubscriptionMentions flags accounts as mentioned, unless a given account
+	// already read past msgCreatedAt (lastSeenAt >= msgCreatedAt) — otherwise an
+	// async mention write can clobber a read-clear that happened first (#467).
+	SetSubscriptionMentions(ctx context.Context, roomID string, accounts []string, msgCreatedAt time.Time) error
 	// GetHistorySharedSince returns each account's room-subscription historySharedSince
 	// (nil when unrestricted; absent from the map when the account has no subscription
 	// in the room — key-presence encodes membership).

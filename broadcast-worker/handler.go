@@ -185,7 +185,7 @@ func (h *Handler) handleCreated(ctx context.Context, evt *model.MessageEvent) er
 	}
 
 	if len(resolved.Accounts) > 0 {
-		if err := h.store.SetSubscriptionMentions(ctx, meta.ID, resolved.Accounts); err != nil {
+		if err := h.store.SetSubscriptionMentions(ctx, meta.ID, resolved.Accounts, msg.CreatedAt); err != nil {
 			return fmt.Errorf("set subscription mentions: %w", err)
 		}
 	}

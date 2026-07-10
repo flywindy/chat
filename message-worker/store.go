@@ -34,6 +34,9 @@ type ThreadStore interface {
 	GetThreadRoomByParentMessageID(ctx context.Context, parentMessageID string) (*model.ThreadRoom, error)
 	InsertThreadSubscription(ctx context.Context, sub *model.ThreadSubscription) error
 	UpsertThreadSubscription(ctx context.Context, sub *model.ThreadSubscription) error
+	// MarkThreadSubscriptionMention flags sub as mentioned, unless the account
+	// already read past sub.CreatedAt (the mentioning message's time) — otherwise
+	// an async mention write can clobber a read-clear that happened first (#467).
 	MarkThreadSubscriptionMention(ctx context.Context, sub *model.ThreadSubscription) error
 	// UpdateThreadRoomLastMessage bumps the last-message pointer and $addToSet-merges
 	// the supplied accounts (replier + parent author on the subsequent-reply path) into

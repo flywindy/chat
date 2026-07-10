@@ -125,11 +125,19 @@ func (m *mongoStore) BulkUpdateRoomLastMessage(ctx context.Context, updates map[
 	return nil
 }
 
-func (m *mongoStore) SetSubscriptionMentions(ctx context.Context, roomID string, accounts []string) error {
-	filter := bson.M{
-		"roomId":    roomID,
-		"u.account": bson.M{"$in": accounts},
+// subscriptionMentionsFilter matches subs that have NOT already read past
+// msgCreatedAt. $not/$gte (not $lt) so it still matches a missing/null
+// lastSeenAt — plain $lt skips missing fields, wrongly excluding never-read subs (#467).
+func subscriptionMentionsFilter(roomID string, accounts []string, msgCreatedAt time.Time) bson.M {
+	return bson.M{
+		"roomId":     roomID,
+		"u.account":  bson.M{"$in": accounts},
+		"lastSeenAt": bson.M{"$not": bson.M{"$gte": msgCreatedAt}},
 	}
+}
+
+func (m *mongoStore) SetSubscriptionMentions(ctx context.Context, roomID string, accounts []string, msgCreatedAt time.Time) error {
+	filter := subscriptionMentionsFilter(roomID, accounts, msgCreatedAt)
 	update := bson.M{"$set": bson.M{"hasMention": true}}
 	_, err := m.subCol.UpdateMany(ctx, filter, update)
 	if err != nil {

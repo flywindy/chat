@@ -520,6 +520,30 @@ func TestAdvanceSubscriptionLastSeen_OnlyAdvances(t *testing.T) {
 	require.NoError(t, store.AdvanceSubscriptionLastSeen(ctx, "no-room", "nobody", t2))
 }
 
+func TestSetSubscriptionMentions_ReadGuard_Integration(t *testing.T) {
+	db := setupMongo(t)
+	ctx := context.Background()
+	store := NewMongoStore(db.Collection("rooms"), db.Collection("subscriptions"), db.Collection("thread_rooms"), nil, 0)
+
+	msgAt := time.Date(2026, 6, 17, 12, 0, 0, 0, time.UTC)
+	readAt := msgAt.Add(time.Minute) // already read past the message
+
+	_, err := db.Collection("subscriptions").InsertMany(ctx, []interface{}{
+		model.Subscription{ID: "s-read", User: model.SubscriptionUser{ID: "u1", Account: "alice"}, RoomID: "r-mention", LastSeenAt: &readAt},
+		model.Subscription{ID: "s-unread", User: model.SubscriptionUser{ID: "u2", Account: "bob"}, RoomID: "r-mention"}, // lastSeenAt never set (omitempty)
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, store.SetSubscriptionMentions(ctx, "r-mention", []string{"alice", "bob"}, msgAt))
+
+	var alice, bob model.Subscription
+	require.NoError(t, db.Collection("subscriptions").FindOne(ctx, bson.M{"_id": "s-read"}).Decode(&alice))
+	require.NoError(t, db.Collection("subscriptions").FindOne(ctx, bson.M{"_id": "s-unread"}).Decode(&bob))
+
+	assert.False(t, alice.HasMention, "already-read subscription must not be re-flagged (#467)")
+	assert.True(t, bob.HasMention, "never-read subscription (lastSeenAt absent) must still be flagged")
+}
+
 func TestBroadcastWorker_GetHistorySharedSince_Integration(t *testing.T) {
 	db := setupMongo(t)
 	ctx := context.Background()

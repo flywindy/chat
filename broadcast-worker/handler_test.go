@@ -243,7 +243,7 @@ func TestHandler_HandleMessage_ChannelRoom(t *testing.T) {
 			store.EXPECT().GetRoomMeta(gomock.Any(), "room-1").Return(metaOf(testChannelRoom), nil)
 
 			if tc.wantSetMentions != nil {
-				store.EXPECT().SetSubscriptionMentions(gomock.Any(), "room-1", gomock.InAnyOrder(tc.wantSetMentions)).Return(nil)
+				store.EXPECT().SetSubscriptionMentions(gomock.Any(), "room-1", gomock.InAnyOrder(tc.wantSetMentions), msgTime).Return(nil)
 			}
 
 			// Single user lookup: sender + mentions, deduped, sender first.
@@ -350,7 +350,7 @@ func TestHandler_HandleMessage_DMRoom(t *testing.T) {
 			store.EXPECT().ListSubscriptions(gomock.Any(), "dm-1").Return(testDMSubs, nil)
 
 			if tc.wantSetMentions {
-				store.EXPECT().SetSubscriptionMentions(gomock.Any(), "dm-1", gomock.InAnyOrder(tc.mentionedUsers)).Return(nil)
+				store.EXPECT().SetSubscriptionMentions(gomock.Any(), "dm-1", gomock.InAnyOrder(tc.mentionedUsers), msgTime).Return(nil)
 			}
 
 			// Single user lookup: sender first, then mentioned accounts.
@@ -457,7 +457,7 @@ func TestHandler_HandleMessage_Errors(t *testing.T) {
 		store.EXPECT().UpdateRoomLastMessage(gomock.Any(), "room-1", "msg-1", msgTime, false).Return(nil)
 		store.EXPECT().AdvanceSubscriptionLastSeen(gomock.Any(), "room-1", "sender", msgTime).Return(nil)
 		store.EXPECT().GetRoomMeta(gomock.Any(), "room-1").Return(metaOf(testChannelRoom), nil)
-		store.EXPECT().SetSubscriptionMentions(gomock.Any(), "room-1", gomock.Any()).Return(errors.New("db error"))
+		store.EXPECT().SetSubscriptionMentions(gomock.Any(), "room-1", gomock.Any(), gomock.Any()).Return(errors.New("db error"))
 
 		keyStore := NewMockRoomKeyProvider(ctrl)
 		h := NewHandler(store, us, pub, keyStore, defaultParentFetcher, true)
@@ -532,7 +532,7 @@ func TestHandler_HandleMessage_Errors(t *testing.T) {
 		store.EXPECT().UpdateRoomLastMessage(gomock.Any(), "room-1", "msg-1", msgTime, false).Return(nil)
 		store.EXPECT().AdvanceSubscriptionLastSeen(gomock.Any(), "room-1", "sender", msgTime).Return(nil)
 		store.EXPECT().GetRoomMeta(gomock.Any(), "room-1").Return(metaOf(testChannelRoom), nil)
-		store.EXPECT().SetSubscriptionMentions(gomock.Any(), "room-1", []string{"sender"}).Return(nil)
+		store.EXPECT().SetSubscriptionMentions(gomock.Any(), "room-1", []string{"sender"}, msgTime).Return(nil)
 		// Single lookup: sender is both the message author and the mentioned account, so the deduped list is just ["sender"].
 		us.EXPECT().FindUsersByAccounts(gomock.Any(), []string{"sender"}).Return([]model.User{senderUser}, nil)
 
@@ -1157,7 +1157,7 @@ func TestHandler_HandleMessage_ChannelEncryptionDisabled(t *testing.T) {
 			store.EXPECT().AdvanceSubscriptionLastSeen(gomock.Any(), "room-1", "sender", msgTime).Return(nil)
 			store.EXPECT().GetRoomMeta(gomock.Any(), "room-1").Return(metaOf(testChannelRoom), nil)
 			if tc.wantSetMentions != nil {
-				store.EXPECT().SetSubscriptionMentions(gomock.Any(), "room-1", gomock.InAnyOrder(tc.wantSetMentions)).Return(nil)
+				store.EXPECT().SetSubscriptionMentions(gomock.Any(), "room-1", gomock.InAnyOrder(tc.wantSetMentions), msgTime).Return(nil)
 			}
 
 			if tc.name == "plaintext individual mention" {
