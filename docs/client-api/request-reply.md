@@ -1,6 +1,6 @@
 > Request/Reply and Events views of the chat client API — see also [client-api.md](../client-api.md).
 
-<!-- last synced: client-api.md @ 3cabb454 -->
+<!-- last synced: client-api.md @ 117da0c -->
 
 # Chat — Request/Reply Methods & Publish Operations
 
@@ -27,11 +27,13 @@ For connection, auth, shared schemas, and error reference, see [../client-api.md
    - [GET /api/v1/file/rooms/:roomId/file/:fileId](#get-apiv1fileroomsroomidfilefileid)
    - [GET /api/v1/file-upload/:fileId/:fileName](#get-apiv1file-uploadfileidfilename)
    - [Media Service — avatar endpoints](#media-service--avatar-endpoints)
+   - [Media Service — emoji endpoints](#media-service--emoji-endpoints)
 2. [room-service (§3.1)](#room-service)
 3. [history-service (§3.2)](#history-service)
 4. [search-service (§3.3)](#search-service)
 5. [user-service (§3.4)](#user-service)
-6. [Publish operations](#publish-operations)
+6. [media-service (§3.5)](#media-service)
+7. [Publish operations](#publish-operations)
    - [Send Message](#send-message)
    - [Room Encryption Key Get](#room-encryption-key-get)
    - [Presence publishes](#presence-publishes)
@@ -165,6 +167,21 @@ Full decision logic, redirect/caching rules, and the `PUT` upload contract are i
 | `GET /api/v1/avatar/:accountName` | synchronous HTTP (redirect, image bytes, or default SVG) | User/bot avatar; frontend also uses this for DM/botDM room avatars. |
 | `GET /api/v1/avatar/room/:roomID` | synchronous HTTP (image bytes or default SVG) | Channel/discussion room avatar. |
 | `PUT /api/v1/avatar/bot/:botName` | synchronous HTTP | Upload a bot's custom avatar. ⚠️ Unauthenticated — must be network-restricted. |
+
+**Emits:** `None — HTTP-only.`
+
+---
+
+### Media Service — emoji endpoints
+
+Public HTTP endpoints served by `media-service` (no `ssoToken`/auth required).
+Full decision logic, limits, and response schemas are in
+[../client-api.md §7](../client-api.md#7-media-service).
+
+| Endpoint | Reply | Purpose |
+|---|---|---|
+| `GET /api/v1/emoji/:shortcode` | synchronous HTTP (image bytes, `304`, `307`, or `404`) | Serve a custom emoji image. Defaults to this cluster's site; optional lowercase `?siteid=` names a site — known remote `307`-redirects, unknown `404`. No generated default (unlike avatars). Cache-bust with `?v={etag}`. |
+| `PUT /api/v1/emoji/:shortcode` | synchronous HTTP | Upload (upsert) a custom emoji — PNG/JPEG/GIF, env-capped size/dimensions. Always writes to this cluster's site. ⚠️ Unauthenticated; optional `?uploader={account}` is audit-only. |
 
 **Emits:** `None — HTTP-only.`
 
@@ -1042,7 +1059,7 @@ state. Can always **remove** from a soft-deleted message; cannot **add** to one.
 | Field | Type | Notes |
 |---|---|---|
 | `messageId` | string | Required. |
-| `shortcode` | string | Required. Bare shortcode without colons (`thumbsup`, `acme_party`). Must match `^[a-z0-9_+-]{1,32}$` after NFC normalisation. Accepts a built-in standard-emoji set (gemoji/GitHub-style) with no per-site setup, falling back to the site's `custom_emojis` collection. |
+| `shortcode` | string | Required. Bare shortcode without colons (`thumbsup`, `acme_party`). Must match `^[a-z0-9_+-]{1,32}$` after NFC normalisation. Format-only validation — no registration check; clients offer only picker-sourced shortcodes (standard set + local [`emoji.list`](#emojilist)). |
 
 #### Success response
 
@@ -1056,8 +1073,7 @@ state. Can always **remove** from a soft-deleted message; cannot **add** to one.
 #### Errors
 
 `"messageId is required"`, `"shortcode is required"`, `"invalid reaction shortcode"`
-(malformed format), `"unknown reaction shortcode"` (well-formed but not a built-in or
-registered custom emoji), `"message not found"`, `"not subscribed to room"`.
+(malformed format), `"message not found"`, `"not subscribed to room"`.
 
 **Emits:** [`message_reacted`](events.md#message_reacted-reactroomevent) (channel `chat.room.{roomID}.event`; DM `chat.user.{account}.event.room` per non-bot member), [`notification`](events.md#notification--reaction-notification) (to message author on add only) → [events.md](events.md)
 
@@ -1606,6 +1622,75 @@ failures degrade into `unavailableSites` rather than erroring.
 `internal` — local thread-subscription read failed.
 
 **Emits:** None.
+
+---
+
+## media-service
+
+| RPC subject | Method |
+|---|---|
+| `chat.user.{account}.request.emoji.{siteID}.list` | [emoji.list](#emojilist) |
+| `chat.user.{account}.request.emoji.{siteID}.delete` | [emoji.delete](#emojidelete) |
+
+`{siteID}` is the target site whose emoji set you want — in v1 the FE fetches only its
+**local** site's list (non-local shortcodes are not rendered). The supercluster routes
+the request to that site's media-service.
+
+---
+
+### emoji.list
+
+**Subject:** `chat.user.{account}.request.emoji.{siteID}.list`
+**Reply:** auto-generated `_INBOX.>` (NATS request/reply)
+
+Lists the site's custom emoji, sorted by `shortcode`.
+
+#### Request body
+
+Empty. Send `{}` or no payload.
+
+#### Success response
+
+| Field | Type | Notes |
+|---|---|---|
+| `emojis` | EmojiEntry[] | `[]` when the site has none. |
+
+`EmojiEntry`: `{ "shortcode", "imageUrl", "contentType", "etag", "updatedAt" }` —
+`imageUrl` is the bare relative serve path `/api/v1/emoji/{shortcode}` (resolve against
+the media-service base URL of the site the list came from; cache-bust with `?v={etag}`);
+`updatedAt` is an RFC 3339 timestamp (UTC).
+See [../client-api.md §3.5](../client-api.md#emojientry) for the full schema + example.
+
+#### Errors
+
+`internal` — store failure.
+
+**Emits:** None — reply only.
+
+---
+
+### emoji.delete
+
+**Subject:** `chat.user.{account}.request.emoji.{siteID}.delete`
+**Reply:** auto-generated `_INBOX.>` (NATS request/reply)
+
+Deletes a custom emoji. Any authenticated user may delete (v1). Disabled by default —
+gated by media-service's `EMOJI_DELETE_ENABLED` (default `false`).
+
+#### Request body
+
+`{ "shortcode": "acme_party" }`
+
+#### Success response
+
+`{ "shortcode": "acme_party", "deleted": true }` — `shortcode` is the canonical (NFC) form.
+
+#### Errors
+
+Malformed/missing `shortcode` (`bad_request`), no such emoji on this site (`not_found`),
+kill-switch off (`forbidden`, reason `emoji_delete_disabled`), store failure (`internal`).
+
+**Emits:** None — reply only.
 
 ---
 

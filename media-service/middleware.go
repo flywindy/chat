@@ -52,8 +52,8 @@ func accessLogMiddleware() gin.HandlerFunc {
 			"status", c.Writer.Status(),
 			"latency_ms", time.Since(start).Milliseconds(),
 			"client_ip", c.ClientIP(),
-			"avatar_kind", c.GetString("avatar_kind"),
-			"avatar_outcome", c.GetString("avatar_outcome"),
+			"media_kind", c.GetString("media_kind"),
+			"media_outcome", c.GetString("media_outcome"),
 		)
 	}
 }

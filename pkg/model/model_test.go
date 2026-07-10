@@ -3259,7 +3259,7 @@ func TestCustomEmojiRoundtrip(t *testing.T) {
 		ID:          "site-a:acme_party",
 		SiteID:      "site-a",
 		Shortcode:   "acme_party",
-		ImageURL:    "/api/v1/emoji/acme_party?siteid=site-a",
+		ImageURL:    "/api/v1/emoji/acme_party",
 		CreatedBy:   "alice",
 		CreatedAt:   1747800000000,
 		UpdatedBy:   "bob",
@@ -3280,7 +3280,7 @@ func TestCustomEmojiBSON(t *testing.T) {
 		ID:          "site-a:acme_party",
 		SiteID:      "site-a",
 		Shortcode:   "acme_party",
-		ImageURL:    "/api/v1/emoji/acme_party?siteid=site-a",
+		ImageURL:    "/api/v1/emoji/acme_party",
 		CreatedBy:   "alice",
 		CreatedAt:   1747800000000,
 		UpdatedBy:   "bob",
@@ -3300,13 +3300,24 @@ func TestCustomEmojiBSON(t *testing.T) {
 func TestEmojiListResponseRoundtrip(t *testing.T) {
 	src := model.EmojiListResponse{Emojis: []model.EmojiEntry{{
 		Shortcode:   "acme_party",
-		ImageURL:    "/api/v1/emoji/acme_party?siteid=site-a",
+		ImageURL:    "/api/v1/emoji/acme_party",
 		ContentType: "image/png",
 		ETag:        "abc123",
-		CreatedBy:   "alice",
-		UpdatedAt:   1747900000000,
+		UpdatedAt:   time.Date(2026, 5, 22, 8, 26, 40, 0, time.UTC),
 	}}}
 	roundTrip(t, &src, &model.EmojiListResponse{})
+
+	t.Run("updatedAt serializes as RFC3339 string", func(t *testing.T) {
+		data, err := json.Marshal(&src)
+		require.NoError(t, err)
+		var raw struct {
+			Emojis []map[string]any `json:"emojis"`
+		}
+		require.NoError(t, json.Unmarshal(data, &raw))
+		require.Len(t, raw.Emojis, 1)
+		assert.Equal(t, "2026-05-22T08:26:40Z", raw.Emojis[0]["updatedAt"],
+			"updatedAt must be RFC3339, not epoch millis")
+	})
 }
 
 func TestEmojiDeleteRequestRoundtrip(t *testing.T) {

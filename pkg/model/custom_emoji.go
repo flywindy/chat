@@ -1,5 +1,7 @@
 package model
 
+import "time"
+
 // CustomEmoji is a site-scoped custom reaction emoji; Shortcode is stored bare
 // (no wrapping colons). Written by media-service (upload/delete); read by the
 // pkg/emoji validator via an existence check. Doc exists ⟺ MinIO object exists.
@@ -8,7 +10,7 @@ type CustomEmoji struct {
 	ID        string `json:"id"        bson:"_id"`
 	SiteID    string `json:"siteId"    bson:"siteId"`
 	Shortcode string `json:"shortcode" bson:"shortcode"`
-	// ImageURL is the canonical relative serve path "/api/v1/emoji/{shortcode}?siteid={siteID}".
+	// ImageURL is the canonical relative serve path "/api/v1/emoji/{shortcode}" (bare; compose ?siteid= from the siteId field for cross-site use).
 	ImageURL  string `json:"imageUrl"  bson:"imageUrl"`
 	CreatedBy string `json:"createdBy" bson:"createdBy"`
 	CreatedAt int64  `json:"createdAt" bson:"createdAt"`
@@ -29,8 +31,9 @@ type EmojiEntry struct {
 	ImageURL    string `json:"imageUrl"    bson:"imageUrl"`
 	ContentType string `json:"contentType" bson:"contentType"`
 	ETag        string `json:"etag"        bson:"etag"`
-	CreatedBy   string `json:"createdBy"   bson:"createdBy"`
-	UpdatedAt   int64  `json:"updatedAt"   bson:"updatedAt"`
+	// UpdatedAt serializes as RFC3339 (client wire); the stored doc keeps
+	// epoch millis — media-service converts at the boundary.
+	UpdatedAt time.Time `json:"updatedAt" bson:"updatedAt"`
 }
 
 // EmojiListResponse is the reply to chat.user.{account}.request.emoji.{siteID}.list.

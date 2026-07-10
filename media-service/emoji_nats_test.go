@@ -34,16 +34,16 @@ func natsCtx() *natsrouter.Context {
 func TestHandleEmojiList_Success(t *testing.T) {
 	h, emojis, _ := newNATSTestHandler(t)
 	emojis.EXPECT().ListEmojis(gomock.Any(), "s1").Return([]model.CustomEmoji{
-		{Shortcode: "aaa", ImageURL: "/api/v1/emoji/aaa?siteid=s1", ContentType: "image/png", ETag: "e1", CreatedBy: "alice", UpdatedAt: 1000},
-		{Shortcode: "bbb", ImageURL: "/api/v1/emoji/bbb?siteid=s1", ContentType: "image/gif", ETag: "e2", CreatedBy: "bob", UpdatedAt: 2000},
+		{Shortcode: "aaa", ImageURL: "/api/v1/emoji/aaa", ContentType: "image/png", ETag: "e1", UpdatedAt: 1000},
+		{Shortcode: "bbb", ImageURL: "/api/v1/emoji/bbb", ContentType: "image/gif", ETag: "e2", UpdatedAt: 2000},
 	}, nil)
 
 	resp, err := h.HandleEmojiList(natsCtx())
 	require.NoError(t, err)
 	require.Len(t, resp.Emojis, 2)
 	assert.Equal(t, model.EmojiEntry{
-		Shortcode: "aaa", ImageURL: "/api/v1/emoji/aaa?siteid=s1", ContentType: "image/png",
-		ETag: "e1", CreatedBy: "alice", UpdatedAt: 1000,
+		Shortcode: "aaa", ImageURL: "/api/v1/emoji/aaa", ContentType: "image/png",
+		ETag: "e1", UpdatedAt: time.UnixMilli(1000).UTC(),
 	}, resp.Emojis[0])
 	assert.Equal(t, "bbb", resp.Emojis[1].Shortcode)
 }

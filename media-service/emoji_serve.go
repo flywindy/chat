@@ -22,12 +22,12 @@ import (
 // no generated default: unknown emoji are 404s.
 func (h *handler) HandleEmojiGet(c *gin.Context) {
 	ctx := c.Request.Context()
-	c.Set("avatar_kind", "emoji")
+	c.Set("media_kind", "emoji")
 	siteID := c.Query(siteIDParam)
 
 	shortcode, err := emoji.Canonicalize(c.Param("shortcode"))
 	if err != nil {
-		c.Set("avatar_outcome", "error")
+		c.Set("media_outcome", "error")
 		errhttp.Write(ctx, c, errcode.BadRequest("invalid emoji shortcode"))
 		return
 	}
@@ -35,46 +35,46 @@ func (h *handler) HandleEmojiGet(c *gin.Context) {
 	if siteID != "" && siteID != h.cfg.SiteID {
 		base := h.cfg.clusterBaseURL(siteID)
 		if base == "" {
-			c.Set("avatar_outcome", "error")
+			c.Set("media_outcome", "error")
 			errhttp.Write(ctx, c, errcode.NotFound("unknown site"))
 			return
 		}
-		c.Set("avatar_outcome", "redirect")
+		c.Set("media_outcome", "redirect")
 		c.Redirect(http.StatusTemporaryRedirect, base+"/api/v1/emoji/"+shortcode)
 		return
 	}
 
 	e, found, err := h.emojis.EmojiDoc(ctx, h.cfg.SiteID, shortcode)
 	if err != nil {
-		c.Set("avatar_outcome", "error")
+		c.Set("media_outcome", "error")
 		errhttp.Write(ctx, c, fmt.Errorf("find custom emoji: %w", err))
 		return
 	}
 	if !found {
-		c.Set("avatar_outcome", "error")
+		c.Set("media_outcome", "error")
 		errhttp.Write(ctx, c, errcode.NotFound("emoji not found"))
 		return
 	}
 
 	h.setImageCacheHeaders(c, e.ETag)
 	if m := c.GetHeader("If-None-Match"); m != "" && m == e.ETag {
-		c.Set("avatar_outcome", "304")
+		c.Set("media_outcome", "304")
 		c.Status(http.StatusNotModified)
 		return
 	}
 	rc, info, err := h.blobs.Get(ctx, e.MinioKey)
 	if errors.Is(err, errBlobNotFound) {
 		// doc⟺object invariant briefly broken (concurrent delete): treat as gone.
-		c.Set("avatar_outcome", "error")
+		c.Set("media_outcome", "error")
 		errhttp.Write(ctx, c, errcode.NotFound("emoji not found"))
 		return
 	}
 	if err != nil {
-		c.Set("avatar_outcome", "error")
+		c.Set("media_outcome", "error")
 		errhttp.Write(ctx, c, fmt.Errorf("get emoji object: %w", err))
 		return
 	}
 	defer rc.Close()
-	c.Set("avatar_outcome", "stream")
+	c.Set("media_outcome", "stream")
 	c.DataFromReader(http.StatusOK, info.Size, info.ContentType, rc, nil)
 }

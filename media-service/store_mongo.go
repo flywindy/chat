@@ -99,8 +99,7 @@ func (s *mongoStore) SetBotAvatar(ctx context.Context, av *model.Avatar) error {
 }
 
 // EnsureEmojiIndexes creates the (siteId, shortcode) unique index; idempotent.
-// Mirrors history-service's CustomEmojiRepo.EnsureIndexes (same index name) so
-// either service can start first.
+// media-service is the sole owner of the custom_emojis collection.
 func (s *mongoStore) EnsureEmojiIndexes(ctx context.Context) error {
 	_, err := s.customEmojis.Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys:    bson.D{{Key: "siteId", Value: 1}, {Key: "shortcode", Value: 1}},
@@ -128,7 +127,7 @@ func (s *mongoStore) EmojiDoc(ctx context.Context, siteID, shortcode string) (*m
 func (s *mongoStore) ListEmojis(ctx context.Context, siteID string) ([]model.CustomEmoji, error) {
 	cur, err := s.customEmojis.Find(ctx, bson.M{"siteId": siteID},
 		options.Find().
-			SetProjection(bson.M{"shortcode": 1, "imageUrl": 1, "contentType": 1, "etag": 1, "createdBy": 1, "updatedAt": 1}).
+			SetProjection(bson.M{"shortcode": 1, "imageUrl": 1, "contentType": 1, "etag": 1, "updatedAt": 1}).
 			SetSort(bson.D{{Key: "shortcode", Value: 1}}))
 	if err != nil {
 		return nil, fmt.Errorf("list custom emojis: %w", err)

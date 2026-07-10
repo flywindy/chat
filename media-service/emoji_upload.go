@@ -29,37 +29,68 @@ func emojiObjectKey(siteID, shortcode string) string {
 func emojiDocID(siteID, shortcode string) string { return siteID + ":" + shortcode }
 
 // emojiImagePath is the canonical imageUrl stored on the doc and returned by
-// list: "/api/v1/emoji/{shortcode}?siteid={siteID}" — self-describing so it
-// serves correctly regardless of which cluster it's fetched from. The
-// cross-site redirect target is built separately (no query param: the target
-// always defaults to local). shortcode is charset-validated, so no escaping
-// is needed.
-func emojiImagePath(siteID, shortcode string) string {
-	return "/api/v1/emoji/" + shortcode + "?siteid=" + siteID
+// list: "/api/v1/emoji/{shortcode}". It carries no ?siteid= — the doc's siteId
+// field (and the site the list was requested from) already identify the owner,
+// so a cross-site consumer composes imageUrl + "?siteid=" + siteId itself.
+// shortcode is charset-validated, so no escaping is needed.
+func emojiImagePath(shortcode string) string {
+	return "/api/v1/emoji/" + shortcode
 }
 
-// emojiUploadResponse is the 200 body on a successful upload.
+// validateEmojiImage confirms raw is a PNG, JPEG, or GIF no larger than
+// maxDim on either axis and returns its content type (e.g. "image/png").
+//
+// The dimension limit is enforced in two phases on purpose — they guard
+// different failure modes:
+//  1. header pre-check (image.DecodeConfig): rejects oversized *declared*
+//     dimensions before image.Decode allocates pixel buffers from them — a
+//     small compressed body can declare a huge image (decompression-bomb
+//     hardening);
+//  2. decoded-bounds check: rejects files whose actual pixels disagree with
+//     their header, so nothing larger than maxDim reaches storage. Animated
+//     GIFs decode as their first frame, which is what this check applies to.
+func validateEmojiImage(raw []byte, maxDim int) (string, error) {
+	cfg, cfgFormat, err := image.DecodeConfig(bytes.NewReader(raw))
+	if err != nil || (cfgFormat != "png" && cfgFormat != "jpeg" && cfgFormat != "gif") {
+		return "", errcode.BadRequest("body is not a valid PNG, JPEG, or GIF image")
+	}
+	if cfg.Width > maxDim || cfg.Height > maxDim {
+		return "", errcode.BadRequest(fmt.Sprintf("image exceeds %dx%d", maxDim, maxDim))
+	}
+
+	img, format, err := image.Decode(bytes.NewReader(raw))
+	if err != nil || (format != "png" && format != "jpeg" && format != "gif") {
+		return "", errcode.BadRequest("body is not a valid PNG, JPEG, or GIF image")
+	}
+	if b := img.Bounds(); b.Dx() > maxDim || b.Dy() > maxDim {
+		return "", errcode.BadRequest(fmt.Sprintf("image exceeds %dx%d", maxDim, maxDim))
+	}
+	return "image/" + format, nil
+}
+
+// emojiUploadResponse is the 200 body on a successful upload. UpdatedAt
+// serializes as RFC3339, matching EmojiEntry on the list wire.
 type emojiUploadResponse struct {
-	Shortcode   string `json:"shortcode"`
-	ETag        string `json:"etag"`
-	ContentType string `json:"contentType"`
-	Size        int64  `json:"size"`
-	UpdatedAt   int64  `json:"updatedAt"`
+	Shortcode   string    `json:"shortcode"`
+	ETag        string    `json:"etag"`
+	ContentType string    `json:"contentType"`
+	Size        int64     `json:"size"`
+	UpdatedAt   time.Time `json:"updatedAt"`
 }
 
 func (h *handler) HandleEmojiUpload(c *gin.Context) {
 	ctx := c.Request.Context()
-	c.Set("avatar_kind", "emoji")
+	c.Set("media_kind", "emoji")
 	siteID := h.cfg.SiteID
 
 	shortcode, err := emoji.Canonicalize(c.Param("shortcode"))
 	if err != nil {
-		c.Set("avatar_outcome", "error")
+		c.Set("media_outcome", "error")
 		errhttp.Write(ctx, c, errcode.BadRequest("invalid emoji shortcode"))
 		return
 	}
 	if emoji.IsStandard(shortcode) {
-		c.Set("avatar_outcome", "error")
+		c.Set("media_outcome", "error")
 		errhttp.Write(ctx, c, errcode.BadRequest(
 			"shortcode collides with a built-in standard emoji",
 			errcode.WithReason(errcode.EmojiShortcodeReserved)))
@@ -70,41 +101,17 @@ func (h *handler) HandleEmojiUpload(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, h.cfg.EmojiMaxUploadBytes)
 	raw, err := io.ReadAll(c.Request.Body)
 	if err != nil {
-		c.Set("avatar_outcome", "error")
+		c.Set("media_outcome", "error")
 		errhttp.Write(ctx, c, errcode.BadRequest("upload too large or unreadable"))
 		return
 	}
 
-	// Header-only prefilter: reject oversized declared dimensions before the
-	// full decode allocates pixel buffers (decompression-bomb hardening).
-	cfgImg, cfgFormat, err := image.DecodeConfig(bytes.NewReader(raw))
-	if err != nil || (cfgFormat != "png" && cfgFormat != "jpeg" && cfgFormat != "gif") {
-		c.Set("avatar_outcome", "error")
-		errhttp.Write(ctx, c, errcode.BadRequest("body is not a valid PNG, JPEG, or GIF image"))
+	contentType, err := validateEmojiImage(raw, h.cfg.EmojiMaxDimension)
+	if err != nil {
+		c.Set("media_outcome", "error")
+		errhttp.Write(ctx, c, err)
 		return
 	}
-	if cfgImg.Width > h.cfg.EmojiMaxDimension || cfgImg.Height > h.cfg.EmojiMaxDimension {
-		c.Set("avatar_outcome", "error")
-		errhttp.Write(ctx, c, errcode.BadRequest(
-			fmt.Sprintf("image exceeds %dx%d", h.cfg.EmojiMaxDimension, h.cfg.EmojiMaxDimension)))
-		return
-	}
-
-	// Decode to confirm a real PNG/JPEG/GIF; animated GIFs decode as their
-	// first frame, which is what the dimension check applies to.
-	img, format, err := image.Decode(bytes.NewReader(raw))
-	if err != nil || (format != "png" && format != "jpeg" && format != "gif") {
-		c.Set("avatar_outcome", "error")
-		errhttp.Write(ctx, c, errcode.BadRequest("body is not a valid PNG, JPEG, or GIF image"))
-		return
-	}
-	if b := img.Bounds(); b.Dx() > h.cfg.EmojiMaxDimension || b.Dy() > h.cfg.EmojiMaxDimension {
-		c.Set("avatar_outcome", "error")
-		errhttp.Write(ctx, c, errcode.BadRequest(
-			fmt.Sprintf("image exceeds %dx%d", h.cfg.EmojiMaxDimension, h.cfg.EmojiMaxDimension)))
-		return
-	}
-	contentType := "image/" + format
 
 	// Store the object FIRST, then upsert the doc (doc exists ⟺ object exists).
 	key := emojiObjectKey(siteID, shortcode)
@@ -113,7 +120,7 @@ func (h *handler) HandleEmojiUpload(c *gin.Context) {
 	// next upload; the serve path degrades to 404 (see emoji_serve.go).
 	etag, err := h.blobs.Put(ctx, key, bytes.NewReader(raw), int64(len(raw)), contentType)
 	if err != nil {
-		c.Set("avatar_outcome", "error")
+		c.Set("media_outcome", "error")
 		errhttp.Write(ctx, c, fmt.Errorf("store emoji object: %w", err))
 		return
 	}
@@ -126,7 +133,7 @@ func (h *handler) HandleEmojiUpload(c *gin.Context) {
 		ID:          emojiDocID(siteID, shortcode),
 		SiteID:      siteID,
 		Shortcode:   shortcode,
-		ImageURL:    emojiImagePath(siteID, shortcode),
+		ImageURL:    emojiImagePath(shortcode),
 		CreatedBy:   uploader,
 		CreatedAt:   now,
 		UpdatedBy:   uploader,
@@ -137,17 +144,17 @@ func (h *handler) HandleEmojiUpload(c *gin.Context) {
 		ETag:        etag,
 	}
 	if err := h.emojis.UpsertEmoji(ctx, e); err != nil {
-		c.Set("avatar_outcome", "error")
+		c.Set("media_outcome", "error")
 		errhttp.Write(ctx, c, fmt.Errorf("upsert emoji doc: %w", err))
 		return
 	}
-	c.Set("avatar_outcome", "upload")
+	c.Set("media_outcome", "upload")
 	c.Header("X-Content-Type-Options", "nosniff")
 	c.JSON(http.StatusOK, emojiUploadResponse{
 		Shortcode:   shortcode,
 		ETag:        e.ETag,
 		ContentType: e.ContentType,
 		Size:        e.Size,
-		UpdatedAt:   e.UpdatedAt,
+		UpdatedAt:   time.UnixMilli(e.UpdatedAt).UTC(),
 	})
 }

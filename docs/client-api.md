@@ -3368,7 +3368,7 @@ Toggles a reaction on a message. Any subscribed room member may react — the se
 | Field | Type | Required | Notes |
 |---|---|---|---|
 | `messageId` | string | yes | The message to react to. |
-| `shortcode` | string | yes | The bare reaction shortcode without surrounding colons (e.g. `thumbsup`, `acme_party`). Must match `^[a-z0-9_+-]{1,32}$` after NFC normalisation. The server accepts a built-in set of standard emoji (gemoji/GitHub-style shortcodes — `thumbsup`, `+1`, `heart`, etc.) without any per-site setup, then falls back to the per-site `custom_emojis` collection for additional shortcodes. |
+| `shortcode` | string | yes | The bare reaction shortcode without surrounding colons (e.g. `thumbsup`, `acme_party`). Must match `^[a-z0-9_+-]{1,32}$` after NFC normalisation. The server validates **format only** — it does not check the shortcode against the standard-emoji set or the site's registered custom emoji. Clients are expected to offer only shortcodes from their picker (built-in standard set + the local site's [`emoji.list`](#emojilist--list-a-sites-custom-emoji)). |
 
 ```json
 {
@@ -3397,7 +3397,7 @@ Toggles a reaction on a message. Any subscribed room member may react — the se
 
 ##### Error response
 
-See [Error envelope](#6-error-envelope-reference). Common errors: `"messageId is required"`, `"shortcode is required"`, `"invalid reaction shortcode"` (malformed: fails `^[a-z0-9_+-]{1,32}$` after NFC), `"unknown reaction shortcode"` (well-formed but neither a built-in standard emoji nor a registered custom emoji for this site), `"message not found"` (also returned when attempting to _add_ a reaction to a soft-deleted message), `"not subscribed to room"`, `"failed to add reaction"`, `"failed to remove reaction"`.
+See [Error envelope](#6-error-envelope-reference). Common errors: `"messageId is required"`, `"shortcode is required"`, `"invalid reaction shortcode"` (malformed: fails `^[a-z0-9_+-]{1,32}$` after NFC), `"message not found"` (also returned when attempting to _add_ a reaction to a soft-deleted message), `"not subscribed to room"`, `"failed to add reaction"`, `"failed to remove reaction"`.
 
 ##### Triggered events — success path
 
@@ -4861,7 +4861,7 @@ Empty object.
 **Subject:** `chat.user.{account}.request.emoji.{siteID}.list`
 **Reply subject:** auto-generated `_INBOX.>` (NATS request/reply)
 
-**Auth:** the `{account}` in the subject is the authenticated identity. `{siteID}` is the **target site whose emoji set you want** — for a room's emoji picker, pass the room's origin `siteId` (a room's usable custom emoji are always its origin site's set; see [React to Message](#react-to-message)). The supercluster routes the request to that site's media-service.
+**Auth:** the `{account}` in the subject is the authenticated identity. `{siteID}` is the **target site whose emoji set you want** — in v1 the FE fetches only its **local** site's list (non-local shortcodes are not rendered). The supercluster routes the request to that site's media-service.
 
 ##### Request body
 
@@ -4878,22 +4878,20 @@ Empty. Send `{}` or no payload.
 | Field | Type | Notes |
 |---|---|---|
 | `shortcode` | string | Bare shortcode (no colons), `^[a-z0-9_+-]{1,32}$`. |
-| `imageUrl` | string | Relative serve path `/api/v1/emoji/{shortcode}?siteid={siteID}` — resolve against your media-service base URL; the `?siteid=` param is self-describing (the FE only ever fetches the local site's list in v1) and defaults to local when absent; append `&v={etag}` to cache-bust. |
+| `imageUrl` | string | Bare relative serve path `/api/v1/emoji/{shortcode}` — resolve against the media-service base URL of the site the list came from (no `?siteid=`; the serve endpoint defaults to its own cluster's site). Append `?v={etag}` to cache-bust. |
 | `contentType` | string | `image/png`, `image/jpeg`, or `image/gif` (GIFs may be animated). |
 | `etag` | string | Storage ETag of the current image. |
-| `createdBy` | string | Account that first uploaded the shortcode (audit; unauthenticated in v1). |
-| `updatedAt` | number | Epoch ms (UTC) of the last upload. |
+| `updatedAt` | string (RFC 3339) | Time of the last upload (UTC). |
 
 ```json
 {
   "emojis": [
     {
       "shortcode": "acme_party",
-      "imageUrl": "/api/v1/emoji/acme_party?siteid=site-a",
+      "imageUrl": "/api/v1/emoji/acme_party",
       "contentType": "image/gif",
       "etag": "9a0364b9e99bb480dd25e1f0284c8555",
-      "createdBy": "alice",
-      "updatedAt": 1746518900000
+      "updatedAt": "2025-05-06T08:08:20Z"
     }
   ]
 }
@@ -4945,7 +4943,7 @@ See [Error envelope](#6-error-envelope-reference).
 { "shortcode": "acme_party", "deleted": true }
 ```
 
-Existing reactions that reference the deleted shortcode are not rewritten; the reaction validator stops accepting new uses within its cache TTL (≤ 60 s by default).
+Existing reactions that reference the deleted shortcode are not rewritten. Reactions validate shortcode **format only** (no registration check), so a deleted shortcode technically remains reactable — the FE stops offering it once its emoji list refresh no longer includes it, and its image URL returns `404`.
 
 ##### Error response
 
@@ -5638,7 +5636,7 @@ On success, the custom image takes effect immediately: subsequent `GET /api/v1/a
 
 ### GET /api/v1/emoji/:shortcode
 
-Serves a custom emoji image. The path no longer carries siteID: v1's FE only ever fetches the local site's emoji list and never renders non-local shortcodes, so the endpoint defaults to this cluster's site. An optional lowercase `?siteid=` query param (matching the avatar endpoints' `?siteid=` hint) names a specific site — absent or equal to this cluster's site serves locally; a known remote site 307-redirects to its owning cluster. Clients normally just use the `imageUrl` returned by [`emoji.list`](#emojilist--list-a-sites-custom-emoji) as-is; append `&v={etag}` to cache-bust after re-uploads.
+Serves a custom emoji image. The path no longer carries siteID: v1's FE only ever fetches the local site's emoji list and never renders non-local shortcodes, so the endpoint defaults to this cluster's site. An optional lowercase `?siteid=` query param (matching the avatar endpoints' `?siteid=` hint) names a specific site — absent or equal to this cluster's site serves locally; a known remote site 307-redirects to its owning cluster. Clients normally just use the `imageUrl` returned by [`emoji.list`](#emojilist--list-a-sites-custom-emoji) as-is (it is a bare `/api/v1/emoji/{shortcode}` path, resolved against the base URL of the site the list came from); append `?v={etag}` to cache-bust after re-uploads.
 
 #### Response
 
@@ -5685,7 +5683,7 @@ Raw image bytes as the body. PNG, JPEG, or GIF (animated GIFs are stored and ser
 | `etag` | string | New storage ETag — use as the `?v=` cache-buster. |
 | `contentType` | string | Detected type (`image/png`, `image/jpeg`, `image/gif`). |
 | `size` | int | Stored size in bytes. |
-| `updatedAt` | number | Epoch ms (UTC). |
+| `updatedAt` | string (RFC 3339) | Time of this upload (UTC). |
 
 ```json
 {
@@ -5693,11 +5691,11 @@ Raw image bytes as the body. PNG, JPEG, or GIF (animated GIFs are stored and ser
   "etag": "9a0364b9e99bb480dd25e1f0284c8555",
   "contentType": "image/gif",
   "size": 20480,
-  "updatedAt": 1746518900000
+  "updatedAt": "2025-05-06T08:08:20Z"
 }
 ```
 
-A newly uploaded emoji becomes reactable once the reaction validator's per-site cache expires (≤ 60 s by default).
+A newly uploaded emoji is usable immediately — it appears in the next [`emoji.list`](#emojilist--list-a-sites-custom-emoji) fetch and its image serves right away; reactions validate shortcode format only, so no registration propagation delay applies.
 
 ## 8. Presence
 

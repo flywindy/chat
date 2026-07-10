@@ -134,3 +134,11 @@ Product decision for v1: the FE only ever fetches the *local* site's emoji list 
 ## Amendment (2026-07-08): delete kill-switch
 
 `emoji.delete` is now gated behind a new `EMOJI_DELETE_ENABLED` config (bool, default `false` — delete disabled by default), mirroring history-service's `PIN_ENABLED` kill-switch precedent. When disabled, the RPC returns `forbidden` with reason `emoji_delete_disabled` (new `pkg/errcode/codes_emoji.go` entry) before any store/blob access. Local `docker-compose.yml` sets `EMOJI_DELETE_ENABLED=true` for dev convenience. Upload/serve/list are unaffected.
+
+## Amendment (2026-07-09): post-merge review adjustments (PR #457 follow-up)
+
+Three adjustments from post-merge review, applied on `ds-feat/fix_customized_emoji`:
+
+- **Stored `imageUrl` is now the bare path** `/api/v1/emoji/{shortcode}` — no `?siteid=` (supersedes the §2 comment and the 2026-07-08 path-shape amendment's `imageUrl` bullet). The doc's `siteId` field and the site the list was fetched from already identify the owner; the `?siteid=` query param remains available on the GET endpoint for callers that need cross-site resolution. FE cache-busts with `?v={etag}`.
+- **`createdBy` dropped from the `emoji.list` wire response** (`EmojiEntry`). The field stays on the Mongo doc for audit; it is simply no longer serialized — no current consumer.
+- **Reaction gate simplified to format-only** (supersedes §5 "Consistency & caching"): `pkg/emoji.Validator`, `CachedLookup`, `CustomEmojiLookup`, and history-service's `custom_emojis` existence check are deleted. `msg.react` now validates via `emoji.Canonicalize` alone (256-byte cap → NFC → `^[a-z0-9_+-]{1,32}$`); the `"unknown reaction shortcode"` error is retired. Rationale: the FE picker only offers shortcodes from the standard set plus the local site's `emoji.list`, so registration enforcement added a Mongo dependency + cache to the hot path without changing reachable behaviour. Consequence: upload/delete propagation delays no longer exist (no validator cache); a deleted shortcode remains technically reactable via direct API use — accepted, auditable. `emoji.IsStandard` is retained for the upload reserved-name check.

@@ -25,27 +25,18 @@ type reactFixture struct {
 	svc interface {
 		ReactMessage(c *natsrouter.Context, siteID string, req models.ReactMessageRequest) (*models.ReactMessageResponse, error)
 	}
-	msgs         *mocks.MockMessageRepository
-	subs         *mocks.MockSubscriptionRepository
-	pub          *mocks.MockEventPublisher
-	users        *mocks.MockUserStore
-	customEmojis *mocks.MockCustomEmojiStore
-	apps         *mocks.MockAppStore
+	msgs  *mocks.MockMessageRepository
+	subs  *mocks.MockSubscriptionRepository
+	pub   *mocks.MockEventPublisher
+	users *mocks.MockUserStore
+	apps  *mocks.MockAppStore
 }
 
 func newReactFixture(t *testing.T) reactFixture {
-	svc, msgs, subs, rooms, pub, _, users, customEmojis, apps := newServiceWithRoomMock(t)
+	svc, msgs, subs, rooms, pub, _, users, apps := newServiceWithRoomMock(t)
 	rooms.EXPECT().GetMinUserLastSeenAt(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 	rooms.EXPECT().GetRoomTimes(gomock.Any(), gomock.Any()).Return(defaultRoomLastMsgAt, defaultRoomCreatedAt, nil).AnyTimes()
-	return reactFixture{svc: svc, msgs: msgs, subs: subs, pub: pub, users: users, customEmojis: customEmojis, apps: apps}
-}
-
-// stubShortcodeKnown makes the validator's lookup return true for shortcode.
-func (f reactFixture) stubShortcodeKnown(shortcode string) {
-	f.customEmojis.EXPECT().
-		CustomEmojiExists(gomock.Any(), "site-test", shortcode).
-		Return(true, nil).
-		AnyTimes()
+	return reactFixture{svc: svc, msgs: msgs, subs: subs, pub: pub, users: users, apps: apps}
 }
 
 func aliceUser() model.User {
@@ -65,7 +56,6 @@ func aliceUserPtr() *model.User {
 
 func TestHistoryService_ReactMessage_NotSubscribed(t *testing.T) {
 	f := newReactFixture(t)
-	f.stubShortcodeKnown("thumbsup")
 	f.subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, false, nil)
 
 	resp, err := f.svc.ReactMessage(testContext(), "site-test",
@@ -74,14 +64,14 @@ func TestHistoryService_ReactMessage_NotSubscribed(t *testing.T) {
 	assertForbiddenErr(t, err, "not subscribed to room")
 }
 
-// Every pre-storage rejection path: empty fields, regex fail, unknown shortcode, validator-internal error.
+// Every pre-storage rejection path: empty fields, regex fail. Shortcode acceptance
+// is format-only (emoji.Canonicalize) — there is no registration lookup to fail.
 func TestHistoryService_ReactMessage_ValidationErrors(t *testing.T) {
 	cases := []struct {
 		name         string
 		shortcode    string
 		messageID    string
-		stubLookup   func(f reactFixture, shortcode string)
-		wantCategory errcode.Code // CodeBadRequest, CodeInternal
+		wantCategory errcode.Code // CodeBadRequest
 		wantMsg      string
 	}{
 		{
@@ -97,47 +87,28 @@ func TestHistoryService_ReactMessage_ValidationErrors(t *testing.T) {
 			wantMsg:      "shortcode is required",
 		},
 		{
-			name:      "invalid shortcode format",
+			name:      "invalid shortcode format (colons)",
 			shortcode: ":thumbsup:", messageID: "m1",
 			wantCategory: errcode.CodeBadRequest,
 			wantMsg:      "invalid reaction shortcode",
 		},
 		{
-			// well-formed, not in standard set, not registered → "unknown reaction shortcode"
-			name:      "unknown custom shortcode",
-			shortcode: "no_such_emoji", messageID: "m1",
-			stubLookup: func(f reactFixture, sc string) {
-				f.customEmojis.EXPECT().CustomEmojiExists(gomock.Any(), "site-test", sc).Return(false, nil)
-			},
+			name:      "invalid shortcode format (uppercase)",
+			shortcode: "ThumbsUp", messageID: "m1",
 			wantCategory: errcode.CodeBadRequest,
-			wantMsg:      "unknown reaction shortcode",
-		},
-		{
-			// thumbsup is now a standard emoji; use a custom shortcode to exercise the lookup error path
-			name:      "validator internal error (lookup down)",
-			shortcode: "acme_test", messageID: "m1",
-			stubLookup: func(f reactFixture, sc string) {
-				f.customEmojis.EXPECT().CustomEmojiExists(gomock.Any(), "site-test", sc).Return(false, errors.New("mongo down"))
-			},
-			wantCategory: errcode.CodeInternal,
-			wantMsg:      "validate shortcode",
+			wantMsg:      "invalid reaction shortcode",
 		},
 	}
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			f := newReactFixture(t)
-			if tc.stubLookup != nil {
-				tc.stubLookup(f, tc.shortcode)
-			}
 			resp, err := f.svc.ReactMessage(testContext(), "site-test",
 				models.ReactMessageRequest{MessageID: tc.messageID, Shortcode: tc.shortcode})
 			assert.Nil(t, resp)
 			switch tc.wantCategory {
 			case errcode.CodeBadRequest:
 				assertBadRequestErr(t, err, tc.wantMsg)
-			case errcode.CodeInternal:
-				assertInternalErr(t, err, tc.wantMsg)
 			default:
 				t.Fatalf("unhandled category: %s", tc.wantCategory)
 			}
@@ -145,9 +116,39 @@ func TestHistoryService_ReactMessage_ValidationErrors(t *testing.T) {
 	}
 }
 
+// TestHistoryService_ReactMessage_UnregisteredShortcode_Accepted covers the
+// behavior flip: a well-formed shortcode that is neither a standard emoji nor
+// registered in any site's custom_emojis collection is now accepted — format
+// validation (emoji.Canonicalize) is the only gate.
+func TestHistoryService_ReactMessage_UnregisteredShortcode_Accepted(t *testing.T) {
+	f := newReactFixture(t)
+	createdAt := joinTime.Add(1 * time.Minute)
+	f.subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, true, nil)
+	target := &models.Message{
+		MessageID: "m1",
+		RoomID:    "r1",
+		CreatedAt: createdAt,
+		Sender:    models.Participant{ID: "user-bob", Account: "bob"},
+	}
+	f.msgs.EXPECT().GetMessageByID(gomock.Any(), "m1").Return(target, nil)
+	f.users.EXPECT().FindUserByAccount(gomock.Any(), "u1").Return(aliceUserPtr(), nil)
+
+	expectedKey := models.ReactionKey{Emoji: "totally_unknown_emoji", UserAccount: "u1"}
+	f.msgs.EXPECT().
+		AddReaction(gomock.Any(), target, expectedKey, gomock.Any()).
+		Return(nil)
+	f.pub.EXPECT().Publish(gomock.Any(), subject.MsgCanonicalReacted("site-test"), gomock.Any(), gomock.Any()).Return(nil)
+
+	resp, err := f.svc.ReactMessage(testContext(), "site-test",
+		models.ReactMessageRequest{MessageID: "m1", Shortcode: "totally_unknown_emoji"})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	assert.Equal(t, model.ReactionActionAdded, resp.Action)
+	assert.Equal(t, "totally_unknown_emoji", resp.Shortcode)
+}
+
 func TestHistoryService_ReactMessage_MessageNotFound(t *testing.T) {
 	f := newReactFixture(t)
-	f.stubShortcodeKnown("thumbsup")
 	f.subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, true, nil)
 	f.msgs.EXPECT().GetMessageByID(gomock.Any(), "missing").Return(nil, nil)
 	resp, err := f.svc.ReactMessage(testContext(), "site-test",
@@ -158,7 +159,6 @@ func TestHistoryService_ReactMessage_MessageNotFound(t *testing.T) {
 
 func TestHistoryService_ReactMessage_AddOnDeleted_Blocked(t *testing.T) {
 	f := newReactFixture(t)
-	f.stubShortcodeKnown("thumbsup")
 	createdAt := joinTime.Add(1 * time.Minute)
 	f.subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, true, nil)
 	deleted := &models.Message{
@@ -180,7 +180,6 @@ func TestHistoryService_ReactMessage_AddOnDeleted_Blocked(t *testing.T) {
 
 func TestHistoryService_ReactMessage_RemoveOnDeleted_Allowed(t *testing.T) {
 	f := newReactFixture(t)
-	f.stubShortcodeKnown("thumbsup")
 	createdAt := joinTime.Add(1 * time.Minute)
 	f.subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, true, nil)
 	deleted := &models.Message{
@@ -213,7 +212,6 @@ func TestHistoryService_ReactMessage_RemoveOnDeleted_Allowed(t *testing.T) {
 
 func TestHistoryService_ReactMessage_Add_Success_PublishesEvent(t *testing.T) {
 	f := newReactFixture(t)
-	f.stubShortcodeKnown("thumbsup")
 	createdAt := joinTime.Add(1 * time.Minute)
 	f.subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, true, nil)
 	target := &models.Message{
@@ -275,7 +273,6 @@ func TestHistoryService_ReactMessage_Add_Success_PublishesEvent(t *testing.T) {
 
 func TestHistoryService_ReactMessage_Remove_Success(t *testing.T) {
 	f := newReactFixture(t)
-	f.stubShortcodeKnown("thumbsup")
 	createdAt := joinTime.Add(1 * time.Minute)
 	f.subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, true, nil)
 	target := &models.Message{
@@ -302,7 +299,6 @@ func TestHistoryService_ReactMessage_Remove_Success(t *testing.T) {
 
 func TestHistoryService_ReactMessage_UserLookupError(t *testing.T) {
 	f := newReactFixture(t)
-	f.stubShortcodeKnown("thumbsup")
 	createdAt := joinTime.Add(1 * time.Minute)
 	f.subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, true, nil)
 	target := &models.Message{
@@ -320,7 +316,6 @@ func TestHistoryService_ReactMessage_UserLookupError(t *testing.T) {
 
 func TestHistoryService_ReactMessage_UserNotFound(t *testing.T) {
 	f := newReactFixture(t)
-	f.stubShortcodeKnown("thumbsup")
 	createdAt := joinTime.Add(1 * time.Minute)
 	f.subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, true, nil)
 	target := &models.Message{
@@ -338,7 +333,6 @@ func TestHistoryService_ReactMessage_UserNotFound(t *testing.T) {
 
 func TestHistoryService_ReactMessage_AddStoreError(t *testing.T) {
 	f := newReactFixture(t)
-	f.stubShortcodeKnown("thumbsup")
 	createdAt := joinTime.Add(1 * time.Minute)
 	f.subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, true, nil)
 	target := &models.Message{
@@ -359,7 +353,6 @@ func TestHistoryService_ReactMessage_AddStoreError(t *testing.T) {
 
 func TestHistoryService_ReactMessage_RemoveStoreError(t *testing.T) {
 	f := newReactFixture(t)
-	f.stubShortcodeKnown("thumbsup")
 	createdAt := joinTime.Add(1 * time.Minute)
 	f.subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, true, nil)
 	target := &models.Message{
@@ -431,7 +424,6 @@ func TestHistoryService_ReactMessage_PublishesFullMessage(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			f := newReactFixture(t)
-			f.stubShortcodeKnown("thumbsup")
 			f.subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, true, nil)
 			f.msgs.EXPECT().GetMessageByID(gomock.Any(), tc.target.MessageID).Return(tc.target, nil)
 			f.users.EXPECT().FindUserByAccount(gomock.Any(), "u1").Return(aliceUserPtr(), nil)
@@ -482,28 +474,6 @@ func TestHistoryService_ReactMessage_PublishesFullMessage(t *testing.T) {
 	}
 }
 
-func TestHistoryService_ReactMessage_CustomEmojiFound_Success(t *testing.T) {
-	f := newReactFixture(t)
-	createdAt := joinTime.Add(1 * time.Minute)
-	f.customEmojis.EXPECT().CustomEmojiExists(gomock.Any(), "site-test", "acme_party").Return(true, nil)
-	f.subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, true, nil)
-	target := &models.Message{
-		MessageID: "m1", RoomID: "r1", CreatedAt: createdAt,
-		Sender: models.Participant{ID: "user-bob", Account: "bob"},
-	}
-	f.msgs.EXPECT().GetMessageByID(gomock.Any(), "m1").Return(target, nil)
-	f.users.EXPECT().FindUserByAccount(gomock.Any(), "u1").Return(aliceUserPtr(), nil)
-	f.msgs.EXPECT().
-		AddReaction(gomock.Any(), target, models.ReactionKey{Emoji: "acme_party", UserAccount: "u1"}, gomock.Any()).
-		Return(nil)
-	f.pub.EXPECT().Publish(gomock.Any(), subject.MsgCanonicalReacted("site-test"), gomock.Any(), gomock.Any()).Return(nil)
-
-	resp, err := f.svc.ReactMessage(testContext(), "site-test",
-		models.ReactMessageRequest{MessageID: "m1", Shortcode: "acme_party"})
-	require.NoError(t, err)
-	assert.Equal(t, model.ReactionActionAdded, resp.Action)
-}
-
 // --- Bot reactor displayName resolution (chat#460) ---
 
 func botUser() *model.User {
@@ -514,7 +484,6 @@ func botUser() *model.User {
 // decoded canonical event, so callers can assert Actor.DisplayName resolution.
 func reactAsFixture(t *testing.T, f reactFixture, actor *model.User) (*models.ReactMessageResponse, model.MessageEvent) {
 	t.Helper()
-	f.stubShortcodeKnown("thumbsup")
 	createdAt := joinTime.Add(1 * time.Minute)
 	f.subs.EXPECT().GetHistorySharedSince(gomock.Any(), actor.Account, "r1").Return(nil, true, nil)
 	target := &models.Message{

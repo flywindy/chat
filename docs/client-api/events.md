@@ -1,6 +1,6 @@
 > Request/Reply and Events views of the chat client API — see also [client-api.md](../client-api.md).
 
-<!-- last synced: client-api.md @ 3cabb454 -->
+<!-- last synced: client-api.md @ 117da0c -->
 
 # Chat — Server-to-Client Events
 

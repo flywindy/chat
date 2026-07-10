@@ -19,7 +19,6 @@ import (
 	"github.com/hmchangw/chat/history-service/internal/service"
 	"github.com/hmchangw/chat/pkg/atrest"
 	"github.com/hmchangw/chat/pkg/cassutil"
-	"github.com/hmchangw/chat/pkg/emoji"
 	"github.com/hmchangw/chat/pkg/health"
 	"github.com/hmchangw/chat/pkg/logctx"
 	"github.com/hmchangw/chat/pkg/mongoutil"
@@ -139,7 +138,6 @@ func main() {
 	roomRepo := mongorepo.NewRoomRepo(db)
 	threadRoomRepo := mongorepo.NewThreadRoomRepo(db)
 	threadSubRepo := mongorepo.NewThreadSubscriptionRepo(db)
-	customEmojiRepo := mongorepo.NewCustomEmojiRepo(db)
 	userStore := userstore.NewMongoStore(db.Collection("users"))
 	appRepo := mongorepo.NewAppRepo(db)
 
@@ -151,20 +149,6 @@ func main() {
 		slog.Error("ensure thread_subscriptions indexes failed", "error", err)
 		os.Exit(1)
 	}
-	if err := customEmojiRepo.EnsureIndexes(ctx); err != nil {
-		slog.Error("ensure custom_emojis indexes failed", "error", err)
-		os.Exit(1)
-	}
-
-	cachedEmojis, err := emoji.NewCachedLookup(customEmojiRepo, cfg.CustomEmojiCacheSize, cfg.CustomEmojiCacheTTL)
-	if err != nil {
-		slog.Error("init custom emoji cache failed", "error", err)
-		os.Exit(1)
-	}
-	slog.Info("custom emoji cache configured",
-		"size", cfg.CustomEmojiCacheSize,
-		"ttl", cfg.CustomEmojiCacheTTL,
-	)
 
 	// Front the per-request Mongo reads with process-local LRU+TTL caches.
 	var subSource service.SubscriptionRepository = subRepo
@@ -190,7 +174,7 @@ func main() {
 	}
 
 	pub := publisher.New(js)
-	svc := service.New(cassRepo, subSource, roomSource, pub, threadRoomRepo, threadSubRepo, userStore, cachedEmojis, appRepo, &cfg)
+	svc := service.New(cassRepo, subSource, roomSource, pub, threadRoomRepo, threadSubRepo, userStore, appRepo, &cfg)
 	router := natsrouter.New(nc, "history-service")
 	router.Use(natsrouter.Recovery())
 	// RequestID must precede any handler that reads request_id from ctx —

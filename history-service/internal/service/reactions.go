@@ -34,18 +34,12 @@ func (s *HistoryService) ReactMessage(c *natsrouter.Context, siteID string, req 
 		return nil, errcode.BadRequest("shortcode is required")
 	}
 
-	shortcode, err := s.emojiValidator.Validate(c, siteID, req.Shortcode)
+	shortcode, err := emoji.Canonicalize(req.Shortcode)
 	if err != nil {
-		if errors.Is(err, emoji.ErrInvalidShortcode) {
-			return nil, errcode.BadRequest("invalid reaction shortcode")
-		}
-		if errors.Is(err, emoji.ErrUnknownShortcode) {
-			return nil, errcode.BadRequest("unknown reaction shortcode")
-		}
-		return nil, fmt.Errorf("react: validate shortcode %q: %w", req.Shortcode, err)
+		return nil, errcode.BadRequest("invalid reaction shortcode")
 	}
-	// From here on, use the validator-returned shortcode (NFC-canonical) for
-	// any storage key or wire echo; req.Shortcode is raw input.
+	// From here on, use the canonicalized shortcode (NFC-canonical) for any
+	// storage key or wire echo; req.Shortcode is raw input.
 
 	if _, err := s.getAccessSince(c, account, roomID); err != nil {
 		return nil, err
