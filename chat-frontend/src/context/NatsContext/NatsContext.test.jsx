@@ -40,7 +40,7 @@ function lastGetAuthUrl() {
 const PORTAL_RESP = {
   account: 'alice',
   employeeId: 'E001',
-  authServiceUrl: 'http://auth.site-a',
+  baseUrl: 'http://site-a',
   natsUrl: 'ws://nats.site-a',
   siteId: 'site-a',
 }
@@ -65,8 +65,8 @@ describe('NatsProvider connect wiring', () => {
       await result.current.connect({ mode: 'sso', ssoToken: 'tok', account: 'alice' })
     })
 
-    expect(global.fetch).toHaveBeenNthCalledWith(1, 'http://localhost:8081/api/userInfo?account=alice')
-    expect(global.fetch).toHaveBeenNthCalledWith(2, 'http://auth.site-a/auth', expect.anything())
+    expect(global.fetch).toHaveBeenNthCalledWith(1, 'http://localhost:8085/api/userInfo?account=alice')
+    expect(global.fetch).toHaveBeenNthCalledWith(2, 'http://site-a/api/v1/auth', expect.anything())
     expect(setCredentials).toHaveBeenCalledWith({
       jwt: 'JWT123',
       seed: new Uint8Array([7]),
@@ -77,7 +77,7 @@ describe('NatsProvider connect wiring', () => {
       expect.objectContaining({ servers: 'ws://nats.site-a', authenticator: fakeAuthenticator }))
     await waitFor(() => expect(result.current.connected).toBe(true))
     expect(result.current.user.siteId).toBe('site-a')
-    expect(lastGetAuthUrl()()).toBe('http://auth.site-a')
+    expect(lastGetAuthUrl()()).toBe('http://site-a/api/v1')
   })
 
   it('drops a stale nc.closed() callback from a superseded connection (generation guard)', async () => {
@@ -132,7 +132,7 @@ describe('NatsProvider connect wiring', () => {
     await act(async () => {
       await result.current.connect({ mode: 'dev', account: 'alice' })
     })
-    expect(global.fetch).toHaveBeenNthCalledWith(1, 'http://localhost:8081/api/userInfo?account=alice')
+    expect(global.fetch).toHaveBeenNthCalledWith(1, 'http://localhost:8085/api/userInfo?account=alice')
     expect(setCredentials).toHaveBeenCalledWith(expect.objectContaining({ refreshable: false }))
   })
 
@@ -200,5 +200,59 @@ describe('NatsProvider connect wiring', () => {
     })
     await act(async () => { await result.current.disconnect() })
     expect(stop).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('NatsProvider session (bot/admin) connect', () => {
+  const BUNDLE = {
+    account: 'p_admin', siteId: 'site-a',
+    baseUrl: 'http://site-a', natsUrl: 'ws://nats.site-a', authToken: 'tok43',
+  }
+  beforeEach(() => {
+    setCredentials.mockReset()
+    stop.mockReset()
+    natsConnect.mockReset().mockResolvedValue({ closed: () => new Promise(() => {}), drain: async () => {} })
+    window.sessionStorage.clear()
+    global.fetch = vi.fn(async () => ({ ok: true, json: async () => ({ natsJwt: 'JWT9', user: { account: 'p_admin' } }) }))
+  })
+  afterEach(() => { window.sessionStorage.clear(); vi.restoreAllMocks() })
+
+  it('skips /api/userInfo, mints with authToken, persists the bundle', async () => {
+    const { result } = renderHook(() => useNats(), { wrapper })
+    await act(async () => { await result.current.connect({ mode: 'session', bundle: BUNDLE }) })
+
+    const urls = global.fetch.mock.calls.map((c) => String(c[0]))
+    expect(urls.some((u) => u.includes('/api/userInfo'))).toBe(false)
+    expect(global.fetch).toHaveBeenCalledWith('http://site-a/api/v1/auth', expect.anything())
+    const authBody = JSON.parse(global.fetch.mock.calls.at(-1)[1].body)
+    expect(authBody).toEqual({ authToken: 'tok43', natsPublicKey: 'UPUBKEY' })
+    expect(setCredentials).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: 'session', authToken: 'tok43', refreshable: true }))
+    await waitFor(() => expect(result.current.connected).toBe(true))
+    expect(result.current.user.siteId).toBe('site-a')
+    expect(JSON.parse(window.sessionStorage.getItem('chat.botSession'))).toEqual(BUNDLE)
+  })
+
+  it('disconnect() clears the stored bot session', async () => {
+    const { result } = renderHook(() => useNats(), { wrapper })
+    await act(async () => { await result.current.connect({ mode: 'session', bundle: BUNDLE }) })
+    expect(window.sessionStorage.getItem('chat.botSession')).not.toBeNull()
+    await act(async () => { await result.current.disconnect() })
+    expect(window.sessionStorage.getItem('chat.botSession')).toBeNull()
+  })
+
+  it('auto-reconnects on mount from a stored bot session', async () => {
+    window.sessionStorage.setItem('chat.botSession', JSON.stringify(BUNDLE))
+    const { result } = renderHook(() => useNats(), { wrapper })
+    await waitFor(() => expect(result.current.connected).toBe(true))
+    expect(global.fetch).toHaveBeenCalledWith('http://site-a/api/v1/auth', expect.anything())
+  })
+
+  it('clears a stored bot session and stays logged out when auto-reconnect fails', async () => {
+    window.sessionStorage.setItem('chat.botSession', JSON.stringify(BUNDLE))
+    natsConnect.mockRejectedValue(new Error('dial fail'))
+    const { result } = renderHook(() => useNats(), { wrapper })
+    await waitFor(() => expect(window.sessionStorage.getItem('chat.botSession')).toBeNull())
+    expect(result.current.connected).toBe(false)
   })
 })

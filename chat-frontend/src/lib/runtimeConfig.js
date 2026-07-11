@@ -4,7 +4,7 @@
 const runtime = (typeof window !== 'undefined' && window.__APP_CONFIG__) || {}
 
 export const PORTAL_URL =
-  runtime.PORTAL_URL || import.meta.env.VITE_PORTAL_URL || 'http://localhost:8081'
+  runtime.PORTAL_URL || import.meta.env.VITE_PORTAL_URL || 'http://localhost:8085'
 
 export const DEV_MODE =
   (runtime.DEV_MODE ?? import.meta.env.VITE_DEV_MODE ?? 'true') === 'true'

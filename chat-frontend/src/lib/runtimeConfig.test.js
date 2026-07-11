@@ -33,9 +33,9 @@ describe('runtimeConfig', () => {
     expect(OIDC_ISSUER_URL).toBe('https://custom-keycloak/realms/myrealm')
   })
 
-  it('PORTAL_URL defaults to localhost:8081', async () => {
+  it('PORTAL_URL defaults to localhost:8085', async () => {
     const { PORTAL_URL } = await import('./runtimeConfig.js')
-    expect(PORTAL_URL).toBe('http://localhost:8081')
+    expect(PORTAL_URL).toBe('http://localhost:8085')
   })
 
   it('PORTAL_URL reads from window.__APP_CONFIG__', async () => {
