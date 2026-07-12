@@ -69,14 +69,13 @@ func (s *HistoryService) ReactMessage(c *natsrouter.Context, siteID string, req 
 	}
 
 	reactedAt := time.Now().UTC()
-	var action pkgmodel.ReactionAction
+	action := pkgmodel.ReactionActionAdded
 	if alreadyReacted {
 		action = pkgmodel.ReactionActionRemoved
 		if err := s.msgWriter.RemoveReaction(c, msg, key); err != nil {
 			return nil, fmt.Errorf("react: remove %s shortcode %s: %w", req.MessageID, shortcode, err)
 		}
 	} else {
-		action = pkgmodel.ReactionActionAdded
 		reactor := models.ReactorInfo{
 			UserID:    actor.ID,
 			EngName:   actor.EngName,

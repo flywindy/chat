@@ -57,7 +57,7 @@ func (h *handler) HandleEmojiGet(c *gin.Context) {
 	}
 
 	h.setImageCacheHeaders(c, e.ETag)
-	if m := c.GetHeader("If-None-Match"); m != "" && m == e.ETag {
+	if c.GetHeader("If-None-Match") == e.ETag && e.ETag != "" {
 		c.Set("media_outcome", "304")
 		c.Status(http.StatusNotModified)
 		return

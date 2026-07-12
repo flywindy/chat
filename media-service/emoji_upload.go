@@ -37,6 +37,14 @@ func emojiImagePath(shortcode string) string {
 	return "/api/v1/emoji/" + shortcode
 }
 
+func isSupportedEmojiFormat(format string) bool {
+	return format == "png" || format == "jpeg" || format == "gif"
+}
+
+func errImageExceeds(maxDim int) error {
+	return errcode.BadRequest(fmt.Sprintf("image exceeds %dx%d", maxDim, maxDim))
+}
+
 // validateEmojiImage confirms raw is a PNG, JPEG, or GIF no larger than
 // maxDim on either axis and returns its content type (e.g. "image/png").
 //
@@ -50,20 +58,22 @@ func emojiImagePath(shortcode string) string {
 //     their header, so nothing larger than maxDim reaches storage. Animated
 //     GIFs decode as their first frame, which is what this check applies to.
 func validateEmojiImage(raw []byte, maxDim int) (string, error) {
+	const invalidImage = "body is not a valid PNG, JPEG, or GIF image"
+
 	cfg, cfgFormat, err := image.DecodeConfig(bytes.NewReader(raw))
-	if err != nil || (cfgFormat != "png" && cfgFormat != "jpeg" && cfgFormat != "gif") {
-		return "", errcode.BadRequest("body is not a valid PNG, JPEG, or GIF image")
+	if err != nil || !isSupportedEmojiFormat(cfgFormat) {
+		return "", errcode.BadRequest(invalidImage)
 	}
 	if cfg.Width > maxDim || cfg.Height > maxDim {
-		return "", errcode.BadRequest(fmt.Sprintf("image exceeds %dx%d", maxDim, maxDim))
+		return "", errImageExceeds(maxDim)
 	}
 
 	img, format, err := image.Decode(bytes.NewReader(raw))
-	if err != nil || (format != "png" && format != "jpeg" && format != "gif") {
-		return "", errcode.BadRequest("body is not a valid PNG, JPEG, or GIF image")
+	if err != nil || !isSupportedEmojiFormat(format) {
+		return "", errcode.BadRequest(invalidImage)
 	}
 	if b := img.Bounds(); b.Dx() > maxDim || b.Dy() > maxDim {
-		return "", errcode.BadRequest(fmt.Sprintf("image exceeds %dx%d", maxDim, maxDim))
+		return "", errImageExceeds(maxDim)
 	}
 	return "image/" + format, nil
 }
