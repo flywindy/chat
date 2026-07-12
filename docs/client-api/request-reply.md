@@ -28,12 +28,14 @@ For connection, auth, shared schemas, and error reference, see [../client-api.md
    - [GET /api/v1/file-upload/:fileId/:fileName](#get-apiv1file-uploadfileidfilename)
    - [Media Service — avatar endpoints](#media-service--avatar-endpoints)
    - [Media Service — emoji endpoints](#media-service--emoji-endpoints)
-2. [room-service (§3.1)](#room-service)
-3. [history-service (§3.2)](#history-service)
-4. [search-service (§3.3)](#search-service)
-5. [user-service (§3.4)](#user-service)
-6. [media-service (§3.5)](#media-service)
-7. [Publish operations](#publish-operations)
+2. [HTTP — Botplatform Service](#http--botplatform-service)
+3. [HTTP — Admin Service](#http--admin-service)
+4. [room-service (§3.1)](#room-service)
+5. [history-service (§3.2)](#history-service)
+6. [search-service (§3.3)](#search-service)
+7. [user-service (§3.4)](#user-service)
+8. [media-service (§3.5)](#media-service)
+9. [Publish operations](#publish-operations)
    - [Send Message](#send-message)
    - [Room Encryption Key Get](#room-encryption-key-get)
    - [Presence publishes](#presence-publishes)
@@ -182,6 +184,47 @@ Full decision logic, limits, and response schemas are in
 |---|---|---|
 | `GET /api/v1/emoji/:shortcode` | synchronous HTTP (image bytes, `304`, `307`, or `404`) | Serve a custom emoji image. Defaults to this cluster's site; optional lowercase `?siteid=` names a site — known remote `307`-redirects, unknown `404`. No generated default (unlike avatars). Cache-bust with `?v={etag}`. |
 | `PUT /api/v1/emoji/:shortcode` | synchronous HTTP | Upload (upsert) a custom emoji — PNG/JPEG/GIF, env-capped size/dimensions. Always writes to this cluster's site. ⚠️ Unauthenticated; optional `?uploader={account}` is audit-only. |
+
+**Emits:** `None — HTTP-only.`
+
+---
+
+## HTTP — Botplatform Service
+
+Password login and session-token validation for bot/admin accounts, served by
+`botplatform-service`. Any user may authenticate against any cluster (no home-site
+gate). Full schemas, examples, and error tables are in
+[../client-api.md §10](../client-api.md#10-botplatform-service); the portal-fronted
+login is [../client-api.md §2.5](../client-api.md#25-http--post-apiv1login-portal-service).
+
+| Endpoint | Reply | Purpose |
+|---|---|---|
+| `POST /api/v1/login` (portal-service) | synchronous HTTP | Web/mobile/desktop/admin password login; portal forwards to botplatform and returns a merged identity + home-site URL bundle (§2.5). |
+| `POST /api/v1/login` (botplatform, bot SDK direct) | synchronous HTTP | Direct bot-SDK login; legacy `{userId, authToken, me}` shape (§10.1). |
+| `POST /api/v1/auth/validate` | synchronous HTTP | Server-to-server session-token validation; returns the principal (§10.2). |
+
+**Emits:** `None — HTTP-only.`
+
+---
+
+## HTTP — Admin Service
+
+Account-management REST endpoints served by `admin-service`. All `/v1/admin/…`
+routes require an admin session token (`Authorization: Bearer <authToken>`,
+`admin` role + matching `siteId`). Full schemas, examples, and error tables are in
+[../client-api.md §9](../client-api.md#9-admin-service).
+
+| Endpoint | Reply | Purpose |
+|---|---|---|
+| `GET /v1/admin/users` | synchronous HTTP | List/search users (§9.1). |
+| `POST /v1/admin/users` | synchronous HTTP | Create a user (§9.2). |
+| `GET /v1/admin/users/:account` | synchronous HTTP | Get a user by account (§9.3). |
+| `PATCH /v1/admin/users/:account` | synchronous HTTP | Update a user by account (§9.4). |
+| `POST /v1/admin/users/:account/password` | synchronous HTTP | Admin set/reset a user's password by account (§9.5). |
+| `GET /v1/admin/sessions?account=<account>` | synchronous HTTP | List an account's active sessions (§9.6). |
+| `DELETE /v1/admin/sessions?account=<account>` | synchronous HTTP | Revoke all of an account's sessions (§9.7). |
+| `DELETE /v1/admin/sessions/:sessionId?account=<account>` | synchronous HTTP | Revoke a single session (§9.8). |
+| `GET /v1/admin/audit` | synchronous HTTP | List the audit log (§9.9). |
 
 **Emits:** `None — HTTP-only.`
 

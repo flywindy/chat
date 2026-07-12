@@ -38,7 +38,7 @@ describe('EditUserDialog', () => {
     fireEvent.click(screen.getByRole('checkbox', { name: /^admin$/i }))
     fireEvent.click(screen.getByRole('button', { name: /^save$/i }))
     await waitFor(() =>
-      expect(updateUser).toHaveBeenCalledWith('tok', 'u-1', { roles: ['user', 'admin'] }),
+      expect(updateUser).toHaveBeenCalledWith('tok', 'alice', { roles: ['user', 'admin'] }),
     )
     await waitFor(() => expect(onUpdated).toHaveBeenCalled())
   })
@@ -51,7 +51,7 @@ describe('EditUserDialog', () => {
     expect(updateUser).not.toHaveBeenCalled()
     expect(screen.getByText(/confirm/i)).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: /^save$/i }))
-    await waitFor(() => expect(updateUser).toHaveBeenCalledWith('tok', 'u-1', { deactivated: true }))
+    await waitFor(() => expect(updateUser).toHaveBeenCalledWith('tok', 'alice', { deactivated: true }))
   })
 
   it('does not require confirmation when reactivating an already-deactivated user', async () => {
@@ -66,7 +66,7 @@ describe('EditUserDialog', () => {
     )
     fireEvent.click(screen.getByRole('checkbox', { name: /^deactivated$/i }))
     fireEvent.click(screen.getByRole('button', { name: /^save$/i }))
-    await waitFor(() => expect(updateUser).toHaveBeenCalledWith('tok', 'u-1', { deactivated: false }))
+    await waitFor(() => expect(updateUser).toHaveBeenCalledWith('tok', 'alice', { deactivated: false }))
   })
 
   it('logs the admin out instead of showing a banner on invalid_token', async () => {

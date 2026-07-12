@@ -42,7 +42,7 @@ export default function EditUserDialog({ authToken, user, onClose, onUpdated }) 
     setSubmitting(true)
     setError(null)
     try {
-      await updateUser(authToken, user.id, patch)
+      await updateUser(authToken, user.account, patch)
       onUpdated()
     } catch (err) {
       const message = handleAdminError(err)

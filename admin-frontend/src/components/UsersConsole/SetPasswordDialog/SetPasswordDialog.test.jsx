@@ -57,7 +57,7 @@ describe('SetPasswordDialog', () => {
     fireEvent.click(screen.getByLabelText(/force change/i))
     fireEvent.click(screen.getByRole('button', { name: /set password/i }))
     await waitFor(() =>
-      expect(setPassword).toHaveBeenCalledWith('tok', 'u-1', {
+      expect(setPassword).toHaveBeenCalledWith('tok', 'alice', {
         newPassword: 'new1',
         requirePasswordChange: true,
       }),

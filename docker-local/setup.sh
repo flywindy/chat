@@ -134,10 +134,10 @@ chmod 600 "$ENV_FILE"
 # left editable afterwards (e.g. point at staging) — new vars are appended.
 if [ ! -f "$FRONTEND_ENV_FILE" ]; then
   cat > "$FRONTEND_ENV_FILE" <<EOF
-VITE_PORTAL_URL=http://localhost:8081
+VITE_PORTAL_URL=http://localhost:8085
 EOF
 elif ! grep -q '^VITE_PORTAL_URL=' "$FRONTEND_ENV_FILE"; then
-  printf '\nVITE_PORTAL_URL=http://localhost:8081\n' >> "$FRONTEND_ENV_FILE"
+  printf '\nVITE_PORTAL_URL=http://localhost:8085\n' >> "$FRONTEND_ENV_FILE"
 fi
 
 cat > "$NATS_CONF" <<EOF

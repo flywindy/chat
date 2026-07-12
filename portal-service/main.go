@@ -14,6 +14,7 @@ import (
 
 	"github.com/hmchangw/chat/pkg/ginutil"
 	"github.com/hmchangw/chat/pkg/mongoutil"
+	"github.com/hmchangw/chat/pkg/restyutil"
 	"github.com/hmchangw/chat/pkg/shutdown"
 )
 
@@ -23,28 +24,34 @@ import (
 const cacheRetryInterval = 30 * time.Second
 
 type config struct {
-	Port               string `env:"PORT"                         envDefault:"8081"`
+	Port               string `env:"PORT"                         envDefault:"8085"`
 	DevMode            bool   `env:"DEV_MODE"                     envDefault:"false"`
 	DevFallbackSiteID  string `env:"PORTAL_DEV_FALLBACK_SITE_ID"  envDefault:"site-local"`
 	DevFallbackNatsURL string `env:"PORTAL_DEV_FALLBACK_NATS_URL" envDefault:"ws://localhost:9222"`
 
 	// SiteURLs is the per-site URL registry: a JSON object mapping siteId to
-	// {authServiceUrl, baseUrl}. A single template can't express sites on
-	// different domains, so each site's URLs are listed explicitly.
+	// {baseUrl, natsUrl}. baseUrl is the unified backend origin the client hits
+	// for every /api/v1/* RPC (auth, media, etc.); natsUrl is the site's NATS
+	// endpoint. A single template can't express sites on different domains, so
+	// each site is listed explicitly.
 	SiteURLs string `env:"PORTAL_SITE_URLS,required"`
+
+	// BotplatformURL is the cluster-internal botplatform endpoint portal
+	// forwards password login to — a single Kubernetes DNS name (not per site).
+	BotplatformURL string `env:"BOTPLATFORM_URL" envDefault:"http://botplatform-service:8080"`
 
 	// APIVersion and OTELBaseURL are served to the frontend via GET /api/settings.
 	// Critical config — no envDefault, a deployment that forgets them fails fast.
 	APIVersion  string `env:"PORTAL_API_VERSION,notEmpty"`
 	OTELBaseURL string `env:"PORTAL_OTEL_BASE_URL,notEmpty"`
 
-	// CacheRefreshInterval drives how often the directory is reloaded (the
-	// hr_employee × users intersection via $lookup). Shorter than the daily HR
+	// CacheRefreshInterval drives how often the directory is reloaded (users
+	// left-joined with hr_employee via $lookup). Shorter than the daily HR
 	// cron so a newly provisioned user appears within a couple of hours.
 	CacheRefreshInterval time.Duration `env:"PORTAL_CACHE_REFRESH_INTERVAL" envDefault:"2h"`
 
 	MongoURI      string `env:"MONGO_URI,required"`
-	MongoDB       string `env:"MONGO_DB"       envDefault:"portal"`
+	MongoDB       string `env:"MONGO_DB"       envDefault:"chat"`
 	MongoUsername string `env:"MONGO_USERNAME" envDefault:""`
 	MongoPassword string `env:"MONGO_PASSWORD" envDefault:""`
 }
@@ -100,8 +107,10 @@ func run() error {
 
 	slog.Info("directory config", "sites", len(sites), "refreshInterval", cfg.CacheRefreshInterval.String())
 
+	rc := restyutil.New(cfg.BotplatformURL, restyutil.WithTimeout(5*time.Second))
 	handler := NewPortalHandler(cache, cfg.DevMode,
-		cfg.DevFallbackSiteID, cfg.DevFallbackNatsURL, sites, settings)
+		cfg.DevFallbackSiteID, cfg.DevFallbackNatsURL, sites, settings,
+		WithRestyClient(rc), WithDirectoryStore(store))
 	if cfg.DevMode {
 		slog.Info("dev mode enabled — unknown accounts fall back to the dev site")
 	}

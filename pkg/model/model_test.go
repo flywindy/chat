@@ -124,6 +124,13 @@ func TestUserJSON_WithStatus(t *testing.T) {
 	roundTrip(t, &u, &model.User{})
 }
 
+func TestUser_DeactivatedRoundTrip(t *testing.T) {
+	u := model.User{ID: "u1", Account: "alice", SiteID: "site-local", Deactivated: true}
+	got := &model.User{}
+	roundTrip(t, &u, got)
+	assert.True(t, got.Deactivated)
+}
+
 func TestRoomJSON(t *testing.T) {
 	lastMsg := time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
 	lastMention := time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)

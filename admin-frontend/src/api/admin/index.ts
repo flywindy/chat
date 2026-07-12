@@ -144,8 +144,8 @@ export async function listUsers(
 }
 
 /** @throws {AsyncJobError} on a non-2xx response (e.g. `user_not_found`). */
-export async function getUser(authToken: string, id: string): Promise<AdminUser> {
-  const raw = await adminFetch<UserViewWire>(authToken, 'GET', `/users/${id}`)
+export async function getUser(authToken: string, account: string): Promise<AdminUser> {
+  const raw = await adminFetch<UserViewWire>(authToken, 'GET', `/users/${encodeURIComponent(account)}`)
   return normalizeUser(raw)
 }
 
@@ -159,46 +159,55 @@ export async function createUser(authToken: string, input: CreateUserInput): Pro
  * follow up with `getUser` if you need the fresh record. */
 export async function updateUser(
   authToken: string,
-  id: string,
+  account: string,
   patch: UpdateUserPatch,
 ): Promise<void> {
-  await adminFetch<{ status: string }>(authToken, 'PATCH', `/users/${id}`, patch)
+  await adminFetch<{ status: string }>(authToken, 'PATCH', `/users/${encodeURIComponent(account)}`, patch)
 }
 
 /** Sets a new password; sent over the wire as `password` (admin-service's json tag). */
 export async function setPassword(
   authToken: string,
-  id: string,
+  account: string,
   input: SetPasswordInput,
 ): Promise<void> {
-  await adminFetch<{ status: string }>(authToken, 'POST', `/users/${id}/password`, {
-    password: input.newPassword,
-    requirePasswordChange: input.requirePasswordChange,
-  })
+  await adminFetch<{ status: string }>(
+    authToken,
+    'POST',
+    `/users/${encodeURIComponent(account)}/password`,
+    {
+      password: input.newPassword,
+      requirePasswordChange: input.requirePasswordChange,
+    },
+  )
 }
 
 /** @throws {AsyncJobError} on a non-2xx response. */
-export async function listSessions(authToken: string, id: string): Promise<AdminSession[]> {
+export async function listSessions(authToken: string, account: string): Promise<AdminSession[]> {
   const raw = await adminFetch<{ sessions: AdminSession[] }>(
     authToken,
     'GET',
-    `/users/${id}/sessions`,
+    `/sessions${buildQuery({ account })}`,
   )
   return raw.sessions
 }
 
 /** @throws {AsyncJobError} on a non-2xx response. */
-export async function revokeAllSessions(authToken: string, id: string): Promise<void> {
-  await adminFetch<{ status: string }>(authToken, 'DELETE', `/users/${id}/sessions`)
+export async function revokeAllSessions(authToken: string, account: string): Promise<void> {
+  await adminFetch<{ status: string }>(authToken, 'DELETE', `/sessions${buildQuery({ account })}`)
 }
 
 /** @throws {AsyncJobError} on a non-2xx response. */
 export async function revokeSession(
   authToken: string,
-  id: string,
+  account: string,
   sessionId: string,
 ): Promise<void> {
-  await adminFetch<{ status: string }>(authToken, 'DELETE', `/users/${id}/sessions/${sessionId}`)
+  await adminFetch<{ status: string }>(
+    authToken,
+    'DELETE',
+    `/sessions/${encodeURIComponent(sessionId)}${buildQuery({ account })}`,
+  )
 }
 
 /** @throws {AsyncJobError} on a non-2xx response. */

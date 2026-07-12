@@ -18,7 +18,7 @@ export default function SessionsDialog({ authToken, user, onClose }) {
     setLoading(true)
     setError(null)
     try {
-      const result = await listSessions(authToken, user.id)
+      const result = await listSessions(authToken, user.account)
       setSessions(result)
     } catch (err) {
       const message = handleAdminError(err)
@@ -26,7 +26,7 @@ export default function SessionsDialog({ authToken, user, onClose }) {
     } finally {
       setLoading(false)
     }
-  }, [authToken, user.id, handleAdminError])
+  }, [authToken, user.account, handleAdminError])
 
   useEffect(() => {
     refresh()
@@ -36,7 +36,7 @@ export default function SessionsDialog({ authToken, user, onClose }) {
     setBusy(true)
     setError(null)
     try {
-      await revokeSession(authToken, user.id, sessionId)
+      await revokeSession(authToken, user.account, sessionId)
       await refresh()
     } catch (err) {
       const message = handleAdminError(err)
@@ -50,7 +50,7 @@ export default function SessionsDialog({ authToken, user, onClose }) {
     setBusy(true)
     setError(null)
     try {
-      await revokeAllSessions(authToken, user.id)
+      await revokeAllSessions(authToken, user.account)
       await refresh()
     } catch (err) {
       const message = handleAdminError(err)

@@ -25,7 +25,7 @@ export default function SetPasswordDialog({ authToken, user, onClose, onUpdated 
     setError(null)
     setSubmitting(true)
     try {
-      await setPassword(authToken, user.id, { newPassword, requirePasswordChange })
+      await setPassword(authToken, user.account, { newPassword, requirePasswordChange })
       onUpdated()
     } catch (err) {
       const message = handleAdminError(err)

@@ -98,7 +98,7 @@ describe('listUsers', () => {
 describe('getUser', () => {
   afterEach(() => vi.unstubAllGlobals())
 
-  it('GETs /v1/admin/users/:id and returns the AdminUser', async () => {
+  it('GETs /v1/admin/users/:account and returns the AdminUser', async () => {
     const fetchMock = stubFetch(200, USER)
 
     const result = await getUser('tok', 'u-1')
@@ -168,7 +168,7 @@ describe('createUser', () => {
 describe('updateUser', () => {
   afterEach(() => vi.unstubAllGlobals())
 
-  it('PATCHes /v1/admin/users/:id with the partial patch body', async () => {
+  it('PATCHes /v1/admin/users/:account with the partial patch body', async () => {
     const fetchMock = stubFetch(200, { status: 'ok' })
 
     await updateUser('tok', 'u-1', { deactivated: true })
@@ -184,7 +184,7 @@ describe('updateUser', () => {
 describe('setPassword', () => {
   afterEach(() => vi.unstubAllGlobals())
 
-  it('POSTs /v1/admin/users/:id/password, mapping newPassword to the wire "password" field', async () => {
+  it('POSTs /v1/admin/users/:account/password, mapping newPassword to the wire "password" field', async () => {
     const fetchMock = stubFetch(200, { status: 'ok' })
 
     await setPassword('tok', 'u-1', { newPassword: 'newpw', requirePasswordChange: true })
@@ -208,14 +208,14 @@ describe('setPassword', () => {
 describe('listSessions', () => {
   afterEach(() => vi.unstubAllGlobals())
 
-  it('GETs /v1/admin/users/:id/sessions and unwraps the {sessions:[]} envelope to an array', async () => {
+  it('GETs /v1/admin/sessions?account=:account and unwraps the {sessions:[]} envelope to an array', async () => {
     const sessions = [{ id: 's-1', userId: 'u-1', siteId: 'site-1', issuedAt: 1234 }]
     const fetchMock = stubFetch(200, { sessions })
 
-    const result = await listSessions('tok', 'u-1')
+    const result = await listSessions('tok', 'alice')
 
     const [url, init] = fetchMock.mock.calls[0]
-    expect(url).toBe('http://localhost:8082/v1/admin/users/u-1/sessions')
+    expect(url).toBe('http://localhost:8082/v1/admin/sessions?account=alice')
     expect(init.method).toBe('GET')
     expect(result).toEqual(sessions)
   })
@@ -224,13 +224,13 @@ describe('listSessions', () => {
 describe('revokeAllSessions', () => {
   afterEach(() => vi.unstubAllGlobals())
 
-  it('DELETEs /v1/admin/users/:id/sessions', async () => {
+  it('DELETEs /v1/admin/sessions?account=:account', async () => {
     const fetchMock = stubFetch(200, { status: 'ok' })
 
-    await revokeAllSessions('tok', 'u-1')
+    await revokeAllSessions('tok', 'alice')
 
     const [url, init] = fetchMock.mock.calls[0]
-    expect(url).toBe('http://localhost:8082/v1/admin/users/u-1/sessions')
+    expect(url).toBe('http://localhost:8082/v1/admin/sessions?account=alice')
     expect(init.method).toBe('DELETE')
     expect(init.headers.Authorization).toBe('Bearer tok')
   })
@@ -239,13 +239,13 @@ describe('revokeAllSessions', () => {
 describe('revokeSession', () => {
   afterEach(() => vi.unstubAllGlobals())
 
-  it('DELETEs /v1/admin/users/:id/sessions/:sessionId', async () => {
+  it('DELETEs /v1/admin/sessions/:sessionId?account=:account', async () => {
     const fetchMock = stubFetch(200, { status: 'ok' })
 
-    await revokeSession('tok', 'u-1', 's-1')
+    await revokeSession('tok', 'alice', 's-1')
 
     const [url, init] = fetchMock.mock.calls[0]
-    expect(url).toBe('http://localhost:8082/v1/admin/users/u-1/sessions/s-1')
+    expect(url).toBe('http://localhost:8082/v1/admin/sessions/s-1?account=alice')
     expect(init.method).toBe('DELETE')
   })
 })

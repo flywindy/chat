@@ -5,8 +5,12 @@ services:
     build:
       context: ../..
       dockerfile: upload-service/deploy/Dockerfile
+    # Host 8086: 8085 now belongs to portal-service (unified-gateway migration,
+    # docker-local Task 5) — was a latent clash once both services ran
+    # together under compose.services.yaml. Container port (8080, used
+    # in-network by the Traefik gateway) is unchanged.
     ports:
-      - "8085:8080"
+      - "8086:8080"
     env_file:
       - path: ../../docker-local/.env
         required: false

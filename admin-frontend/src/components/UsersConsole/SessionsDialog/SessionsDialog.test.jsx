@@ -41,7 +41,7 @@ beforeEach(() => {
 describe('SessionsDialog', () => {
   it('lists sessions with a formatted issuedAt date', async () => {
     render(<SessionsDialog authToken="tok" user={USER} onClose={vi.fn()} />)
-    await waitFor(() => expect(listSessions).toHaveBeenCalledWith('tok', 'u-1'))
+    await waitFor(() => expect(listSessions).toHaveBeenCalledWith('tok', 'alice'))
     expect(await screen.findAllByRole('listitem')).toHaveLength(2)
     expect(screen.getByText(new Date(SESSIONS[0].issuedAt).toLocaleString())).toBeInTheDocument()
   })
@@ -51,7 +51,7 @@ describe('SessionsDialog', () => {
     await screen.findAllByRole('listitem')
     listSessions.mockResolvedValue([SESSIONS[1]])
     fireEvent.click(screen.getAllByRole('button', { name: /^revoke$/i })[0])
-    await waitFor(() => expect(revokeSession).toHaveBeenCalledWith('tok', 'u-1', 's-1'))
+    await waitFor(() => expect(revokeSession).toHaveBeenCalledWith('tok', 'alice', 's-1'))
     await waitFor(() => expect(listSessions).toHaveBeenCalledTimes(2))
   })
 
@@ -60,7 +60,7 @@ describe('SessionsDialog', () => {
     await screen.findAllByRole('listitem')
     listSessions.mockResolvedValue([])
     fireEvent.click(screen.getByRole('button', { name: /revoke all/i }))
-    await waitFor(() => expect(revokeAllSessions).toHaveBeenCalledWith('tok', 'u-1'))
+    await waitFor(() => expect(revokeAllSessions).toHaveBeenCalledWith('tok', 'alice'))
     await waitFor(() => expect(listSessions).toHaveBeenCalledTimes(2))
   })
 

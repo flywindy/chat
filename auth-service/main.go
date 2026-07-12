@@ -14,6 +14,7 @@ import (
 
 	"github.com/hmchangw/chat/pkg/ginutil"
 	pkgoidc "github.com/hmchangw/chat/pkg/oidc"
+	"github.com/hmchangw/chat/pkg/restyutil"
 	"github.com/hmchangw/chat/pkg/shutdown"
 )
 
@@ -29,6 +30,13 @@ type config struct {
 	OIDCIssuerURL string   `env:"OIDC_ISSUER_URL"`
 	OIDCAudiences []string `env:"OIDC_AUDIENCES" envSeparator:","`
 	TLSSkipVerify bool     `env:"TLS_SKIP_VERIFY"           envDefault:"false"`
+
+	// BotplatformURL is the LOCAL site's botplatform-service URL. When set,
+	// auth-service exposes the session-token branch of POST /auth: a client
+	// supplying authToken (instead of ssoToken) gets its session validated
+	// via botplatform's /api/v1/auth/validate and a role-scoped NATS JWT minted.
+	// Unset = session-token requests fail with 503 upstream_unavailable.
+	BotplatformURL string `env:"BOTPLATFORM_URL"`
 }
 
 func main() {
@@ -60,6 +68,12 @@ func run() error {
 	ctx := context.Background()
 
 	opts := []Option{WithJitter(cfg.NATSJWTExpiryJitter)}
+	if cfg.BotplatformURL != "" {
+		rc := restyutil.New("", restyutil.WithTimeout(5*time.Second))
+		opts = append(opts, WithBotplatformValidator(
+			newHTTPBotplatformValidator(rc, cfg.BotplatformURL)))
+		slog.Info("session-token branch enabled", "botplatform_url", cfg.BotplatformURL)
+	}
 
 	var handler *AuthHandler
 
