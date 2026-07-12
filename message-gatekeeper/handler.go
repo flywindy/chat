@@ -330,8 +330,10 @@ func (h *Handler) processMessage(ctx context.Context, account, roomID, siteID st
 		slog.DebugContext(ctx, "gatekeeper quote resolved", "request_id", req.RequestID, "quoted_id", req.QuotedParentMessageID, "unverified", quotedUnverified)
 	}
 
-	// The canonical event does NOT carry the thread parent's createdAt: each consumer
-	// re-resolves it from a store it owns, so a Cassandra outage NAK-replays downstream.
+	// Resolve the thread parent's createdAt server-side, best-effort: a fetch
+	// failure ships the event without the value (each consumer falls back to a
+	// store it owns), so a Cassandra outage never blocks the send path.
+	threadParentCreatedAt := h.resolveThreadParentCreatedAt(ctx, account, roomID, siteID, req, quotedSnapshot, quotedUnverified)
 
 	// Compose the sender's render-ready display name once at write time so every
 	// downstream consumer (notification-worker, future search-sync-worker) reads
@@ -357,17 +359,18 @@ func (h *Handler) processMessage(ctx context.Context, account, roomID, siteID st
 	tshow := req.TShow && req.ThreadParentMessageID != ""
 
 	msg := model.Message{
-		ID:                    req.ID,
-		RoomID:                roomID,
-		UserID:                sub.User.ID,
-		UserAccount:           sub.User.Account,
-		UserDisplayName:       displayName,
-		Content:               req.Content,
-		CreatedAt:             now,
-		ThreadParentMessageID: req.ThreadParentMessageID,
-		TShow:                 tshow,
-		QuotedParentMessage:   quotedSnapshot,
-		Attachments:           req.Attachments,
+		ID:                           req.ID,
+		RoomID:                       roomID,
+		UserID:                       sub.User.ID,
+		UserAccount:                  sub.User.Account,
+		UserDisplayName:              displayName,
+		Content:                      req.Content,
+		CreatedAt:                    now,
+		ThreadParentMessageID:        req.ThreadParentMessageID,
+		ThreadParentMessageCreatedAt: threadParentCreatedAt,
+		TShow:                        tshow,
+		QuotedParentMessage:          quotedSnapshot,
+		Attachments:                  req.Attachments,
 	}
 
 	// Publish MessageEvent to MESSAGES_CANONICAL. QuotedParentUnverified rides the
@@ -390,6 +393,41 @@ func (h *Handler) processMessage(ctx context.Context, account, roomID, siteID st
 		"phase", "published", "request_id", req.RequestID, "subject", canonicalSubj, "bytes", len(evtData))
 
 	return sonic.Marshal(msg)
+}
+
+// resolveThreadParentCreatedAt resolves the thread parent's createdAt
+// server-side, returning nil for a non-thread reply. It reuses the quote
+// snapshot's CreatedAt when the parent is also the verified quoted message
+// (the unverified placeholder carries a synthetic timestamp), otherwise
+// fetches by ID. Best-effort: any failure logs a warning and returns nil —
+// downstream consumers fall back to their own stores.
+func (h *Handler) resolveThreadParentCreatedAt(
+	ctx context.Context,
+	account, roomID, siteID string,
+	req *model.SendMessageRequest,
+	quotedSnapshot *cassandra.QuotedParentMessage,
+	quotedUnverified bool,
+) *time.Time {
+	if req.ThreadParentMessageID == "" {
+		return nil
+	}
+	if quotedSnapshot != nil && !quotedUnverified && req.QuotedParentMessageID == req.ThreadParentMessageID {
+		t := quotedSnapshot.CreatedAt.UTC()
+		return &t
+	}
+	if h.parentFetcher == nil {
+		return nil
+	}
+	snap, err := h.parentFetcher.FetchQuotedParent(ctx, account, roomID, siteID, req.ThreadParentMessageID)
+	if err != nil || snap == nil {
+		slog.WarnContext(ctx, "thread parent createdAt resolution failed, publishing without it",
+			"error", err,
+			"parent_message_id", req.ThreadParentMessageID,
+			"request_id", req.RequestID)
+		return nil
+	}
+	t := snap.CreatedAt.UTC()
+	return &t
 }
 
 // resolveQuoteSnapshot resolves the quoted parent into a snapshot, preferring the

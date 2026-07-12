@@ -1734,6 +1734,7 @@ Delivered on `chat.user.{account}.response.{requestId}`.
 | `content` | string | Message body as sent. |
 | `createdAt` | string | RFC 3339. Server-assigned send time. |
 | `threadParentMessageId` | string | Present only for a thread reply. |
+| `threadParentMessageCreatedAt` | string | Optional. RFC 3339. Server-resolved best-effort; absent when unresolved at send time. |
 | `tshow` | boolean | Present only when `tshow: true` on a thread reply. |
 | `quotedParentMessage` | [QuotedParentMessage](../client-api.md#quotedparentmessage) | Present only for a quoted send. |
 

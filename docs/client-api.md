@@ -5053,6 +5053,7 @@ Delivered on `chat.user.{account}.response.{requestId}`. The body is the persist
 | `content` | string | The message body, exactly as sent. |
 | `createdAt` | string | RFC 3339. Server-assigned send time (UTC). |
 | `threadParentMessageId` | string | Present only for a thread reply (echoes the request). |
+| `threadParentMessageCreatedAt` | string | Optional. RFC 3339. Server-resolved best-effort for a thread reply; absent when the parent's createdAt could not be resolved at send time. |
 | `tshow` | boolean | Present only when the request set `tshow: true` on a thread reply (absent when the flag was normalized away on a non-thread send). |
 | `quotedParentMessage` | [QuotedParentMessage](#quotedparentmessage) | Present only for a quoted send — the server-fetched snapshot of the quoted parent. |
 
@@ -5139,6 +5140,7 @@ The canonical broadcast message (distinct from the history [Message schema](#mes
 | `editedAt` | string | Optional. RFC 3339. |
 | `updatedAt` | string | Optional. RFC 3339. |
 | `threadParentMessageId` | string | Optional. Set for a thread reply. |
+| `threadParentMessageCreatedAt` | string | Optional. RFC 3339. Server-resolved best-effort; absent when unresolved at send time. |
 | `tshow` | boolean | Optional. Whether a thread reply is also shown in the parent room. |
 | `type` | string | Optional. System-message type when set. |
 | `sysMsgData` | string | Optional. Base64-encoded JSON payload for system messages; shape depends on `type` (see [System-message `sysMsgData` payloads](#system-message-sysmsgdata-payloads)). |

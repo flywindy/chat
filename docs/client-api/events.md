@@ -268,6 +268,7 @@ Cassandra projection).
 | `editedAt` | string | Optional. RFC 3339. |
 | `updatedAt` | string | Optional. RFC 3339. |
 | `threadParentMessageId` | string | Optional. Set for a thread reply. |
+| `threadParentMessageCreatedAt` | string | Optional. RFC 3339. Server-resolved best-effort; absent when unresolved at send time. |
 | `tshow` | boolean | Optional. Whether a thread reply is also shown in the parent room. |
 | `type` | string | Optional. System-message type. |
 | `sysMsgData` | string | Optional. Base64-encoded raw JSON payload for system messages. |

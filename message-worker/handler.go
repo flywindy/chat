@@ -113,17 +113,21 @@ func (h *Handler) processMessage(ctx context.Context, data []byte, isMigration b
 	}
 
 	if evt.Message.ThreadParentMessageID != "" {
-		// Resolve the parent's authoritative createdAt from messages_by_id (the event
-		// omits it). A miss → parent's canonical write hasn't landed → NAK for redelivery
-		// (bounded by MaxDeliver) rather than persist a null, corrupting partition coords.
-		createdAt, found, err := h.store.GetMessageCreatedAt(ctx, evt.Message.ThreadParentMessageID)
-		if err != nil {
-			return fmt.Errorf("resolve thread parent createdAt: %w", err)
+		// The gatekeeper resolves the parent's createdAt best-effort at send time
+		// and ships it on the event; trust it when present. Otherwise resolve
+		// authoritatively from messages_by_id. A miss → parent's canonical write
+		// hasn't landed → NAK for redelivery (bounded by MaxDeliver) rather than
+		// persist a null, corrupting partition coords.
+		if evt.Message.ThreadParentMessageCreatedAt == nil {
+			createdAt, found, err := h.store.GetMessageCreatedAt(ctx, evt.Message.ThreadParentMessageID)
+			if err != nil {
+				return fmt.Errorf("resolve thread parent createdAt: %w", err)
+			}
+			if !found {
+				return fmt.Errorf("thread parent %s not yet persisted in messages_by_id", evt.Message.ThreadParentMessageID)
+			}
+			evt.Message.ThreadParentMessageCreatedAt = &createdAt
 		}
-		if !found {
-			return fmt.Errorf("thread parent %s not yet persisted in messages_by_id", evt.Message.ThreadParentMessageID)
-		}
-		evt.Message.ThreadParentMessageCreatedAt = &createdAt
 
 		// Resolve (or create) the thread room first so we have the threadRoomID
 		// before persisting the message to Cassandra.
