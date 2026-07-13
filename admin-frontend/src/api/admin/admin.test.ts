@@ -209,7 +209,7 @@ describe('listSessions', () => {
   afterEach(() => vi.unstubAllGlobals())
 
   it('GETs /v1/admin/sessions?account=:account and unwraps the {sessions:[]} envelope to an array', async () => {
-    const sessions = [{ id: 's-1', userId: 'u-1', siteId: 'site-1', issuedAt: 1234 }]
+    const sessions = [{ id: 's-1', userId: 'u-1', account: 'alice', siteId: 'site-1', issuedAt: 1234 }]
     const fetchMock = stubFetch(200, { sessions })
 
     const result = await listSessions('tok', 'alice')
@@ -268,7 +268,7 @@ describe('listAudit', () => {
     const fetchMock = stubFetch(200, { entries, total: 1 })
 
     const result = await listAudit('tok', {
-      targetUserId: 'u-1',
+      targetAccount: 'alice',
       actor: 'root',
       action: 'user.create',
       page: 1,
@@ -278,7 +278,7 @@ describe('listAudit', () => {
     const [url, init] = fetchMock.mock.calls[0]
     const parsed = new URL(url)
     expect(parsed.pathname).toBe('/v1/admin/audit')
-    expect(parsed.searchParams.get('targetUserId')).toBe('u-1')
+    expect(parsed.searchParams.get('targetAccount')).toBe('alice')
     expect(parsed.searchParams.get('actor')).toBe('root')
     expect(parsed.searchParams.get('action')).toBe('user.create')
     expect(parsed.searchParams.get('page')).toBe('1')

@@ -80,21 +80,21 @@ describe('AuditView', () => {
     }
   })
 
-  it('re-queries with {targetUserId} once the debounce elapses when the target filter changes', async () => {
+  it('re-queries with {targetAccount} once the debounce elapses when the target filter changes', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     try {
       render(<AuditView />)
       await waitFor(() => expect(listAudit).toHaveBeenCalledWith('tok', { page: 1, limit: 20 }))
 
-      fireEvent.change(screen.getByLabelText(/filter by target user/i), {
-        target: { value: 'u-9' },
+      fireEvent.change(screen.getByLabelText(/filter by target account/i), {
+        target: { value: 'grace' },
       })
       await act(async () => {
         await vi.advanceTimersByTimeAsync(400)
       })
 
       await waitFor(() =>
-        expect(listAudit).toHaveBeenCalledWith('tok', { targetUserId: 'u-9', page: 1, limit: 20 }),
+        expect(listAudit).toHaveBeenCalledWith('tok', { targetAccount: 'grace', page: 1, limit: 20 }),
       )
     } finally {
       vi.useRealTimers()

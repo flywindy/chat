@@ -53,11 +53,13 @@ func (s *storeMongo) EnsureIndexes(ctx context.Context) error {
 		return fmt.Errorf("create admin_audit siteId_timestamp index: %w", err)
 	}
 
+	// Backs the ListAudit `targetAccount` filter (audit entries are keyed by
+	// account, not internal user ID).
 	_, err = s.adminAudit.Indexes().CreateOne(ctx, mongo.IndexModel{
-		Keys: bson.D{{Key: "targetUserId", Value: 1}, {Key: "timestamp", Value: -1}},
+		Keys: bson.D{{Key: "siteId", Value: 1}, {Key: "targetAccount", Value: 1}, {Key: "timestamp", Value: -1}},
 	})
 	if err != nil {
-		return fmt.Errorf("create admin_audit targetUserId_timestamp index: %w", err)
+		return fmt.Errorf("create admin_audit siteId_targetAccount_timestamp index: %w", err)
 	}
 
 	return nil
@@ -152,6 +154,21 @@ func (s *storeMongo) CreateUser(ctx context.Context, u *model.User) error {
 	return nil
 }
 
+// withTransaction runs fn inside a Mongo multi-document transaction. Requires a
+// replica-set deployment (production, and the RS container in integration tests).
+// The driver retries fn on transient transaction errors.
+func (s *storeMongo) withTransaction(ctx context.Context, fn func(ctx context.Context) error) error {
+	sess, err := s.users.Database().Client().StartSession()
+	if err != nil {
+		return fmt.Errorf("start session: %w", err)
+	}
+	defer sess.EndSession(ctx)
+	_, err = sess.WithTransaction(ctx, func(ctx context.Context) (any, error) {
+		return nil, fn(ctx)
+	})
+	return err
+}
+
 func (s *storeMongo) UpdateUser(ctx context.Context, siteID, account string, fields UserUpdate) error {
 	set := bson.M{}
 	if fields.EngName != nil {
@@ -169,7 +186,28 @@ func (s *storeMongo) UpdateUser(ctx context.Context, siteID, account string, fie
 	if len(set) == 0 {
 		return nil
 	}
-	result, err := s.users.UpdateOne(ctx, bson.M{"account": account, "siteId": siteID}, bson.M{"$set": set})
+
+	filter := bson.M{"account": account, "siteId": siteID}
+
+	// Deactivation must atomically revoke the account's sessions — a failed
+	// revoke after the deactivate would leave live tokens for a disabled user.
+	if fields.Deactivated != nil && *fields.Deactivated {
+		return s.withTransaction(ctx, func(ctx context.Context) error {
+			result, err := s.users.UpdateOne(ctx, filter, bson.M{"$set": set})
+			if err != nil {
+				return fmt.Errorf("update user: %w", err)
+			}
+			if result.MatchedCount == 0 {
+				return ErrUserNotFound
+			}
+			if _, err := s.sessions.DeleteMany(ctx, filter); err != nil {
+				return fmt.Errorf("revoke sessions: %w", err)
+			}
+			return nil
+		})
+	}
+
+	result, err := s.users.UpdateOne(ctx, filter, bson.M{"$set": set})
 	if err != nil {
 		return fmt.Errorf("update user: %w", err)
 	}
@@ -179,21 +217,29 @@ func (s *storeMongo) UpdateUser(ctx context.Context, siteID, account string, fie
 	return nil
 }
 
+// UpdateUserPassword replaces the bcrypt hash and atomically revokes every
+// session for the account, so a leaked old credential cannot keep a session
+// alive after the reset. Requires a replica set (see withTransaction).
 func (s *storeMongo) UpdateUserPassword(ctx context.Context, siteID, account, bcryptHash string, requireChange bool) error {
-	result, err := s.users.UpdateOne(ctx,
-		bson.M{"account": account, "siteId": siteID},
-		bson.M{"$set": bson.M{
-			"services.password.bcrypt": bcryptHash,
-			"requirePasswordChange":    requireChange,
-		}},
-	)
-	if err != nil {
-		return fmt.Errorf("update user password: %w", err)
-	}
-	if result.MatchedCount == 0 {
-		return ErrUserNotFound
-	}
-	return nil
+	filter := bson.M{"account": account, "siteId": siteID}
+	return s.withTransaction(ctx, func(ctx context.Context) error {
+		result, err := s.users.UpdateOne(ctx, filter,
+			bson.M{"$set": bson.M{
+				"services.password.bcrypt": bcryptHash,
+				"requirePasswordChange":    requireChange,
+			}},
+		)
+		if err != nil {
+			return fmt.Errorf("update user password: %w", err)
+		}
+		if result.MatchedCount == 0 {
+			return ErrUserNotFound
+		}
+		if _, err := s.sessions.DeleteMany(ctx, filter); err != nil {
+			return fmt.Errorf("revoke sessions: %w", err)
+		}
+		return nil
+	})
 }
 
 // sessionProjection returns all session fields.
@@ -285,8 +331,8 @@ func (s *storeMongo) AppendAudit(ctx context.Context, e *AuditEntry) error {
 // filters on targetUserId, actorAccount, and action.
 func (s *storeMongo) ListAudit(ctx context.Context, siteID string, f AuditFilter, page, limit int) ([]AuditEntry, int64, error) {
 	filter := bson.M{"siteId": siteID}
-	if f.TargetUserID != "" {
-		filter["targetUserId"] = f.TargetUserID
+	if f.TargetAccount != "" {
+		filter["targetAccount"] = f.TargetAccount
 	}
 	if f.Actor != "" {
 		filter["actorAccount"] = f.Actor

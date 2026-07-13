@@ -46,9 +46,9 @@ type AuditEntry struct {
 
 // AuditFilter narrows an audit listing; zero-value fields are ignored.
 type AuditFilter struct {
-	TargetUserID string
-	Actor        string
-	Action       string
+	TargetAccount string
+	Actor         string
+	Action        string
 }
 
 //go:generate mockgen -source=store.go -destination=mock_store_test.go -package=main

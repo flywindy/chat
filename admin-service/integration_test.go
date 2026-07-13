@@ -19,7 +19,7 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	testutil.RunTestsWithPrewarm(m, testutil.EnsureMongo)
+	testutil.RunTestsWithPrewarm(m, testutil.EnsureMongoReplicaSet)
 }
 
 // seedSession inserts a session row directly into the sessions collection.
@@ -34,7 +34,7 @@ func seedSession(t *testing.T, db *mongo.Database, sess Session) {
 // -------------------------------------------------------------------------
 
 func TestIntegration_CreateUser_And_UniqueIndex(t *testing.T) {
-	db := testutil.MongoDB(t, "adminsvc")
+	db := testutil.MongoDBReplicaSet(t, "adminsvc")
 	st := newStoreMongo(db)
 	require.NoError(t, st.EnsureIndexes(context.Background()))
 
@@ -61,7 +61,7 @@ func TestIntegration_CreateUser_And_UniqueIndex(t *testing.T) {
 // -------------------------------------------------------------------------
 
 func TestIntegration_SearchUsers(t *testing.T) {
-	db := testutil.MongoDB(t, "adminsvc")
+	db := testutil.MongoDBReplicaSet(t, "adminsvc")
 	st := newStoreMongo(db)
 	require.NoError(t, st.EnsureIndexes(context.Background()))
 
@@ -131,7 +131,7 @@ func TestIntegration_SearchUsers(t *testing.T) {
 // -------------------------------------------------------------------------
 
 func TestIntegration_GetUserByAccount(t *testing.T) {
-	db := testutil.MongoDB(t, "adminsvc")
+	db := testutil.MongoDBReplicaSet(t, "adminsvc")
 	st := newStoreMongo(db)
 	require.NoError(t, st.EnsureIndexes(context.Background()))
 
@@ -166,7 +166,7 @@ func TestIntegration_GetUserByAccount(t *testing.T) {
 // -------------------------------------------------------------------------
 
 func TestIntegration_UpdateUser(t *testing.T) {
-	db := testutil.MongoDB(t, "adminsvc")
+	db := testutil.MongoDBReplicaSet(t, "adminsvc")
 	st := newStoreMongo(db)
 	require.NoError(t, st.EnsureIndexes(context.Background()))
 
@@ -189,7 +189,9 @@ func TestIntegration_UpdateUser(t *testing.T) {
 		assert.Equal(t, []model.UserRole{model.UserRoleAdmin}, got.Roles)
 	})
 
-	t.Run("update deactivated", func(t *testing.T) {
+	t.Run("update deactivated revokes sessions atomically", func(t *testing.T) {
+		seedSession(t, db, Session{ID: "eve-sess-1", UserID: u.ID, Account: u.Account, SiteID: "site-a", IssuedAt: 1})
+
 		deact := true
 		err := st.UpdateUser(ctx, "site-a", u.Account, UserUpdate{Deactivated: &deact})
 		require.NoError(t, err)
@@ -197,6 +199,10 @@ func TestIntegration_UpdateUser(t *testing.T) {
 		got, err := st.GetUserByAccount(ctx, "site-a", u.Account)
 		require.NoError(t, err)
 		assert.True(t, got.Deactivated)
+
+		sessions, err := st.ListSessionsByAccount(ctx, "site-a", u.Account)
+		require.NoError(t, err)
+		assert.Empty(t, sessions, "deactivation must revoke the account's sessions in the same transaction")
 	})
 
 	t.Run("update names", func(t *testing.T) {
@@ -228,7 +234,7 @@ func TestIntegration_UpdateUser(t *testing.T) {
 // -------------------------------------------------------------------------
 
 func TestIntegration_UpdateUserPassword(t *testing.T) {
-	db := testutil.MongoDB(t, "adminsvc")
+	db := testutil.MongoDBReplicaSet(t, "adminsvc")
 	st := newStoreMongo(db)
 	require.NoError(t, st.EnsureIndexes(context.Background()))
 
@@ -276,6 +282,18 @@ func TestIntegration_UpdateUserPassword(t *testing.T) {
 		assert.True(t, raw.RequirePasswordChange)
 	})
 
+	t.Run("revokes the account's sessions atomically", func(t *testing.T) {
+		seedSession(t, db, Session{ID: "frank-sess-1", UserID: u.ID, Account: u.Account, SiteID: "site-a", IssuedAt: 1})
+		seedSession(t, db, Session{ID: "frank-sess-2", UserID: u.ID, Account: u.Account, SiteID: "site-a", IssuedAt: 2})
+
+		err := st.UpdateUserPassword(ctx, "site-a", u.Account, "$2a$04$rotatedhash", false)
+		require.NoError(t, err)
+
+		sessions, err := st.ListSessionsByAccount(ctx, "site-a", u.Account)
+		require.NoError(t, err)
+		assert.Empty(t, sessions, "password reset must revoke all of the account's sessions in the same transaction")
+	})
+
 	t.Run("nonexistent id returns ErrUserNotFound", func(t *testing.T) {
 		err := st.UpdateUserPassword(ctx, "site-a", "nonexistent-account", "$2a$04$fakehash", false)
 		assert.ErrorIs(t, err, ErrUserNotFound)
@@ -287,7 +305,7 @@ func TestIntegration_UpdateUserPassword(t *testing.T) {
 // -------------------------------------------------------------------------
 
 func TestIntegration_Sessions(t *testing.T) {
-	db := testutil.MongoDB(t, "adminsvc")
+	db := testutil.MongoDBReplicaSet(t, "adminsvc")
 	st := newStoreMongo(db)
 	require.NoError(t, st.EnsureIndexes(context.Background()))
 
@@ -397,19 +415,19 @@ func TestIntegration_Sessions(t *testing.T) {
 // -------------------------------------------------------------------------
 
 func TestIntegration_Audit(t *testing.T) {
-	db := testutil.MongoDB(t, "adminsvc")
+	db := testutil.MongoDBReplicaSet(t, "adminsvc")
 	st := newStoreMongo(db)
 	require.NoError(t, st.EnsureIndexes(context.Background()))
 
 	ctx := context.Background()
-	userID := idgen.GenerateUUIDv7()
+	targetAccount := "grace"
 	now := time.Now().UTC().UnixMilli()
 
 	entries := []AuditEntry{
-		{ID: idgen.GenerateUUIDv7(), ActorUserID: "admin1", ActorAccount: "p_alice", Action: "user.create", TargetUserID: userID, SiteID: "site-a", Timestamp: now - 3000},
-		{ID: idgen.GenerateUUIDv7(), ActorUserID: "admin1", ActorAccount: "p_alice", Action: "user.update", TargetUserID: userID, SiteID: "site-a", Timestamp: now - 2000},
-		{ID: idgen.GenerateUUIDv7(), ActorUserID: "admin2", ActorAccount: "p_bob", Action: "user.create", TargetUserID: "other-user", SiteID: "site-a", Timestamp: now - 1000},
-		{ID: idgen.GenerateUUIDv7(), ActorUserID: "admin1", ActorAccount: "p_alice", Action: "user.create", TargetUserID: userID, SiteID: "site-b", Timestamp: now},
+		{ID: idgen.GenerateUUIDv7(), ActorUserID: "admin1", ActorAccount: "p_alice", Action: "user.create", TargetAccount: targetAccount, SiteID: "site-a", Timestamp: now - 3000},
+		{ID: idgen.GenerateUUIDv7(), ActorUserID: "admin1", ActorAccount: "p_alice", Action: "user.update", TargetAccount: targetAccount, SiteID: "site-a", Timestamp: now - 2000},
+		{ID: idgen.GenerateUUIDv7(), ActorUserID: "admin2", ActorAccount: "p_bob", Action: "user.create", TargetAccount: "other-account", SiteID: "site-a", Timestamp: now - 1000},
+		{ID: idgen.GenerateUUIDv7(), ActorUserID: "admin1", ActorAccount: "p_alice", Action: "user.create", TargetAccount: targetAccount, SiteID: "site-b", Timestamp: now},
 	}
 	for i := range entries {
 		require.NoError(t, st.AppendAudit(ctx, &entries[i]))
@@ -434,12 +452,12 @@ func TestIntegration_Audit(t *testing.T) {
 		assert.Greater(t, results[1].Timestamp, results[2].Timestamp)
 	})
 
-	t.Run("filter by targetUserId", func(t *testing.T) {
-		results, total, err := st.ListAudit(ctx, "site-a", AuditFilter{TargetUserID: userID}, 1, 10)
+	t.Run("filter by targetAccount", func(t *testing.T) {
+		results, total, err := st.ListAudit(ctx, "site-a", AuditFilter{TargetAccount: targetAccount}, 1, 10)
 		require.NoError(t, err)
 		assert.Equal(t, int64(2), total)
 		for _, e := range results {
-			assert.Equal(t, userID, e.TargetUserID)
+			assert.Equal(t, targetAccount, e.TargetAccount)
 		}
 	})
 
@@ -484,7 +502,7 @@ func TestIntegration_Audit(t *testing.T) {
 // -------------------------------------------------------------------------
 
 func TestIntegration_EnsureIndexes_Idempotent(t *testing.T) {
-	db := testutil.MongoDB(t, "adminsvc")
+	db := testutil.MongoDBReplicaSet(t, "adminsvc")
 	st := newStoreMongo(db)
 
 	// First call.

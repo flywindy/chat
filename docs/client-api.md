@@ -6179,7 +6179,7 @@ Replaces the user's password and revokes all active sessions (forcing re-login).
 **Endpoint:** `GET /v1/admin/sessions?account=<account>`
 **Auth:** `Authorization: Bearer <authToken>`, admin role + same-site required.
 
-Lists all active sessions for the given account (required `account` query parameter). Returns only the projected [SessionView](#sessionview) fields — account and roles are excluded from the response. A missing `account` query parameter returns `400 missing_fields`.
+Lists all active sessions for the given account (required `account` query parameter). Returns only the projected [SessionView](#sessionview) fields — roles are excluded from the response. A missing `account` query parameter returns `400 missing_fields`.
 
 #### Success response
 
@@ -6195,6 +6195,7 @@ Lists all active sessions for the given account (required `account` query parame
     {
       "id": "sess_01970a4f8c2d7c9a",
       "userId": "01970a4f8c2d7c9a01970a4f8c2d7c9a",
+      "account": "bob",
       "siteId": "site-a",
       "issuedAt": 1746518400000
     }
@@ -6243,7 +6244,7 @@ Returns audit entries for the admin's site, newest-first, with optional filterin
 
 | Parameter | Type | Notes |
 |---|---|---|
-| `targetUserId` | string | Optional. Filter by target user internal ID. |
+| `targetAccount` | string | Optional. Filter by the affected user's account. |
 | `actor` | string | Optional. Filter by actor account. |
 | `action` | string | Optional. Filter by action string (e.g. `user.create`, `session.revoke_all`). |
 | `page` | integer | Page number, 1-based. Defaults to `1`. |
@@ -6266,7 +6267,6 @@ Returns audit entries for the admin's site, newest-first, with optional filterin
       "actorUserId": "01970a4f8c2d7c9a01970a4f8c2d7c9a",
       "actorAccount": "alice",
       "action": "user.create",
-      "targetUserId": "01970a4f8c2d7c9b01970a4f8c2d7c9b",
       "targetAccount": "bob",
       "details": { "account": "bob" },
       "siteId": "site-a",
@@ -6309,6 +6309,7 @@ Projected user record returned by all admin user endpoints. The `services` / bcr
 |---|---|---|
 | `id` | string | Session ID. |
 | `userId` | string | Internal user ID. |
+| `account` | string | Account the session belongs to. |
 | `siteId` | string | Site the session was issued for. |
 | `issuedAt` | integer | Epoch ms (UTC) when the session was created. |
 

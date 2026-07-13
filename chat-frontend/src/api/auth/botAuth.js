@@ -26,17 +26,3 @@ export async function botLogin({ username, password }) {
   if (!resp.ok) await throwHttpEnvelopeError(resp, 'Login failed')
   return resp.json()
 }
-
-/**
- * Password rotation against the home-site botplatform; caller's session stays valid,
- * server revokes all other sessions.
- * @param {{baseUrl: string, authToken: string, oldPassword: string, newPassword: string}} args
- */
-export async function changePassword({ baseUrl, authToken, oldPassword, newPassword }) {
-  const resp = await fetch(`${baseUrl}/api/v1/password/change`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
-    body: JSON.stringify({ oldPassword, newPassword }),
-  })
-  if (!resp.ok) await throwHttpEnvelopeError(resp, 'Password change failed')
-}

@@ -2,11 +2,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 
 vi.mock('@/context/NatsContext', () => ({ useNats: vi.fn() }))
-vi.mock('@/api/auth/botAuth', () => ({ botLogin: vi.fn(), changePassword: vi.fn() }))
+vi.mock('@/api/auth/botAuth', () => ({ botLogin: vi.fn() }))
 
 import BotLoginPage from './BotLoginPage'
 import { useNats } from '@/context/NatsContext'
-import { botLogin, changePassword } from '@/api/auth/botAuth'
+import { botLogin } from '@/api/auth/botAuth'
 
 const BUNDLE = {
   userId: 'u17', authToken: 'tok43', account: 'p_admin', siteId: 'site-a',
@@ -47,32 +47,15 @@ describe('BotLoginPage', () => {
     expect(connect).not.toHaveBeenCalled()
   })
 
-  it('routes to the change-password step when requirePasswordChange is true', async () => {
-    botLogin.mockResolvedValue({ ...BUNDLE, requirePasswordChange: true })
-    render(<BotLoginPage />)
-    login()
-    await waitFor(() => expect(screen.getByRole('button', { name: /change password/i })).toBeInTheDocument())
-  })
-
-  it('changes the password then connects, carrying the same authToken', async () => {
-    botLogin.mockResolvedValue({ ...BUNDLE, requirePasswordChange: true })
-    changePassword.mockResolvedValue(undefined)
+  it('connects the session even when requirePasswordChange is true (rotation moved to the registration web)', async () => {
+    const bundle = { ...BUNDLE, requirePasswordChange: true }
+    botLogin.mockResolvedValue(bundle)
     const connect = vi.fn().mockResolvedValue(undefined)
     useNats.mockReturnValue({ connect })
     render(<BotLoginPage />)
     login()
-    await waitFor(() => screen.getByLabelText(/current password/i))
-
-    fireEvent.change(screen.getByLabelText(/current password/i), { target: { value: 'pw' } })
-    fireEvent.change(screen.getByLabelText(/^new password/i), { target: { value: 'new9' } })
-    fireEvent.change(screen.getByLabelText(/confirm/i), { target: { value: 'new9' } })
-    fireEvent.click(screen.getByRole('button', { name: /change password/i }))
-
-    await waitFor(() => expect(changePassword).toHaveBeenCalledWith({
-      baseUrl: 'http://site-a', authToken: 'tok43', oldPassword: 'pw', newPassword: 'new9',
-    }))
-    await waitFor(() => expect(connect).toHaveBeenCalledWith({
-      mode: 'session', bundle: { ...BUNDLE, requirePasswordChange: false },
-    }))
+    await waitFor(() => expect(connect).toHaveBeenCalledWith({ mode: 'session', bundle }))
+    // No change-password step is rendered.
+    expect(screen.queryByRole('button', { name: /change password/i })).not.toBeInTheDocument()
   })
 })

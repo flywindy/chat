@@ -546,19 +546,20 @@ func TestHandler_updateUser(t *testing.T) {
 			wantStatus: http.StatusOK,
 		},
 		{
-			name:   "deactivating user – revokes sessions",
+			name:   "deactivating user – UpdateUser applies the flag (store revokes atomically)",
 			userID: "u2",
 			body: map[string]any{
 				"deactivated": true,
 			},
 			setupMock: func(m *MockAdminStore) {
+				// UpdateUser revokes sessions atomically with the update, so the
+				// handler makes no separate DeleteSessionsByAccount call.
 				m.EXPECT().UpdateUser(gomock.Any(), "site-A", "u2", gomock.Any()).
 					DoAndReturn(func(_ context.Context, siteID, id string, u UserUpdate) error {
 						require.NotNil(t, u.Deactivated)
 						assert.True(t, *u.Deactivated)
 						return nil
 					})
-				m.EXPECT().DeleteSessionsByAccount(gomock.Any(), "site-A", "u2").Return(int64(1), nil)
 				m.EXPECT().AppendAudit(gomock.Any(), gomock.Any()).
 					DoAndReturn(func(_ context.Context, e *AuditEntry) error {
 						assert.Equal(t, "user.update", e.Action)
@@ -600,13 +601,12 @@ func TestHandler_updateUser(t *testing.T) {
 			},
 			setupMock: func(m *MockAdminStore) {
 				m.EXPECT().UpdateUser(gomock.Any(), "site-A", "no-such", gomock.Any()).Return(ErrUserNotFound)
-				// DeleteSessionsByAccount must NOT be called when user is not found
 			},
 			wantStatus: http.StatusNotFound,
 			wantReason: string(errcode.AdminUserNotFound),
 		},
 		{
-			name:   "deactivated=false – no session revocation",
+			name:   "deactivated=false – plain update",
 			userID: "u5",
 			body: map[string]any{
 				"deactivated": false,
@@ -614,7 +614,6 @@ func TestHandler_updateUser(t *testing.T) {
 			setupMock: func(m *MockAdminStore) {
 				m.EXPECT().UpdateUser(gomock.Any(), "site-A", "u5", gomock.Any()).Return(nil)
 				m.EXPECT().AppendAudit(gomock.Any(), gomock.Any()).Return(nil)
-				// DeleteSessionsByAccount must NOT be called
 			},
 			wantStatus: http.StatusOK,
 		},
@@ -632,7 +631,6 @@ func TestHandler_updateUser(t *testing.T) {
 			}(),
 			setupMock: func(m *MockAdminStore) {
 				m.EXPECT().UpdateUser(gomock.Any(), "site-A", "u6", gomock.Any()).Return(nil)
-				m.EXPECT().DeleteSessionsByAccount(gomock.Any(), "site-A", "u6").Return(int64(2), nil)
 				m.EXPECT().AppendAudit(gomock.Any(), gomock.Any()).Return(nil)
 			},
 			wantStatus: http.StatusOK,
@@ -720,12 +718,12 @@ func TestHandler_listSessions(t *testing.T) {
 				s := sessions[0].(map[string]any)
 				assert.Equal(t, "sess-abc", s["id"], "id must be present")
 				assert.Equal(t, "u1", s["userId"], "userId must be present")
+				assert.Equal(t, "alice", s["account"], "account must be present")
 				assert.Equal(t, "site-A", s["siteId"], "siteId must be present")
 				assert.Equal(t, float64(1700000000000), s["issuedAt"], "issuedAt must be present")
 
-				// Ensure no extra secret fields
+				// Roles stay out of the wire projection.
 				assert.NotContains(t, s, "roles", "roles must not be exposed")
-				assert.NotContains(t, s, "account", "account must not be exposed")
 				rawStr := strings.ToLower(string(raw))
 				assert.NotContains(t, rawStr, "\"roles\"", "roles must not appear in response")
 			},
@@ -922,10 +920,10 @@ func TestHandler_listAudit(t *testing.T) {
 	}{
 		{
 			name:  "passes siteID, filters, and paging to store",
-			query: "?targetUserId=u1&actor=alice&action=user.create&page=2&limit=5",
+			query: "?targetAccount=alice&actor=p_bob&action=user.create&page=2&limit=5",
 			setupMock: func(m *MockAdminStore) {
 				m.EXPECT().ListAudit(gomock.Any(), "site-A",
-					AuditFilter{TargetUserID: "u1", Actor: "alice", Action: "user.create"},
+					AuditFilter{TargetAccount: "alice", Actor: "p_bob", Action: "user.create"},
 					2, 5,
 				).Return([]AuditEntry{
 					{ID: "e1", Action: "user.create", ActorUserID: "admin-user-id", SiteID: "site-A", Timestamp: 1700000002000},
@@ -1057,10 +1055,12 @@ func TestHandler_setPassword(t *testing.T) {
 		wantReason string
 	}{
 		{
-			name:   "happy path – hashes, sets requireChange, revokes sessions",
+			name:   "happy path – hashes, sets requireChange (store revokes atomically)",
 			userID: "u1",
 			body:   map[string]any{"password": "newSecret123", "requirePasswordChange": true},
 			setupMock: func(m *MockAdminStore) {
+				// UpdateUserPassword revokes the account's sessions atomically
+				// with the hash change, so the handler makes no separate call.
 				m.EXPECT().UpdateUserPassword(gomock.Any(), "site-A", "u1", gomock.Any(), true).
 					DoAndReturn(func(_ context.Context, siteID, id, hash string, requireChange bool) error {
 						expected := sha256HexOf("newSecret123")
@@ -1068,7 +1068,6 @@ func TestHandler_setPassword(t *testing.T) {
 						assert.NoError(t, err, "stored hash must verify against bcrypt(sha256_hex(plaintext))")
 						return nil
 					})
-				m.EXPECT().DeleteSessionsByAccount(gomock.Any(), "site-A", "u1").Return(int64(1), nil)
 				m.EXPECT().AppendAudit(gomock.Any(), gomock.Any()).
 					DoAndReturn(func(_ context.Context, e *AuditEntry) error {
 						assert.Equal(t, "user.password.set", e.Action)
@@ -1113,13 +1112,12 @@ func TestHandler_setPassword(t *testing.T) {
 			wantStatus: http.StatusInternalServerError,
 		},
 		{
-			name:   "user not found – 404 user_not_found; DeleteSessionsByAccount NOT called",
+			name:   "user not found – 404 user_not_found",
 			userID: "no-such",
 			body:   map[string]any{"password": "somepass"},
 			setupMock: func(m *MockAdminStore) {
 				m.EXPECT().UpdateUserPassword(gomock.Any(), "site-A", "no-such", gomock.Any(), gomock.Any()).
 					Return(ErrUserNotFound)
-				// DeleteSessionsByAccount must NOT be called when user is not found
 			},
 			wantStatus: http.StatusNotFound,
 			wantReason: string(errcode.AdminUserNotFound),
@@ -1130,7 +1128,6 @@ func TestHandler_setPassword(t *testing.T) {
 			body:   map[string]any{"password": "somepass"},
 			setupMock: func(m *MockAdminStore) {
 				m.EXPECT().UpdateUserPassword(gomock.Any(), "site-A", "u3", gomock.Any(), true).Return(nil)
-				m.EXPECT().DeleteSessionsByAccount(gomock.Any(), "site-A", "u3").Return(int64(0), nil)
 				m.EXPECT().AppendAudit(gomock.Any(), gomock.Any()).Return(nil)
 			},
 			wantStatus: http.StatusOK,

@@ -15,7 +15,7 @@ const PAGE_SIZE = 20
 function buildFilterParams(filters) {
   const params = {}
   if (filters.action) params.action = filters.action
-  if (filters.targetUserId) params.targetUserId = filters.targetUserId
+  if (filters.targetAccount) params.targetAccount = filters.targetAccount
   return params
 }
 
@@ -31,7 +31,7 @@ export default function AuditView() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [notAuthorized, setNotAuthorized] = useState(false)
-  const [filters, setFilters] = useState({ action: '', targetUserId: '' })
+  const [filters, setFilters] = useState({ action: '', targetAccount: '' })
   const [page, setPage] = useState(1)
 
   const { begin, isCurrent } = useLatestRequest()
@@ -39,7 +39,7 @@ export default function AuditView() {
   // triggered by the debounce or by goToPage), so a debounced onSearch firing
   // after a manual goToPage — with the same filters it already picked up —
   // doesn't clobber the page the user just navigated to.
-  const lastFetchedFilterKeyRef = useRef(JSON.stringify({ action: '', targetUserId: '' }))
+  const lastFetchedFilterKeyRef = useRef(JSON.stringify({ action: '', targetAccount: '' }))
 
   const fetchAudit = useCallback(
     async (params, pageArg) => {
@@ -79,7 +79,7 @@ export default function AuditView() {
       // user paginated before this debounce fired), skip the redundant page-1 reset.
       if (serialized === lastFetchedFilterKeyRef.current) return
       lastFetchedFilterKeyRef.current = serialized
-      const parsed = serialized ? JSON.parse(serialized) : { action: '', targetUserId: '' }
+      const parsed = serialized ? JSON.parse(serialized) : { action: '', targetAccount: '' }
       setPage(1)
       fetchAudit(buildFilterParams(parsed), 1)
     },
@@ -119,10 +119,10 @@ export default function AuditView() {
         <input
           type="text"
           className="audit-filter-input"
-          aria-label="Filter by target user"
-          placeholder="Target user ID"
-          value={filters.targetUserId}
-          onChange={(e) => updateFilter('targetUserId', e.target.value)}
+          aria-label="Filter by target account"
+          placeholder="Target account"
+          value={filters.targetAccount}
+          onChange={(e) => updateFilter('targetAccount', e.target.value)}
         />
         <span className="audit-view-total">{total} entries</span>
       </div>

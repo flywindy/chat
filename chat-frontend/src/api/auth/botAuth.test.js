@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('@/lib/runtimeConfig', () => ({ PORTAL_URL: 'http://portal.test' }))
 
-import { botLogin, changePassword } from './botAuth'
+import { botLogin } from './botAuth'
 import { AsyncJobError } from '@/api'
 
 const BUNDLE = {
@@ -42,26 +42,5 @@ describe('botLogin', () => {
     const err = await botLogin({ username: 'x', password: 'y' }).catch((e) => e)
     expect(err).toBeInstanceOf(AsyncJobError)
     expect(err.message).toMatch(/503/)
-  })
-})
-
-describe('changePassword', () => {
-  it('POSTs to ${baseUrl}/api/v1/password/change with Bearer auth and the body', async () => {
-    global.fetch.mockResolvedValue({ ok: true, json: async () => ({ status: 'success' }) })
-    await changePassword({ baseUrl: 'http://site-a', authToken: 'tok43', oldPassword: 'o', newPassword: 'n' })
-    expect(global.fetch).toHaveBeenCalledWith('http://site-a/api/v1/password/change', expect.objectContaining({
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer tok43' },
-      body: JSON.stringify({ oldPassword: 'o', newPassword: 'n' }),
-    }))
-  })
-
-  it('throws AsyncJobError on invalid_credentials (wrong old password)', async () => {
-    global.fetch.mockResolvedValue({
-      ok: false, status: 401,
-      json: async () => ({ code: 'unauthenticated', reason: 'invalid_credentials', error: 'bad old pw' }),
-    })
-    const err = await changePassword({ baseUrl: 'http://site-a', authToken: 't', oldPassword: 'o', newPassword: 'n' }).catch((e) => e)
-    expect(err.reason).toBe('invalid_credentials')
   })
 })

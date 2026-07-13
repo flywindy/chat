@@ -229,7 +229,7 @@ func (h *Handler) createUser(c *gin.Context) {
 		return
 	}
 
-	h.audit(ctx, c, "user.create", u.ID, u.Account, map[string]string{
+	h.audit(ctx, c, "user.create", "", u.Account, map[string]string{
 		"account": u.Account,
 	})
 
@@ -266,13 +266,8 @@ func (h *Handler) updateUser(c *gin.Context) {
 		errhttp.Write(ctx, c, fmt.Errorf("update user: %w", err))
 		return
 	}
-
-	// When deactivating, revoke all active sessions immediately.
-	if req.Deactivated != nil && *req.Deactivated {
-		if _, err := h.store.DeleteSessionsByAccount(ctx, h.cfg.SiteID, account); err != nil {
-			slog.WarnContext(ctx, "delete sessions after deactivate failed", "account", account, "error", err)
-		}
-	}
+	// On deactivation the store revokes the account's sessions atomically with
+	// the update (see UpdateUser), so there is nothing to revoke here.
 
 	details := map[string]string{}
 	if req.Deactivated != nil {
@@ -290,10 +285,11 @@ type setPasswordRequest struct {
 }
 
 // sessionView is the safe projection of Session returned over the wire —
-// deliberately omits Roles and Account.
+// deliberately omits Roles.
 type sessionView struct {
 	ID       string `json:"id"`
 	UserID   string `json:"userId"`
+	Account  string `json:"account"`
 	SiteID   string `json:"siteId"`
 	IssuedAt int64  `json:"issuedAt"`
 }
@@ -302,6 +298,7 @@ func toSessionView(s *Session) sessionView {
 	return sessionView{
 		ID:       s.ID,
 		UserID:   s.UserID,
+		Account:  s.Account,
 		SiteID:   s.SiteID,
 		IssuedAt: s.IssuedAt,
 	}
@@ -384,9 +381,9 @@ func (h *Handler) listAudit(c *gin.Context) {
 	ctx := c.Request.Context()
 
 	filter := AuditFilter{
-		TargetUserID: c.Query("targetUserId"),
-		Actor:        c.Query("actor"),
-		Action:       c.Query("action"),
+		TargetAccount: c.Query("targetAccount"),
+		Actor:         c.Query("actor"),
+		Action:        c.Query("action"),
 	}
 	page, limit := parsePaging(c, 1, 20)
 
@@ -458,11 +455,8 @@ func (h *Handler) setPassword(c *gin.Context) {
 		errhttp.Write(ctx, c, fmt.Errorf("update user password: %w", err))
 		return
 	}
-
-	// Force re-login after password change.
-	if _, err := h.store.DeleteSessionsByAccount(ctx, h.cfg.SiteID, account); err != nil {
-		slog.WarnContext(ctx, "delete sessions after password set failed", "account", account, "error", err)
-	}
+	// UpdateUserPassword revokes the account's sessions atomically with the
+	// hash change, forcing re-login — no separate revoke needed here.
 
 	h.audit(ctx, c, "user.password.set", "", account, map[string]string{
 		"requirePasswordChange": strconv.FormatBool(requireChange),

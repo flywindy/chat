@@ -21,6 +21,7 @@ export interface AdminUser {
 export interface AdminSession {
   id: string
   userId: string
+  account: string
   siteId: string
   issuedAt: number
 }
@@ -66,7 +67,7 @@ export interface SetPasswordInput {
 }
 
 export interface AuditFilter {
-  targetUserId?: string
+  targetAccount?: string
   actor?: string
   action?: string
   page?: number
@@ -216,7 +217,7 @@ export async function listAudit(
   filter: AuditFilter = {},
 ): Promise<{ entries: AuditEntry[]; total: number }> {
   const qs = buildQuery({
-    targetUserId: filter.targetUserId,
+    targetAccount: filter.targetAccount,
     actor: filter.actor,
     action: filter.action,
     page: filter.page,
