@@ -41,6 +41,17 @@ type Config struct {
 	// proxy itself is taken from the standard HTTPS_PROXY/HTTP_PROXY env vars
 	// (msgraph clones the default transport, which honors ProxyFromEnvironment).
 	GraphTLSInsecureSkipVerify bool `env:"GRAPH_TLS_INSECURE_SKIP_VERIFY" envDefault:"false"`
+
+	// GraphProxyURL, when set, routes the presence Graph client through this
+	// proxy explicitly (overriding HTTPS_PROXY/HTTP_PROXY). Must include a scheme
+	// and host, e.g. "http://proxy.corp:8080". Empty falls back to the standard
+	// proxy env vars.
+	GraphProxyURL string `env:"GRAPH_PROXY_URL" envDefault:""`
+
+	// GraphUserAgent overrides the User-Agent header on presence requests. Empty
+	// falls back to the msgraph package's default desktop-browser string. Set this
+	// when a fronting proxy/WAF rejects the default agent.
+	GraphUserAgent string `env:"GRAPH_USER_AGENT" envDefault:""`
 }
 
 func main() {
@@ -105,9 +116,14 @@ func run() error {
 		ClientID:              cfg.GraphClientID,
 		ClientSecret:          cfg.GraphClientSecret,
 		TLSInsecureSkipVerify: cfg.GraphTLSInsecureSkipVerify,
+		ProxyURL:              cfg.GraphProxyURL,
+		UserAgent:             cfg.GraphUserAgent,
 	}
 	users := msgraph.NewDirectoryClient(graphCfg)
-	pres := msgraph.NewPresenceClient(graphCfg, msgraph.ROPCCredentials{Username: cfg.GraphROPCUser, Password: cfg.GraphROPCPassword})
+	pres, err := msgraph.NewPresenceClient(graphCfg, msgraph.ROPCCredentials{Username: cfg.GraphROPCUser, Password: cfg.GraphROPCPassword})
+	if err != nil {
+		return fmt.Errorf("build presence client: %w", err)
+	}
 
 	r := newReconciler(
 		store, users, pres, store,
