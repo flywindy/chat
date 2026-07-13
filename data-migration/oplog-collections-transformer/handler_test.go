@@ -66,7 +66,7 @@ const (
 	testSiteID    = "s1"
 	roomsColl     = "rocketchat_rooms"
 	subsColl      = "rocketchat_subscriptions"
-	threadSubColl = "tsmc_thread_subscriptions"
+	threadSubColl = "company_thread_subscriptions"
 	usersColl     = "users"
 )
 

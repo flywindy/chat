@@ -220,10 +220,10 @@ func TestEndToEnd_UserInsert(t *testing.T) {
 		"username": "charlie",
 		"type":     "user",
 		"customFields": bson.M{
-			"engName":  "Charlie C",
-			"tsmcName": "查理",
-			"deptId":   "dept1",
-			"deptName": "Engineering",
+			"engName":     "Charlie C",
+			"companyName": "查理",
+			"deptId":      "dept1",
+			"deptName":    "Engineering",
 		},
 	})
 	require.NoError(t, err)
@@ -246,7 +246,7 @@ func TestEndToEnd_UserInsert(t *testing.T) {
 		siteID:         site,
 		roomsColl:      "rocketchat_rooms",
 		subsColl:       "rocketchat_subscriptions",
-		threadSubsColl: "tsmc_thread_subscriptions",
+		threadSubsColl: "company_thread_subscriptions",
 		usersColl:      "users",
 		pub:            &jetstreamPublisher{publish: js.PublishMsg},
 		target:         tgtStore,
@@ -315,7 +315,7 @@ func TestEndToEnd_RoomInsert_PublishesRoomSync(t *testing.T) {
 		siteID:         site,
 		roomsColl:      "rocketchat_rooms",
 		subsColl:       "rocketchat_subscriptions",
-		threadSubsColl: "tsmc_thread_subscriptions",
+		threadSubsColl: "company_thread_subscriptions",
 		usersColl:      "users",
 		pub:            &jetstreamPublisher{publish: js.PublishMsg},
 		target:         tgtStore,
@@ -370,7 +370,7 @@ func TestEndToEnd_ThreadSub_NakThenResolve(t *testing.T) {
 
 	srcDB := testutil.MongoDB(t, "src")
 	tgtDB := testutil.MongoDB(t, "tgt")
-	srcColl := srcDB.Collection("tsmc_thread_subscriptions")
+	srcColl := srcDB.Collection("company_thread_subscriptions")
 	lookup := migration.NewMongoSourceLookup(srcColl)
 
 	// Seed a source thread sub doc.
@@ -417,17 +417,17 @@ func TestEndToEnd_ThreadSub_NakThenResolve(t *testing.T) {
 		siteID:         site,
 		roomsColl:      "rocketchat_rooms",
 		subsColl:       "rocketchat_subscriptions",
-		threadSubsColl: "tsmc_thread_subscriptions",
+		threadSubsColl: "company_thread_subscriptions",
 		usersColl:      "users",
 		pub:            &jetstreamPublisher{publish: js.PublishMsg},
 		target:         tgtStore,
-		lookups:        map[string]migration.SourceLookup{"tsmc_thread_subscriptions": lookup},
+		lookups:        map[string]migration.SourceLookup{"company_thread_subscriptions": lookup},
 		now:            func() int64 { return 1700000000000 },
 	}
 
 	// Phase 1: thread_room and user both absent → transient error (Nak).
 	err = h.handle(ctx, oplogEvent{
-		Collection:   "tsmc_thread_subscriptions",
+		Collection:   "company_thread_subscriptions",
 		Op:           "insert",
 		FullDocument: fullDoc,
 	})
@@ -453,7 +453,7 @@ func TestEndToEnd_ThreadSub_NakThenResolve(t *testing.T) {
 	require.True(t, inserted)
 
 	err = h.handle(ctx, oplogEvent{
-		Collection:   "tsmc_thread_subscriptions",
+		Collection:   "company_thread_subscriptions",
 		Op:           "insert",
 		FullDocument: fullDoc,
 	})

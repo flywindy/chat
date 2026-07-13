@@ -42,7 +42,7 @@ Migrate **4** source collections:
 | `users` | `users` | **direct write** |
 | `rocketchat_rooms` | `rooms` | **inbox publish** |
 | `rocketchat_subscriptions` | `subscriptions` | **inbox publish** |
-| `tsmc_thread_subscriptions` | `thread_subscriptions` | **inbox publish** |
+| `company_thread_subscriptions` | `thread_subscriptions` | **inbox publish** |
 
 **`threadRooms` is explicitly out of scope** — `thread_rooms` are *derived* by `message-worker` from the message canonical stream (created on the first thread reply, accumulating `LastMsgAt`/`LastMsgID`/`ReplyAccounts`). We do not track them here.
 
@@ -93,7 +93,7 @@ The connector forwards raw change events with no `updateLookup` and no `fullDocu
 
 
 ### 4.1 users — direct write
-- **insert / replace / update** → **insert-if-absent by account**. If the account already exists (another sync got there first), **leave it untouched** — so post-seed **HR-field** `update`s (engName, tsmcName, dept/sect, roles, …) are intentionally **not** propagated (the company-wide user sync owns those, §9). Field mapping (confirmed):
+- **insert / replace / update** → **insert-if-absent by account**. If the account already exists (another sync got there first), **leave it untouched** — so post-seed **HR-field** `update`s (engName, companyName, dept/sect, roles, …) are intentionally **not** propagated (the company-wide user sync owns those, §9). Field mapping (confirmed):
 - **`statusText` is the one exception.** It is **chat-originated** (set by the user inside the legacy chat, e.g. "In a meeting") and is **not** part of the HR dataset, so no other sync carries it. On a `statusText` `update` the transformer fans a `user_status_updated` event to **all** sites (global-visibility; see §4.1a) — otherwise a legacy status change during the migration window would be silently lost.
 
 | Destination | Source |
@@ -101,7 +101,7 @@ The connector forwards raw change events with no `updateLookup` and no `fullDocu
 | `ID` | generate `UUIDv7` on create (joins are by account, not id — source `_id` not preserved) |
 | `Account` | `username` (**unique but mutable** — see §9) |
 | `EngName` | `customFields.engName` |
-| `ChineseName` | `customFields.tsmcName` |
+| `ChineseName` | `customFields.companyName` |
 | `SectID` / `SectName` | `customFields.sectId` / `customFields.sectName` |
 | `DeptID` / `DeptName` | `customFields.deptId` / `customFields.deptName` |
 | `StatusText` | `statusText` |
@@ -141,7 +141,7 @@ A `statusText` `update` fans a **reused** `user_status_updated` `InboxEvent` (no
 | `User.ID`, `User.Account` | `u._id`, `u.username` (unique index `{rid:1,'u._id':1}`) |
 | `RoomID` | `rid` |
 | `Roles` | `roles[]` (`owner`/`moderator`/`leader`/`user` — role-based ownership, no separate pointer) |
-| `Muted` | `disableNotifications` (TSMC custom — authoritative all-off; **not** `muteGroupMentions`, which is @all/@here-only) |
+| `Muted` | `disableNotifications` (Company custom — authoritative all-off; **not** `muteGroupMentions`, which is @all/@here-only) |
 | `Favorite` | `f` (absent ⇒ false) |
 | `Alert` | `alert` (any unread content, not just mentions) |
 | `LastSeenAt` | **`max(ls, lr)`** — the furthest point consumed by either path (`ls` scrolled cursor, `lr` explicit mark); minimizes false-unread, consistent with the advance-only (`$lt`) apply guard |
@@ -168,7 +168,7 @@ The destination `Subscription` fields and how each is set are pinned in §8.
 
 **D1 (decided):** `LastSeenAt = max(ls, lr)` — neither source field alone is correct (`ls`-only shows false unread after a mark-read-without-scroll; `lr`-only after a scroll-without-mark), so take the later of the two. Paired with source `alert` → `Alert`.
 
-### 4.4 tsmc_thread_subscriptions — inbox publish, transformer-resolved
+### 4.4 company_thread_subscriptions — inbox publish, transformer-resolved
 Confirmed source schema: `_id`, `u` (`u._id`, `u.username`), `rid`, `parentMessage._id` (`tmid`), `lastMessage` (`_id`,`_updatedAt`), `createdAt`, `lastSeenAt`, `unreadMention`. Unique index `{'u._id':1, 'parentMessage._id':1}` — **one row per (user, thread)**.
 
 The `thread_subscription_upserted` payload is the **full `model.ThreadSubscription`** and inbox-worker upserts it **verbatim** (keyed by `threadRoomId`+`userId`) — it resolves nothing. Field mapping + two foreign keys the source row lacks in new-stack form (resolved **in the transformer** before publishing):
@@ -286,7 +286,7 @@ The spec carries this list explicitly; nothing is silently defaulted:
 - **Subscription unread-state (`HasMention`, `Alert`, `ThreadUnread`)** — owned by the message pipeline, not subscription CDC; initial value at checkpoint owned by the bulk-sync owner (not a gap; §4.3/§8).
 - **Thread-sub unfollow** (D2) — `delete` is un-actionable (only the source `_id`, §4.0) **and** there's no inbox removal handler (the live stack never federates unfollows either); skip + metric. **The only true "can't push" item.**
 - **Subscription / room / user true `delete`** — un-actionable (only the source `_id`, no pre-image, destination doesn't key by source `_id`; §4.0). Rooms/users skipped by policy anyway; subscription leave arrives as an `open:false` update (handled).
-- **User post-seed `update`s** — **HR fields** (engName, tsmcName, dept/sect, roles, …) not propagated (insert-if-absent; the company-wide user sync owns those). **Exception: `statusText`** is chat-owned and IS propagated (fan `user_status_updated` to all sites, §4.1a) — no other sync carries it, so dropping it would lose legacy status changes during the migration window.
+- **User post-seed `update`s** — **HR fields** (engName, companyName, dept/sect, roles, …) not propagated (insert-if-absent; the company-wide user sync owns those). **Exception: `statusText`** is chat-owned and IS propagated (fan `user_status_updated` to all sites, §4.1a) — no other sync carries it, so dropping it would lose legacy status changes during the migration window.
 - **Collection-level ops** (`drop`/`rename`/`invalidate`) — **out of scope, deferred** (§4.0); operator re-points the connector, not transformer logic.
 - **User fields `SectTCName`/`DeptTCName`/`EmployeeID`/`StatusIsShow`** — no clean source in `users`; owned by the external user sync, left zero-valued by the seed.
 - **`username`/account mutability** — the entire new stack joins by account; a source username rename during cutover would orphan rows until the next sync. Low-risk, documented.

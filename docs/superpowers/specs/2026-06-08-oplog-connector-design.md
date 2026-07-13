@@ -231,9 +231,9 @@ The connector tails these 8 source collections (`WATCH_COLLECTIONS`):
 | `rocketchat_room` | rooms (channels / DMs) |
 | `rocketchat_subscription` | subscriptions |
 | `rocketchat_uploads` | uploads / file metadata |
-| `tsmc_room_members` | room members |
-| `tsmc_thread_subscriptions` | thread subscriptions |
-| `tsmc_hr_acct_org` | HR account / org mapping |
+| `company_room_members` | room members |
+| `company_thread_subscriptions` | thread subscriptions |
+| `company_hr_acct_org` | HR account / org mapping |
 | `users` | users |
 
 For each of these, **all four op types** (`insert`/`update`/`replace`/`delete`) are traced — no op filtering, and **every collection is handled identically** (§2.2): no pre-images, no lookups. The connector stays collection-agnostic — these names are pure config, fed verbatim to `startAfter`/subjects with no per-collection schema logic.

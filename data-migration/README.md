@@ -77,8 +77,8 @@ and the matching `docs/superpowers/plans/2026-06-11-…` + `…2026-06-15-oplog-
 ## oplog-connector at a glance
 
 - **Watched collections (8):** `rocketchat_message`, `rocketchat_room`,
-  `rocketchat_subscription`, `rocketchat_uploads`, `tsmc_room_members`,
-  `tsmc_thread_subscriptions`, `tsmc_hr_acct_org`, `users`. All op types
+  `rocketchat_subscription`, `rocketchat_uploads`, `company_room_members`,
+  `company_thread_subscriptions`, `company_hr_acct_org`, `users`. All op types
   (insert/update/replace/delete) are traced for every collection, identically.
 - **No lookups.** The connector forwards native oplog content only — `fullDocument`
   for insert/replace, `updateDescription` (the delta) for update, `documentKey` for

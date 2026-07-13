@@ -21,12 +21,12 @@ type sourceUser struct {
 	StatusText   string   `bson:"statusText"`
 	Roles        []string `bson:"roles"`
 	CustomFields struct {
-		EngName  string `bson:"engName"`
-		TsmcName string `bson:"tsmcName"`
-		DeptID   string `bson:"deptId"`
-		DeptName string `bson:"deptName"`
-		SectID   string `bson:"sectId"`
-		SectName string `bson:"sectName"`
+		EngName     string `bson:"engName"`
+		CompanyName string `bson:"companyName"`
+		DeptID      string `bson:"deptId"`
+		DeptName    string `bson:"deptName"`
+		SectID      string `bson:"sectId"`
+		SectName    string `bson:"sectName"`
 	} `bson:"customFields"`
 	// Federation.Origin is the user's home site (absent ⇒ local); drives siteId stamping.
 	Federation struct {
@@ -100,7 +100,7 @@ func (h *handler) handleUser(ctx context.Context, ev oplogEvent) error {
 		ID:          idgen.GenerateUUIDv7(),
 		Account:     su.Username,
 		EngName:     su.CustomFields.EngName,
-		ChineseName: su.CustomFields.TsmcName,
+		ChineseName: su.CustomFields.CompanyName,
 		SectID:      su.CustomFields.SectID,
 		SectName:    su.CustomFields.SectName,
 		DeptID:      su.CustomFields.DeptID,

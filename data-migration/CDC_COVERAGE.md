@@ -48,7 +48,7 @@ The connector forwards raw change-stream events with **no `updateLookup`** and *
 | **Users** |
 | 13 | User create | `insert` — full doc | in payload | `_id`, `username` (mutable), `type`, `customFields.*`, `roles[]`, `federation.origin` | ✅ insert-if-absent by account |
 | 14 | User replace | `replace` — full doc | not needed | whole-doc rewrite | ✅ insert-if-absent (re-classify) |
-| 15 | User **HR-field** change (engName, tsmcName, dept/sect, roles, …) after first seed | `update` — changed fields only | full current doc | company-wide user sync owns these; insert-if-absent leaves existing untouched | ❌ not propagated (other sync keeps it current) |
+| 15 | User **HR-field** change (engName, companyName, dept/sect, roles, …) after first seed | `update` — changed fields only | full current doc | company-wide user sync owns these; insert-if-absent leaves existing untouched | ❌ not propagated (other sync keeps it current) |
 | 15a | User **`statusText`** change | `update` — changed fields only | full current doc | chat-originated (set by the user inside legacy chat), **not** in the HR dataset — no other sync carries it | ✅ fan `user_status_updated` to all sites (global-visibility) |
 | 16 | User deactivate / delete | `update` (`active:false`) or `delete` | `update`: full doc · `delete`: nothing | source sets `active:false` (no row deletion); no destination apply-path wired | ❌ deferred (out of scope) |
 | **All collections** |
@@ -66,8 +66,8 @@ the destination adopts the source `_id`, **delete is actionable** (unlike the re
 | `delete` | delete by `_id` (idempotent) |
 | collection-level (`drop`/`rename`/`invalidate`) | ⚠️ out of scope, deferred |
 
-Collections: `rocketchat_avatar`, `tsmc_apps_v`, `tsmc_bot_cmd_men`, `tsmc_tsso_tokens`,
-`rocketchat_uploads`, `tsmc_bot_authorization`, `ufsTokens`, `user_devices`.
+Collections: `rocketchat_avatar`, `company_apps_v`, `company_bot_cmd_men`, `company_tsso_tokens`,
+`rocketchat_uploads`, `company_bot_authorization`, `ufsTokens`, `user_devices`.
 **Metadata only** — file/blob bytes (UFS/GridFS) are out of scope. No destination indexes or TTL
 (removal is CDC-driven). Design: `docs/superpowers/specs/2026-07-01-oplog-direct-transfer-design.md`.
 

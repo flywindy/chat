@@ -37,7 +37,7 @@ func TestParseConfig_Defaults(t *testing.T) {
 
 	assert.Equal(t, "rocketchat_rooms", cfg.RoomsCollection)
 	assert.Equal(t, "rocketchat_subscriptions", cfg.SubscriptionsCollection)
-	assert.Equal(t, "tsmc_thread_subscriptions", cfg.ThreadSubsCollection)
+	assert.Equal(t, "company_thread_subscriptions", cfg.ThreadSubsCollection)
 	assert.Equal(t, "users", cfg.UsersCollection)
 
 	assert.Equal(t, "primaryPreferred", cfg.SourceReadPreference)

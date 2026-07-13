@@ -56,7 +56,7 @@ func TestMetrics_DispositionCountersCarryCollection(t *testing.T) {
 	m.onProcessed(ctx, "insert", "rocketchat_subscription")
 	m.onNak(ctx, "update", "rocketchat_subscription")
 	m.onTerm(ctx, "delete", "rocketchat_message")
-	m.onExhausted(ctx, "update", "tsmc_thread_subscriptions")
+	m.onExhausted(ctx, "update", "company_thread_subscriptions")
 
 	var rm metricdata.ResourceMetrics
 	require.NoError(t, reader.Collect(ctx, &rm))
@@ -65,7 +65,7 @@ func TestMetrics_DispositionCountersCarryCollection(t *testing.T) {
 		"oplog_collections_transformer_events_processed_total": {"op": "insert", "collection": "rocketchat_subscription"},
 		"oplog_collections_transformer_naks_total":             {"op": "update", "collection": "rocketchat_subscription"},
 		"oplog_collections_transformer_terms_total":            {"op": "delete", "collection": "rocketchat_message"},
-		"oplog_collections_transformer_exhausted_total":        {"op": "update", "collection": "tsmc_thread_subscriptions"},
+		"oplog_collections_transformer_exhausted_total":        {"op": "update", "collection": "company_thread_subscriptions"},
 	}
 
 	found := map[string]bool{}

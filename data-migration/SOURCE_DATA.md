@@ -112,7 +112,7 @@ Example document (values rotated/sanitized):
 | `uids` / `usernames` | array | Members; for `t:d` length **can exceed 2** (group DM) | ✅ |
 | `u` | object | Creator (`u._id`, `u.username`) | ❓ |
 | `ts` / `_updatedAt` | date | Created / last-updated | ❓ |
-| `restricted` | bool (opt) | **Authoritative restriction flag** (TSMC custom; absent ⇒ false). Confirmed on TKMS. RC's `ro` (read-only/announcement) is a **different concept** — deliberately ignored | ✅ |
+| `restricted` | bool (opt) | **Authoritative restriction flag** (Company custom; absent ⇒ false). Confirmed on TKMS. RC's `ro` (read-only/announcement) is a **different concept** — deliberately ignored | ✅ |
 | **external/federation access** | ? | **Which field is authoritative for "external access allowed"?** | ❓ |
 | `federation.origin` | string (opt) | Origin site | ✅ |
 | `federation.domains[]` | array | Member domains, service-synced, may be stale | ✅ ⛔ |
@@ -136,7 +136,7 @@ One row per (user, room). ✅ Unique index `{ rid:1, 'u._id':1 }`.
 | `userMentions` / `groupMentions` | int | Unread `@user` / `@all`,`@here` counts | ✅ |
 | `tunread[]` | string[] | Parent-message ids (`tmid`) of threads with any unread | ✅ |
 | `tunreadGroup[]` / `tunreadUser[]` | string[] | …group-mention / direct-mention variants | ✅ |
-| `disableNotifications` | bool | **TSMC custom — authoritative mute (all-off)** | ✅ |
+| `disableNotifications` | bool | **Company custom — authoritative mute (all-off)** | ✅ |
 | `muteGroupMentions` | bool | `@all`/`@here` only (**not** our mute flag) | ✅ |
 | `f` | bool (opt) | Favorited (absent ⇒ false) | ✅ |
 | `favoritedAt` | date (opt) | Last favorite time. Exists at source (TKMS) but **unused by CDC** — per the agreed guard mapping below, all guards derive from `_updatedAt` | ✅ ⛔ |
@@ -152,7 +152,7 @@ No null-when-false conditional, no `favoritedAt` source. Note: the canonical res
 (`restrictedUpdatedAt`) is not in the destination codebase yet; inbox-worker currently applies
 `room_restricted` via `visibilityUpdatedAt` — accepted until the rename lands in main.
 
-## 5. `tsmc_thread_subscriptions`
+## 5. `company_thread_subscriptions`
 
 One row per (user, thread). ✅ Unique index `{ 'u._id':1, 'parentMessage._id':1 }`.
 
@@ -178,11 +178,11 @@ Lifecycle: created lazily; **unfollow deletes the row** (no soft-delete); no `fe
 | `type` | string | `user` or `bot` (bot has `appId`); no other non-human types | ✅ |
 | `appId` | string (opt) | Present on bot/app accounts | ✅ |
 | `name` | string | Display name | ✅ |
-| `customFields.engName` / `tsmcName` | string | English / Chinese name | ✅ |
+| `customFields.engName` / `companyName` | string | English / Chinese name | ✅ |
 | `customFields.deptId` / `deptName` | string | Department id / name | ✅ |
 | `customFields.sectId` / `sectName` | string | Section id / name | ✅ |
 | `customFields.appId` / `appName` | string | App id / name | ✅ |
-| `hrInfo` | `ITsmcUser[]` | HR directory records | ❓ (not consumed yet) |
+| `hrInfo` | `ICompanyUser[]` | HR directory records | ❓ (not consumed yet) |
 | `statusText` / `status` | string | Status message / presence | ✅ |
 | `roles[]` | string[] | Global roles (`admin` marker) | ✅ |
 | `active` | bool | Deactivation ⇒ `active:false` (no deletion) | ✅ |
@@ -191,7 +191,7 @@ Lifecycle: created lazily; **unfollow deletes the row** (no soft-delete); no `fe
 | **employee id** | ? | **Where does an employee id live — is it `username`?** | ❓ |
 | **Traditional-Chinese dept/sect names** | ? | Is there a TC variant of `deptName`/`sectName`? | ❓ |
 
-Seeded (insert-if-absent, keyed by account): `username`, `engName`, `tsmcName`, dept/sect ids+names, `roles`, `statusText`, site, bot flag. Everything else is owned by the company-wide user sync.
+Seeded (insert-if-absent, keyed by account): `username`, `engName`, `companyName`, dept/sect ids+names, `roles`, `statusText`, site, bot flag. Everything else is owned by the company-wide user sync.
 
 Post-seed **updates**: HR fields are **not** re-propagated (the company-wide sync keeps them current). The **one exception is `statusText`** — it is chat-originated (not in the HR dataset), so a live `statusText` change fans a `user_status_updated` event to all sites (design §4.1a); without it, legacy status changes during the migration window would be lost.
 
@@ -200,7 +200,7 @@ Post-seed **updates**: HR fields are **not** re-propagated (the company-wide syn
 
 
 ## Collection for direct transfer:
-rocketchat_avatar, tsmc_apps_v, tsmc_bot_cmd_men , tsmc_tsso_tokens, rocketchat_uploads, tsmc_bot_authorization, ufsTokens, user_devices
+rocketchat_avatar, company_apps_v, company_bot_cmd_men , company_tsso_tokens, rocketchat_uploads, company_bot_authorization, ufsTokens, user_devices
 
 Handled by **`oplog-direct-transfer`**: copied verbatim (whole doc, same `_id`) into the same-named
 new-stack collection, mirroring insert/update/replace/delete. Metadata only — the actual file/blob

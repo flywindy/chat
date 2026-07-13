@@ -35,7 +35,7 @@ type config struct {
 	// Source collection names (the connector's raw collection names).
 	RoomsCollection         string `env:"ROOMS_COLLECTION" envDefault:"rocketchat_rooms"`
 	SubscriptionsCollection string `env:"SUBSCRIPTIONS_COLLECTION" envDefault:"rocketchat_subscriptions"`
-	ThreadSubsCollection    string `env:"THREAD_SUBS_COLLECTION" envDefault:"tsmc_thread_subscriptions"`
+	ThreadSubsCollection    string `env:"THREAD_SUBS_COLLECTION" envDefault:"company_thread_subscriptions"`
 	UsersCollection         string `env:"USERS_COLLECTION" envDefault:"users"`
 
 	SourceReadPreference string `env:"SOURCE_READ_PREFERENCE" envDefault:"primaryPreferred"`
