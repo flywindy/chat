@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -103,7 +104,7 @@ func TestConnector_RealPublishEndToEnd(t *testing.T) {
 	require.Eventually(t, func() bool {
 		cons, cerr := js.CreateOrUpdateConsumer(ctx, "MIGRATION_OPLOG_site1", jetstream.ConsumerConfig{
 			AckPolicy:      jetstream.AckExplicitPolicy,
-			FilterSubjects: []string{"chat.oplog.site1.>"},
+			FilterSubjects: []string{"chat.migration.oplog.site1.>"},
 		})
 		if cerr != nil {
 			return false
@@ -114,7 +115,7 @@ func TestConnector_RealPublishEndToEnd(t *testing.T) {
 		}
 		for m := range batch.Messages() {
 			assert.NoError(t, m.Ack())
-			if m.Subject() == "chat.oplog.site1.rocketchat_message.insert" {
+			if m.Subject() == "chat.migration.oplog.site1.rocketchat_message.insert" {
 				gotID = m.Headers().Get("Nats-Msg-Id")
 			}
 		}
@@ -166,9 +167,9 @@ func TestOplogConnector_ChangeStreamEndToEnd(t *testing.T) {
 	require.GreaterOrEqual(t, len(msgs), 3)
 
 	// Assert the first three ops in oplog order.
-	assert.Equal(t, "chat.oplog.site1.rocketchat_message.insert", msgs[0].Subject)
-	assert.Equal(t, "chat.oplog.site1.rocketchat_message.update", msgs[1].Subject)
-	assert.Equal(t, "chat.oplog.site1.rocketchat_message.delete", msgs[2].Subject)
+	assert.Equal(t, "chat.migration.oplog.site1.rocketchat_message.insert", msgs[0].Subject)
+	assert.Equal(t, "chat.migration.oplog.site1.rocketchat_message.update", msgs[1].Subject)
+	assert.Equal(t, "chat.migration.oplog.site1.rocketchat_message.delete", msgs[2].Subject)
 
 	for _, m := range msgs[:3] {
 		assert.NotEmpty(t, m.Header.Get("Nats-Msg-Id"), "every event carries a dedup id")
@@ -303,4 +304,68 @@ func TestMongoCheckpointStore_Integration(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "EVT2", reloaded.EventID)
 	assert.Equal(t, "runtime", reloaded.Source)
+}
+
+// TestConnector_CollectionsRole_DisjointSet starts a collections-role connector (message collection
+// configured but NOT watched) and asserts it publishes only its own collections' subjects.
+func TestConnector_CollectionsRole_DisjointSet(t *testing.T) {
+	client, uri := startReplicaSet(t)
+	rooms := createSourceCollection(t, client.Database("rocketchat"), "rocketchat_room")
+	msgs := createSourceCollection(t, client.Database("rocketchat"), "rocketchat_message")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	cfg := config{
+		SiteID:            "sitecr",
+		SourceMongoURI:    uri,
+		SourceDB:          "rocketchat",
+		CheckpointDB:      "migration",
+		NatsURL:           testutil.NATS(t),
+		WatchCollections:  []string{"rocketchat_room"},
+		MessageCollection: "rocketchat_message", // not watched — collections role
+		ReadPreference:    "primaryPreferred",
+		CheckpointEvery:   1,
+		StartMode:         "now",
+		Bootstrap:         bootstrapConfig{Enabled: true},
+	}
+	conn, err := start(ctx, &cfg, nil)
+	require.NoError(t, err)
+	defer conn.Close()
+
+	_, err = rooms.InsertOne(ctx, bson.M{"_id": "r1", "name": "general"})
+	require.NoError(t, err)
+	_, err = msgs.InsertOne(ctx, bson.M{"_id": "m1", "msg": "hi"}) // no watcher — must not be forwarded
+	require.NoError(t, err)
+
+	nc, err := natsutil.Connect(cfg.NatsURL, "")
+	require.NoError(t, err)
+	defer func() { assert.NoError(t, nc.Drain()) }()
+	js, err := oteljetstream.New(nc)
+	require.NoError(t, err)
+
+	var subjects []string
+	require.Eventually(t, func() bool {
+		cons, cerr := js.CreateOrUpdateConsumer(ctx, "MIGRATION_OPLOG_sitecr", jetstream.ConsumerConfig{
+			AckPolicy:      jetstream.AckExplicitPolicy,
+			FilterSubjects: []string{"chat.migration.oplog.sitecr.>"},
+		})
+		if cerr != nil {
+			return false
+		}
+		batch, berr := cons.Fetch(10, jetstream.FetchMaxWait(500*time.Millisecond))
+		if berr != nil {
+			return false
+		}
+		for m := range batch.Messages() {
+			assert.NoError(t, m.Ack())
+			subjects = append(subjects, m.Subject())
+		}
+		return slices.Contains(subjects, "chat.migration.oplog.sitecr.rocketchat_room.insert")
+	}, 40*time.Second, 500*time.Millisecond, "room insert must land on MIGRATION_OPLOG")
+
+	for _, s := range subjects {
+		assert.NotContains(t, s, "rocketchat_message",
+			"collections-role deployment must never publish message subjects")
+	}
 }

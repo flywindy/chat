@@ -16,7 +16,7 @@
                   ▼
             ┌──────────── checkpoint C (resume token) handed to us ───────────┐
             │                                                                  │
- (per site) source Mongo ─▶ oplog-connector ─▶ MIGRATION_OPLOG_{site}  (chat.oplog.{site}.{coll}.{op})
+ (per site) source Mongo ─▶ oplog-connector ─▶ MIGRATION_OPLOG_{site}  (chat.migration.oplog.{site}.{coll}.{op})
             startAfter(C): live CDC tail only             │
                                                           ▼  this service (name OPEN — §10)
                             collections-transformer ─┬─▶ INBOX_{site}  (OutboxEvent) ─▶ inbox-worker ─▶ per-site Mongo

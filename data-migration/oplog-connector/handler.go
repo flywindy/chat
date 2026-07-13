@@ -183,7 +183,9 @@ func (w *watcher) publishWithRetry(ctx context.Context, ev *changeEvent) error {
 	subj, msgID, evt := buildEnvelope(ev, w.siteID, w.now())
 	data, err := json.Marshal(evt)
 	if err != nil {
-		w.log.Error("marshal oplog event failed — skipping event", "eventId", ev.EventID, "error", err)
+		// This event is DROPPED (never reaches the stream), so name the op — eventId alone
+		// can't be looked up via Nats-Msg-Id like published events can.
+		w.log.Error("marshal oplog event failed — skipping event", "eventId", ev.EventID, "op", ev.Op, "error", err)
 		w.metrics.onSkipped(ctx, w.collection)
 		return nil
 	}

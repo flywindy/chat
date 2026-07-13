@@ -27,10 +27,10 @@ func TestBuildEnvelope_OpsAndSubjects(t *testing.T) {
 		hasUpdateDesc bool // delta (update)
 		wantSubject   string
 	}{
-		{"insert", "insert", true, false, "chat.oplog.site1.rocketchat_message.insert"},
-		{"update", "update", false, true, "chat.oplog.site1.rocketchat_message.update"},
-		{"replace", "replace", true, false, "chat.oplog.site1.rocketchat_message.replace"},
-		{"delete", "delete", false, false, "chat.oplog.site1.rocketchat_message.delete"},
+		{"insert", "insert", true, false, "chat.migration.oplog.site1.rocketchat_message.insert"},
+		{"update", "update", false, true, "chat.migration.oplog.site1.rocketchat_message.update"},
+		{"replace", "replace", true, false, "chat.migration.oplog.site1.rocketchat_message.replace"},
+		{"delete", "delete", false, false, "chat.migration.oplog.site1.rocketchat_message.delete"},
 	}
 
 	for _, tc := range tests {

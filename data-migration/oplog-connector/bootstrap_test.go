@@ -51,7 +51,7 @@ func TestBootstrapStreams_EnabledCreatesSchemaOnly(t *testing.T) {
 	require.Len(t, fsm.created, 1)
 	got := fsm.created[0]
 	assert.Equal(t, "MIGRATION_OPLOG_site1", got.Name)
-	assert.Equal(t, []string{"chat.oplog.site1.>"}, got.Subjects)
+	assert.Equal(t, []string{"chat.migration.oplog.site1.>"}, got.Subjects)
 	// Federation config is ops/IaC-owned — never set here.
 	assert.Nil(t, got.Sources)
 	assert.Empty(t, fsm.streamHit, "enabled path does not verify")

@@ -48,7 +48,12 @@ func main() {
 		slog.Error("init meter failed", "error", err)
 		os.Exit(1)
 	}
-	m, err := newMetrics()
+	// role distinguishes the two split deployments in logs and metrics (PR #482 review).
+	role := "collections"
+	if cfg.watchesMessages() {
+		role = "messages"
+	}
+	m, err := newMetrics(role)
 	if err != nil {
 		slog.Error("init metrics failed", "error", err)
 		os.Exit(1)
@@ -74,8 +79,15 @@ func main() {
 		slog.Error("startup failed", "error", err)
 		os.Exit(1)
 	}
-	slog.Info("oplog-connector started", "site", cfg.SiteID, "collections", cfg.WatchCollections)
-	slog.Info("federation-origin filter active", "message_collection", cfg.MessageCollection)
+	slog.Info("oplog-connector started", "site", cfg.SiteID, "role", role, "collections", cfg.WatchCollections)
+	if cfg.watchesMessages() {
+		slog.Info("federation-origin filter active", "role", role, "message_collection", cfg.MessageCollection)
+	} else {
+		// Warn, not Info: legitimate for a collections-role pod, but conspicuous when a MESSAGE_COLLECTION
+		// typo leaves a message pod forwarding foreign-origin messages unfiltered (double-deliver).
+		slog.Warn("no message collection watched — federation-origin filter inactive",
+			"role", role, "message_collection", cfg.MessageCollection)
+	}
 
 	// A fatal watcher error (e.g. lost resume token) exits non-zero without waiting
 	// for a signal — recovery is operator-driven. Also exits on Done(), so no leak.

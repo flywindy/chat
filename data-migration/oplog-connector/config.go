@@ -24,8 +24,7 @@ type config struct {
 
 	WatchCollections []string `env:"WATCH_COLLECTIONS,required"`
 
-	// MessageCollection is the one watched collection the federation-origin $match is scoped to.
-	// Other collections (rooms/users) are forwarded unfiltered so we don't silently drop foreign ones.
+	// MessageCollection scopes the federation-origin $match; collections-role deployments legitimately don't watch it.
 	MessageCollection string `env:"MESSAGE_COLLECTION" envDefault:"rocketchat_message"`
 
 	ReadPreference string `env:"READ_PREFERENCE" envDefault:"secondary"`
@@ -83,17 +82,18 @@ func parseConfig() (config, error) {
 	if dup := firstDuplicate(cfg.WatchCollections); dup != "" {
 		return config{}, fmt.Errorf("WATCH_COLLECTIONS has duplicate entry %q (each collection maps to one watcher and one checkpoint)", dup)
 	}
-	// Fail-open guard: if MESSAGE_COLLECTION is empty or isn't actually watched, the
-	// federation-origin $match never runs and ALL foreign messages migrate silently
-	// (double-deliver). Fail fast instead.
+	// MESSAGE_COLLECTION must always be defined but need NOT be watched — "watched ⟹ filtered"
+	// holds by construction: the $match applies to whichever watcher's name equals it.
 	cfg.MessageCollection = strings.TrimSpace(cfg.MessageCollection)
 	if cfg.MessageCollection == "" {
 		return config{}, fmt.Errorf("MESSAGE_COLLECTION must be non-empty (the federation-origin $match would never run)")
 	}
-	if !slices.Contains(cfg.WatchCollections, cfg.MessageCollection) {
-		return config{}, fmt.Errorf("MESSAGE_COLLECTION %q is not present in WATCH_COLLECTIONS — the federation-origin $match would never run", cfg.MessageCollection)
-	}
 	return cfg, nil
+}
+
+// watchesMessages reports whether this deployment watches the federated message collection (message role).
+func (c *config) watchesMessages() bool {
+	return slices.Contains(c.WatchCollections, c.MessageCollection)
 }
 
 // firstDuplicate returns the first repeated (trimmed) entry, or "" if all unique.

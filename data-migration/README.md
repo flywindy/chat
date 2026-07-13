@@ -95,7 +95,7 @@ and the matching `docs/superpowers/plans/2026-06-11-…` + `…2026-06-15-oplog-
     delete-cap reseed window). It's **scoped to the one message collection** (other watchers advance
     normally), and is a **connector-internal** concern; advancing from the post-batch resume token (PBRT)
     is a future connector change, not part of the federation-filter work.
-- **Subjects:** `chat.oplog.{siteID}.{rawCollection}.{op}`; dedup via
+- **Subjects:** `chat.migration.oplog.{siteID}.{rawCollection}.{op}`; dedup via
   `Nats-Msg-Id` = change-stream `_id._data`.
 - **Checkpoints:** one doc per collection in `oplog_checkpoints` (in `CHECKPOINT_DB`
   on the source RS). The resume token is the real checkpoint; saved only after a

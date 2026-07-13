@@ -1,6 +1,6 @@
 # oplog-transformer — migration stream → new-stack message pipeline (Design)
 
-> **Status:** DESIGN — stage 2 of the data-migration suite. Consumes `MIGRATION_OPLOG_{site}` (produced by stage-1 `oplog-connector`) and re-injects migrated RocketChat **messages** into the existing message pipeline. Depends on the stage-1 contract (`model.OplogEvent`, `chat.oplog.*` subjects). Built on branch `claude/oplog-transformer` (stacked on the stage-1 branch).
+> **Status:** DESIGN — stage 2 of the data-migration suite. Consumes `MIGRATION_OPLOG_{site}` (produced by stage-1 `oplog-connector`) and re-injects migrated RocketChat **messages** into the existing message pipeline. Depends on the stage-1 contract (`model.OplogEvent`, `chat.migration.oplog.*` subjects). Built on branch `claude/oplog-transformer` (stacked on the stage-1 branch).
 
 *A JetStream consumer — the counterpart to the connector's producer. One durable consumer on `MIGRATION_OPLOG_{site}`, routing each change event by collection. This spec covers the `rocketchat_message` path only; other collections (e.g. `users` → inbox-worker) are deferred to a later spec.*
 

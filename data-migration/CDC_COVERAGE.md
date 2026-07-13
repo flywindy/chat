@@ -10,6 +10,11 @@
 
 The connector forwards raw change-stream events with **no `updateLookup`** and **no `fullDocumentBeforeChange`**:
 
+> **Deployment note:** the connector runs as two deployments — `oplog-connector-messages`
+> (only `rocketchat_message`) and `oplog-connector-collections` (all other watched
+> collections) — with disjoint `WATCH_COLLECTIONS`, so a collection-side fault cannot stall
+> message CDC. Coverage below is unchanged by the split.
+
 | Op | Payload carried | Source lookup by `_id` |
 |---|---|---|
 | `insert` | full `fullDocument` | in payload |

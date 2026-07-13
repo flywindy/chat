@@ -10,7 +10,7 @@ A new service that **verbatim-copies** a configured set of source (legacy Rocket
 
 ```text
  (per site) source Mongo ──change stream──▶ oplog-connector ──▶ MIGRATION_OPLOG_{site}
-            startAfter(checkpoint): live CDC tail          │  chat.oplog.{site}.{coll}.{op}
+            startAfter(checkpoint): live CDC tail          │  chat.migration.oplog.{site}.{coll}.{op}
                                                             │  (subjects for the direct-transfer collections)
                                                             ▼
                                         oplog-direct-transfer ──upsert/delete by _id──▶ target per-site Mongo

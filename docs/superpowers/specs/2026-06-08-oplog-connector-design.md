@@ -52,14 +52,14 @@ So the connector's job reduces to: **resume from a given point, and never lose o
 ### 2.1 Stream
 
 - **Stream:** `MIGRATION_OPLOG_{siteID}` (added to `pkg/stream/stream.go` as `MigrationOplog(siteID)`).
-- **Subjects:** `["chat.oplog.{siteID}.>"]`.
+- **Subjects:** `["chat.migration.oplog.{siteID}.>"]`.
 - **Retention:** soak / time-based, sized over the **worst-case transformer outage** so the transformer can be down and replay without data loss. (Exact window is an ops/IaC decision; the connector does not depend on it.)
 - **Ownership:** the connector **owns** this stream and bootstraps it in dev only (§5).
 
 ### 2.2 Subject
 
 ```text
-chat.oplog.{siteID}.{rawCollection}.{op}      op ∈ insert | update | replace | delete
+chat.migration.oplog.{siteID}.{rawCollection}.{op}      op ∈ insert | update | replace | delete
 ```
 
 **All ops, every collection — identically.** Every change-stream operation type — `insert`, `update`, `replace`, `delete` — is traced and published for **every** watched collection. There is no per-collection op allow-listing, no op filtering, and **no per-collection knobs at all** — collections are pure config, all handled the same way. The connector mirrors the full mutation history of each collection so the transformer can reconstruct exact state. Change-stream control events (`invalidate`, `drop`, `rename`) are not data ops and are handled per §7.2, not published.
@@ -282,6 +282,23 @@ cancel watchers → await watcher exit (bounded timeout) → each persists its f
 ### 7.4 Observability
 
 `log/slog` JSON. Correlation field per event = `EventID` (the resume-token data). OTel tracing + Prometheus metrics via `otelutil` (`InitTracer`/`InitMeter`), exposed on a `/metrics` + `/healthz` listener at `METRICS_ADDR` (the k8s probe target). Metrics, all by `collection`: `oplog_replication_lag_ms` (now − `clusterTime` at publish), `oplog_events_published_total` (throughput), `oplog_publish_errors_total`, `oplog_events_skipped_total` (poison). For this single-replica pump, **alert on lag + sustained publish errors** — the signal that a retry-forever stall is eating the oplog window (§5/§6).
+
+### 7.5 Deployment topology — message vs collection split (2026-07-09)
+
+The connector runs as **two deployments of the same binary** with disjoint `WATCH_COLLECTIONS`
+(see `2026-07-09-oplog-connector-deployment-split-design.md`):
+
+- `oplog-connector-messages` — watches only `rocketchat_message`; federation-origin `$match` active.
+- `oplog-connector-collections` — watches everything else; filter inactive (nothing to filter).
+
+Rationale: a fatal watcher error tears down its whole process, so message CDC must not share a
+failure domain with low-value operational collections. Checkpoints are per-collection and the
+stream's subjects are per-collection, so the split needs no data or contract change.
+
+**Cross-deployment invariant (ops/IaC-owned, not code-enforced):** the two watch sets are
+disjoint, and exactly one deployment includes the message collection. `MESSAGE_COLLECTION` must
+be non-empty everywhere but need not be watched; each pod's startup log states its role
+("federation-origin filter active" vs "… filter inactive (collections role)").
 
 ---
 
