@@ -70,7 +70,9 @@ func (s *mongoDirectoryStore) ListEmployees(ctx context.Context) ([]employee, er
 			{Key: "account", Value: 1},
 			{Key: "siteId", Value: 1},
 			{Key: "roles", Value: 1},
-			{Key: "userId", Value: "$_id"},
+			// $toString hex-encodes an ObjectID _id and leaves a string _id
+			// unchanged, so either type decodes into UserID (a Go string).
+			{Key: "userId", Value: bson.D{{Key: "$toString", Value: "$_id"}}},
 			{Key: "employeeId", Value: "$hrEmployee.employeeId"},
 		}}},
 	}

@@ -103,6 +103,33 @@ func TestMongoDirectoryStore_ListEmployees_UsersPrimary(t *testing.T) {
 	assert.Len(t, emps, 5, "alice, bob, eve, dave, svc.notify.bot surface; hr_employee-only carol is excluded")
 }
 
+// TestMongoDirectoryStore_ListEmployees_ObjectIDUserID is the regression test
+// for the ObjectID-_id decode crash: an ObjectID _id must hex-encode into
+// UserID (a Go string) while a string _id passes through unchanged.
+func TestMongoDirectoryStore_ListEmployees_ObjectIDUserID(t *testing.T) {
+	db := testutil.MongoDB(t, "portal")
+	store := newMongoDirectoryStore(db)
+	ctx := context.Background()
+
+	oid := bson.NewObjectID()
+	_, err := db.Collection("users").InsertMany(ctx, []any{
+		bson.M{"_id": oid, "account": "alice", "siteId": "site-a"},
+		bson.M{"_id": "u-bob", "account": "bob", "siteId": "site-b"},
+	})
+	require.NoError(t, err)
+
+	emps, err := store.ListEmployees(ctx)
+	require.NoError(t, err)
+
+	byAccount := make(map[string]employee, len(emps))
+	for _, e := range emps {
+		byAccount[e.Account] = e
+	}
+
+	assert.Equal(t, employee{Account: "alice", SiteID: "site-a", UserID: oid.Hex()}, byAccount["alice"])
+	assert.Equal(t, employee{Account: "bob", SiteID: "site-b", UserID: "u-bob"}, byAccount["bob"])
+}
+
 func TestMongoDirectoryStore_ListEmployees_Empty(t *testing.T) {
 	db := testutil.MongoDB(t, "portal")
 	store := newMongoDirectoryStore(db)
