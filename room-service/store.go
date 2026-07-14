@@ -154,6 +154,12 @@ type RoomStore interface {
 
 	ListReadReceipts(ctx context.Context, roomID string, since time.Time, excludeAccount string, limit int) ([]ReadReceiptRow, error)
 
+	// ListThreadReadReceipts is the thread-scoped counterpart of ListReadReceipts:
+	// readers are thread subscribers whose thread lastSeenAt passed the message,
+	// not room members whose channel read-position did. Used for thread-only
+	// replies, which never appear in the channel (see #443).
+	ListThreadReadReceipts(ctx context.Context, threadRoomID string, since time.Time, excludeAccount string, limit int) ([]ReadReceiptRow, error)
+
 	// GetUser returns the user by account, or ErrUserNotFound.
 	GetUser(ctx context.Context, account string) (*model.User, error)
 	// GetApp returns the app whose Assistant.Name == botAccount, or ErrAppNotFound.
@@ -242,13 +248,23 @@ type DEKProvisioner interface {
 	EnsureDEK(ctx context.Context, roomID string) error
 }
 
+// MessageReadMeta is the read-receipt-relevant metadata for a message.
+// ThreadOnly marks a reply that lives only in a thread (threadParentId set,
+// not tshow) — it never appears in the channel, so its readers must come from
+// thread read-state, not the parent-room read-position (see #443).
+type MessageReadMeta struct {
+	RoomID       string
+	CreatedAt    time.Time
+	Sender       string
+	ThreadRoomID string
+	ThreadOnly   bool
+}
+
 // MessageReader looks up a message within a room. found=false with err=nil means
 // no message matched the (account, roomID, messageID) tuple. The lookup is scoped
 // to roomID so a wrong-room message resolves as not-found.
 type MessageReader interface {
-	GetMessageRoomAndCreatedAt(ctx context.Context, account, roomID, messageID string) (
-		msgRoomID string, createdAt time.Time, senderAccount string, found bool, err error,
-	)
+	GetMessageReadMeta(ctx context.Context, account, roomID, messageID string) (meta MessageReadMeta, found bool, err error)
 }
 
 // TeamsMeetingStore is the first-class idempotency record for a room's Teams

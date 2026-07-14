@@ -31,7 +31,7 @@ func startOtelNATS(t *testing.T) *otelnats.Conn {
 	return nc
 }
 
-func TestHistoryMessageReader_GetMessageRoomAndCreatedAt(t *testing.T) {
+func TestHistoryMessageReader_GetMessageReadMeta(t *testing.T) {
 	const (
 		account   = "alice"
 		roomID    = "room-1"
@@ -55,13 +55,14 @@ func TestHistoryMessageReader_GetMessageRoomAndCreatedAt(t *testing.T) {
 		require.NoError(t, err)
 
 		r := newHistoryMessageReader(nc, siteID)
-		gotRoom, gotCreated, gotSender, found, err := r.GetMessageRoomAndCreatedAt(context.Background(), account, roomID, messageID)
+		meta, found, err := r.GetMessageReadMeta(context.Background(), account, roomID, messageID)
 
 		require.NoError(t, err)
 		assert.True(t, found)
-		assert.Equal(t, roomID, gotRoom)
-		assert.Equal(t, createdAt, gotCreated.UTC())
-		assert.Equal(t, account, gotSender)
+		assert.Equal(t, roomID, meta.RoomID)
+		assert.Equal(t, createdAt, meta.CreatedAt.UTC())
+		assert.Equal(t, account, meta.Sender)
+		assert.False(t, meta.ThreadOnly)
 	})
 
 	// Regression (#440): a message with a reaction still decodes. The reply carries
@@ -85,13 +86,56 @@ func TestHistoryMessageReader_GetMessageRoomAndCreatedAt(t *testing.T) {
 		require.NoError(t, err)
 
 		r := newHistoryMessageReader(nc, siteID)
-		gotRoom, gotCreated, gotSender, found, err := r.GetMessageRoomAndCreatedAt(context.Background(), account, roomID, messageID)
+		meta, found, err := r.GetMessageReadMeta(context.Background(), account, roomID, messageID)
 
 		require.NoError(t, err)
 		assert.True(t, found)
-		assert.Equal(t, roomID, gotRoom)
-		assert.Equal(t, createdAt, gotCreated.UTC())
-		assert.Equal(t, account, gotSender)
+		assert.Equal(t, roomID, meta.RoomID)
+		assert.Equal(t, createdAt, meta.CreatedAt.UTC())
+		assert.Equal(t, account, meta.Sender)
+	})
+
+	// #443: a thread-only reply (threadParentId set, not tshow) is flagged ThreadOnly
+	// with its threadRoomId; a tshow reply is not (it's in the channel).
+	t.Run("thread-only reply is flagged ThreadOnly with threadRoomId", func(t *testing.T) {
+		nc := startOtelNATS(t)
+		msg := cassandra.Message{
+			MessageID: messageID, RoomID: roomID, CreatedAt: createdAt,
+			Sender:         cassandra.Participant{ID: "u-alice", Account: account},
+			ThreadParentID: "parent-1", ThreadRoomID: "thread-room-1", TShow: false,
+		}
+		_, err := nc.Subscribe(subject.MsgGet(account, roomID, siteID), func(m otelnats.Msg) {
+			data, _ := json.Marshal(msg)
+			_ = m.Msg.Respond(data)
+		})
+		require.NoError(t, err)
+
+		r := newHistoryMessageReader(nc, siteID)
+		meta, found, err := r.GetMessageReadMeta(context.Background(), account, roomID, messageID)
+		require.NoError(t, err)
+		assert.True(t, found)
+		assert.True(t, meta.ThreadOnly)
+		assert.Equal(t, "thread-room-1", meta.ThreadRoomID)
+	})
+
+	t.Run("tshow reply is not ThreadOnly", func(t *testing.T) {
+		nc := startOtelNATS(t)
+		msg := cassandra.Message{
+			MessageID: messageID, RoomID: roomID, CreatedAt: createdAt,
+			Sender:         cassandra.Participant{ID: "u-alice", Account: account},
+			ThreadParentID: "parent-1", ThreadRoomID: "thread-room-1", TShow: true,
+		}
+		_, err := nc.Subscribe(subject.MsgGet(account, roomID, siteID), func(m otelnats.Msg) {
+			data, _ := json.Marshal(msg)
+			_ = m.Msg.Respond(data)
+		})
+		require.NoError(t, err)
+
+		r := newHistoryMessageReader(nc, siteID)
+		meta, found, err := r.GetMessageReadMeta(context.Background(), account, roomID, messageID)
+		require.NoError(t, err)
+		assert.True(t, found)
+		assert.False(t, meta.ThreadOnly)
 	})
 
 	t.Run("history NotFound maps to found=false with no error", func(t *testing.T) {
@@ -103,7 +147,7 @@ func TestHistoryMessageReader_GetMessageRoomAndCreatedAt(t *testing.T) {
 		require.NoError(t, err)
 
 		r := newHistoryMessageReader(nc, siteID)
-		_, _, _, found, err := r.GetMessageRoomAndCreatedAt(context.Background(), account, roomID, messageID)
+		_, found, err := r.GetMessageReadMeta(context.Background(), account, roomID, messageID)
 
 		require.NoError(t, err)
 		assert.False(t, found)
@@ -119,7 +163,7 @@ func TestHistoryMessageReader_GetMessageRoomAndCreatedAt(t *testing.T) {
 		require.NoError(t, err)
 
 		r := newHistoryMessageReader(nc, siteID)
-		_, _, _, found, err := r.GetMessageRoomAndCreatedAt(context.Background(), account, roomID, messageID)
+		_, found, err := r.GetMessageReadMeta(context.Background(), account, roomID, messageID)
 
 		assert.False(t, found)
 		require.Error(t, err)
@@ -134,7 +178,7 @@ func TestHistoryMessageReader_GetMessageRoomAndCreatedAt(t *testing.T) {
 		require.NoError(t, err)
 
 		r := newHistoryMessageReader(nc, siteID)
-		_, _, _, found, err := r.GetMessageRoomAndCreatedAt(context.Background(), account, roomID, messageID)
+		_, found, err := r.GetMessageReadMeta(context.Background(), account, roomID, messageID)
 
 		assert.False(t, found)
 		require.Error(t, err)
@@ -145,7 +189,7 @@ func TestHistoryMessageReader_GetMessageRoomAndCreatedAt(t *testing.T) {
 		nc := startOtelNATS(t) // no subscriber registered
 
 		r := newHistoryMessageReader(nc, siteID)
-		_, _, _, found, err := r.GetMessageRoomAndCreatedAt(context.Background(), account, roomID, messageID)
+		_, found, err := r.GetMessageReadMeta(context.Background(), account, roomID, messageID)
 
 		assert.False(t, found)
 		require.Error(t, err)

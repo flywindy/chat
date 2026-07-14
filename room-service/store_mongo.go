@@ -1257,6 +1257,59 @@ func (s *MongoStore) ListReadReceipts(
 	return rows, nil
 }
 
+// ListThreadReadReceipts mirrors ListReadReceipts over thread_subscriptions:
+// readers are thread subscribers whose thread lastSeenAt passed the message.
+// thread_subscriptions store userAccount/userId flat (no embedded "u" doc), so
+// the match and the users $lookup key off those fields directly.
+func (s *MongoStore) ListThreadReadReceipts(
+	ctx context.Context,
+	threadRoomID string,
+	since time.Time,
+	excludeAccount string,
+	limit int,
+) ([]ReadReceiptRow, error) {
+	pipeline := mongo.Pipeline{
+		{{Key: "$match", Value: bson.M{
+			"threadRoomId": threadRoomID,
+			"lastSeenAt":   bson.M{"$gte": since},
+			"userAccount":  bson.M{"$ne": excludeAccount},
+		}}},
+		{{Key: "$lookup", Value: bson.M{
+			"from": "users",
+			"let":  bson.M{"uid": "$userId"},
+			"pipeline": bson.A{
+				bson.M{"$match": bson.M{"$expr": bson.M{"$eq": []any{"$_id", "$$uid"}}}},
+				bson.M{"$project": bson.M{"_id": 1, "account": 1, "chineseName": 1, "engName": 1}},
+			},
+			"as": "user",
+		}}},
+		{{Key: "$unwind", Value: bson.M{
+			"path":                       "$user",
+			"preserveNullAndEmptyArrays": false,
+		}}},
+		{{Key: "$replaceWith", Value: "$user"}},
+		{{Key: "$limit", Value: int64(limit)}},
+	}
+	cursor, err := s.threadSubscriptions.Aggregate(ctx, pipeline)
+	if err != nil {
+		return nil, fmt.Errorf("aggregate thread read receipts for thread room %q: %w", threadRoomID, err)
+	}
+	defer cursor.Close(ctx)
+
+	rows := make([]ReadReceiptRow, 0)
+	for cursor.Next(ctx) {
+		var r ReadReceiptRow
+		if err := cursor.Decode(&r); err != nil {
+			return nil, fmt.Errorf("decode thread read-receipt row for thread room %q: %w", threadRoomID, err)
+		}
+		rows = append(rows, r)
+	}
+	if err := cursor.Err(); err != nil {
+		return nil, fmt.Errorf("iterate thread read receipts for thread room %q: %w", threadRoomID, err)
+	}
+	return rows, nil
+}
+
 func (s *MongoStore) GetThreadSubscriptionByParent(ctx context.Context, account, parentMessageID, roomID string) (*model.ThreadSubscription, error) {
 	var ts model.ThreadSubscription
 	err := s.threadSubscriptions.FindOne(ctx, bson.M{

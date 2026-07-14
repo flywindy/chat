@@ -35,22 +35,22 @@ type getMessageByIDRequest struct {
 	MessageID string `json:"messageId"`
 }
 
-// GetMessageRoomAndCreatedAt issues a NATS request to history-service's
+// GetMessageReadMeta issues a NATS request to history-service's
 // GetMessageByID handler, scoped to (account, roomID). history-service looks the
 // message up within roomID, so a message that does not exist there comes back as
 // NotFound, which maps to found=false. A no-responder/timeout degrades to
 // errcode.Unavailable so read receipts fail soft instead of erroring hard.
-func (r *historyMessageReader) GetMessageRoomAndCreatedAt(
+func (r *historyMessageReader) GetMessageReadMeta(
 	ctx context.Context, account, roomID, messageID string,
-) (string, time.Time, string, bool, error) {
+) (MessageReadMeta, bool, error) {
 	reqBytes, err := json.Marshal(getMessageByIDRequest{MessageID: messageID})
 	if err != nil {
-		return "", time.Time{}, "", false, fmt.Errorf("marshal get-message request: %w", err)
+		return MessageReadMeta{}, false, fmt.Errorf("marshal get-message request: %w", err)
 	}
 
 	msg, err := r.nc.Request(ctx, subject.MsgGet(account, roomID, r.siteID), reqBytes, historyRequestTimeout)
 	if err != nil {
-		return "", time.Time{}, "", false, errcode.Unavailable("read receipts are temporarily unavailable",
+		return MessageReadMeta{}, false, errcode.Unavailable("read receipts are temporarily unavailable",
 			errcode.WithReason(errcode.RoomReadReceiptsUnavailable),
 			errcode.WithCause(err))
 	}
@@ -60,9 +60,9 @@ func (r *historyMessageReader) GetMessageRoomAndCreatedAt(
 	// its canonical errMessageNotFound; other classifications propagate intact.
 	if ee, ok := errcode.Parse(msg.Data); ok && ee.Code.Valid() {
 		if ee.Code == errcode.CodeNotFound {
-			return "", time.Time{}, "", false, nil
+			return MessageReadMeta{}, false, nil
 		}
-		return "", time.Time{}, "", false, ee
+		return MessageReadMeta{}, false, ee
 	}
 
 	// Decode a narrow projection, not the full cassandra.Message: that type embeds
@@ -70,14 +70,24 @@ func (r *historyMessageReader) GetMessageRoomAndCreatedAt(
 	// message fails to decode. Mirrors message-gatekeeper's quotedParentProjection.
 	var m messageProjection
 	if err := json.Unmarshal(msg.Data, &m); err != nil {
-		return "", time.Time{}, "", false, fmt.Errorf("unmarshal message: %w", err)
+		return MessageReadMeta{}, false, fmt.Errorf("unmarshal message: %w", err)
 	}
-	return m.RoomID, m.CreatedAt, m.Sender.Account, true, nil
+	return MessageReadMeta{
+		RoomID:       m.RoomID,
+		CreatedAt:    m.CreatedAt,
+		Sender:       m.Sender.Account,
+		ThreadRoomID: m.ThreadRoomID,
+		// Thread-only = a reply (threadParentId set) not mirrored to the channel.
+		ThreadOnly: m.ThreadParentID != "" && !m.TShow,
+	}, true, nil
 }
 
 // messageProjection decodes only the fields the read-receipt lookup needs.
 type messageProjection struct {
-	RoomID    string                `json:"roomId"`
-	CreatedAt time.Time             `json:"createdAt"`
-	Sender    cassandra.Participant `json:"sender"`
+	RoomID         string                `json:"roomId"`
+	CreatedAt      time.Time             `json:"createdAt"`
+	Sender         cassandra.Participant `json:"sender"`
+	ThreadParentID string                `json:"threadParentId"`
+	ThreadRoomID   string                `json:"threadRoomId"`
+	TShow          bool                  `json:"tshow"`
 }

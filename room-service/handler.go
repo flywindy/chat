@@ -1443,12 +1443,10 @@ func (h *Handler) messageReadReceipt(c *natsrouter.Context, req model.ReadReceip
 	}
 
 	var (
-		msgRoomID    string
-		msgCreatedAt time.Time
-		msgSender    string
-		msgFound     bool
-		subErr       error
-		msgErr       error
+		meta     MessageReadMeta
+		msgFound bool
+		subErr   error
+		msgErr   error
 	)
 	// Plain errgroup (no WithContext): both tasks always return nil and capture
 	// their errors above, so we can enforce error precedence ourselves —
@@ -1462,7 +1460,7 @@ func (h *Handler) messageReadReceipt(c *natsrouter.Context, req model.ReadReceip
 		return nil
 	})
 	g.Go(func() error {
-		msgRoomID, msgCreatedAt, msgSender, msgFound, msgErr = h.msgReader.GetMessageRoomAndCreatedAt(ctx, requesterAccount, roomID, req.MessageID)
+		meta, msgFound, msgErr = h.msgReader.GetMessageReadMeta(ctx, requesterAccount, roomID, req.MessageID)
 		return nil
 	})
 	_ = g.Wait()
@@ -1482,14 +1480,24 @@ func (h *Handler) messageReadReceipt(c *natsrouter.Context, req model.ReadReceip
 	// Belt-and-suspenders: history-service already scopes the lookup to roomID
 	// (a wrong-room message comes back as not-found), so this guards only against
 	// a future reader that does not pre-filter by room.
-	if msgRoomID != roomID {
+	if meta.RoomID != roomID {
 		return nil, errMessageRoomMismatch
 	}
-	if msgSender != requesterAccount {
+	if meta.Sender != requesterAccount {
 		return nil, errNotMessageSender
 	}
 
-	rows, err := h.store.ListReadReceipts(ctx, roomID, msgCreatedAt, msgSender, h.maxRoomSize)
+	// A thread-only reply never appears in the channel, so channel read-position
+	// isn't evidence of reading it — resolve readers from thread read-state instead (#443).
+	var (
+		rows []ReadReceiptRow
+		err  error
+	)
+	if meta.ThreadOnly {
+		rows, err = h.store.ListThreadReadReceipts(ctx, meta.ThreadRoomID, meta.CreatedAt, meta.Sender, h.maxRoomSize)
+	} else {
+		rows, err = h.store.ListReadReceipts(ctx, roomID, meta.CreatedAt, meta.Sender, h.maxRoomSize)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("list read receipts: %w", err)
 	}

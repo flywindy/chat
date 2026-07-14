@@ -615,6 +615,12 @@ Synchronous, sender-only RPC. Returns local-site users whose `subscription.lastS
 is at or after the target message's `createdAt`. The message author is excluded from
 results.
 
+For a **thread-only reply** (a threaded reply not mirrored to the channel, i.e. not
+`tshow`), readers are resolved from **thread** read-state (`thread_subscriptions.lastSeenAt`)
+instead of the room's — the reply never appears in the channel, so a member's channel
+read-position is not evidence they saw it. Channel messages and `tshow` replies use room
+read-state.
+
 #### Request body
 
 | Field | Type | Notes |

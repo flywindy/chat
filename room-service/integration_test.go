@@ -2248,6 +2248,42 @@ func TestMongoStore_ListReadReceipts_Integration(t *testing.T) {
 	require.Empty(t, rows)
 }
 
+func TestMongoStore_ListThreadReadReceipts_Integration(t *testing.T) {
+	ctx := context.Background()
+	db := setupMongo(t)
+	store := NewMongoStore(db)
+	require.NoError(t, store.EnsureIndexes(ctx))
+
+	_, err := db.Collection("users").InsertMany(ctx, []any{
+		bson.M{"_id": "uA", "account": "alice", "chineseName": "愛麗絲", "engName": "Alice"},
+		bson.M{"_id": "uB", "account": "bob", "chineseName": "鮑勃", "engName": "Bob"},
+		bson.M{"_id": "uC", "account": "carol", "chineseName": "卡羅", "engName": "Carol"},
+	})
+	require.NoError(t, err)
+
+	// thread_subscriptions store userAccount/userId flat (no embedded "u"). Only
+	// bob's thread lastSeenAt is at/after the reply; carol's is before; alice is the sender.
+	msgTime := time.Date(2026, 5, 8, 12, 0, 0, 0, time.UTC)
+	_, err = db.Collection("thread_subscriptions").InsertMany(ctx, []any{
+		bson.M{"_id": "tsA", "threadRoomId": "tr1", "userId": "uA", "userAccount": "alice", "lastSeenAt": msgTime.Add(time.Hour)},
+		bson.M{"_id": "tsB", "threadRoomId": "tr1", "userId": "uB", "userAccount": "bob", "lastSeenAt": msgTime.Add(time.Minute)},
+		bson.M{"_id": "tsC", "threadRoomId": "tr1", "userId": "uC", "userAccount": "carol", "lastSeenAt": msgTime.Add(-time.Minute)},
+	})
+	require.NoError(t, err)
+
+	rows, err := store.ListThreadReadReceipts(ctx, "tr1", msgTime, "alice", 100)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.Equal(t, "uB", rows[0].UserID)
+	require.Equal(t, "bob", rows[0].Account)
+	require.Equal(t, "鮑勃", rows[0].ChineseName)
+	require.Equal(t, "Bob", rows[0].EngName)
+
+	rows, err = store.ListThreadReadReceipts(ctx, "tr1", msgTime.Add(2*time.Hour), "alice", 100)
+	require.NoError(t, err)
+	require.Empty(t, rows)
+}
+
 func TestMongoStore_GetThreadSubscriptionByParent(t *testing.T) {
 	db := setupMongo(t)
 	store := NewMongoStore(db)

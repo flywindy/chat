@@ -2045,6 +2045,8 @@ When the requester's home site differs from the room's site, `room-service` emit
 
 A **synchronous, sender-only** RPC. Returns the list of users on the local site whose `subscription.lastSeenAt` is at or after the target message's `createdAt`. Only the message author may call it. The author is excluded from the result.
 
+For a **thread-only reply** (a threaded reply not mirrored to the channel, i.e. not `tshow`), readers are resolved from **thread** read-state (`thread_subscriptions.lastSeenAt`) rather than the room's: the reply never appears in the channel, so a member's channel read-position is not evidence they saw it. Channel messages and `tshow` replies (which do appear in the channel) continue to use room read-state. This keeps the receipt consistent with the thread's `minUserLastSeenAt`.
+
 ##### Request body
 
 | Field | Type | Notes |
