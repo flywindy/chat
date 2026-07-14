@@ -1824,7 +1824,7 @@ See [Error envelope](#6-error-envelope-reference). Common errors:
 
 ##### Triggered events — success path
 
-**1. `chat.user.{account}.event.subscription.update`** — emitted once for the reader (non-bot only) on the success path (best-effort, core NATS), `action: "read"`. See the [subscription.update schema](#subscriptionupdate-event). The embedded `Subscription` carries the updated `lastSeenAt` and `alert`. Not fired on the early-return paths (empty room or reader already past `lastMsgAt`).
+**1. `chat.user.{account}.event.subscription.update`** — emitted once for the reader (non-bot only) on the success path (best-effort, core NATS), `action: "read"`. See the [subscription.update schema](#subscriptionupdate-event). The embedded `Subscription` carries the updated `lastSeenAt` and `alert`, plus the read-cleared derived flags `hasMention: false` and `hasGroupMention: false` (reading the room clears both). Not fired on the early-return paths (empty room or reader already past `lastMsgAt`).
 
 **2. Floor advance events** — emitted **only when the room read floor (`Room.MinUserLastSeenAt`) changes** (best-effort, core NATS):
 

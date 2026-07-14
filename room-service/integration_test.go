@@ -112,10 +112,12 @@ func TestMongoStore_GetRoom_ProjectionFields_Integration(t *testing.T) {
 
 	lastMsg := time.Now().UTC().Add(-time.Hour).Truncate(time.Millisecond)
 	minSeen := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Millisecond)
+	lastMentionAll := time.Now().UTC().Add(-90 * time.Minute).Truncate(time.Millisecond)
 	mustInsertRoom(t, db, &model.Room{
 		ID: "rproj", Name: "proj-room", Type: model.RoomTypeChannel, SiteID: "site-a",
 		UserCount: 7, AppCount: 3, Restricted: true, ExternalAccess: true,
 		LastMsgAt: &lastMsg, MinUserLastSeenAt: &minSeen, LastMsgID: "m123",
+		LastMentionAllAt: &lastMentionAll,
 	})
 
 	got, err := store.GetRoom(ctx, "rproj")
@@ -131,6 +133,8 @@ func TestMongoStore_GetRoom_ProjectionFields_Integration(t *testing.T) {
 	assert.WithinDuration(t, lastMsg, *got.LastMsgAt, time.Second)
 	require.NotNil(t, got.MinUserLastSeenAt)
 	assert.WithinDuration(t, minSeen, *got.MinUserLastSeenAt, time.Second)
+	require.NotNil(t, got.LastMentionAllAt, "lastMentionAllAt must be in the projection (read event computes hasGroupMention from it)")
+	assert.WithinDuration(t, lastMentionAll, *got.LastMentionAllAt, time.Second)
 }
 
 // TestMongoStore_GetSubscription_ProjectionFields_Integration pins the field

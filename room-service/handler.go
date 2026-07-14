@@ -1338,6 +1338,10 @@ func (h *Handler) messageRead(c *natsrouter.Context) (*model.StatusReply, error)
 		updatedSub := *sub
 		updatedSub.LastSeenAt = &now
 		updatedSub.Alert = newAlert
+		// Set the derived flags explicitly (don't rely on the projection omitting
+		// them). Reading the room clears both hasMention and hasGroupMention.
+		updatedSub.HasMention = false
+		updatedSub.HasGroupMention = false
 		// roomName omitted: clients don't use it on read events.
 		if _, err := h.publishSubscriptionUpdate(ctx, account, "read", &updatedSub, "", now); err != nil {
 			slog.Error("subscription update on read failed", "error", err,
