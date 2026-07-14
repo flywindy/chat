@@ -10,7 +10,7 @@ A new service that **verbatim-copies** a configured set of source (legacy Rocket
 
 ```text
  (per site) source Mongo ──change stream──▶ oplog-connector ──▶ MIGRATION_OPLOG_{site}
-            startAfter(checkpoint): live CDC tail          │  chat.oplog.{site}.{coll}.{op}
+            startAfter(checkpoint): live CDC tail          │  chat.migration.oplog.{site}.{coll}.{op}
                                                             │  (subjects for the direct-transfer collections)
                                                             ▼
                                         oplog-direct-transfer ──upsert/delete by _id──▶ target per-site Mongo
@@ -30,7 +30,7 @@ A new service that **verbatim-copies** a configured set of source (legacy Rocket
 ### 1.1 Collections (direct transfer)
 Source → destination is **1:1, verbatim, same collection name**, into the new-stack per-site Mongo (`chat` DB):
 
-`rocketchat_avatar`, `tsmc_apps_v`, `tsmc_bot_cmd_men`, `tsmc_tsso_tokens`, `rocketchat_uploads`, `tsmc_bot_authorization`, `ufsTokens`, `user_devices`
+`rocketchat_avatar`, `company_apps_v`, `company_bot_cmd_men`, `company_tsso_tokens`, `rocketchat_uploads`, `company_bot_authorization`, `ufsTokens`, `user_devices`
 
 The set is **config-driven** (`DIRECT_COLLECTIONS`), so adding/removing a collection is an env + `WATCH_COLLECTIONS` change, not a code change. The default is the eight above.
 
@@ -78,7 +78,7 @@ Mirror the sibling transformers' conventions via `pkg/migration`:
 - **Disposition:** decode / contract violation (bad `documentKey`, undecodable doc) → **Term** (poison); source/target Mongo unavailable → **Nak** (transient); `MAX_DELIVER` exhaustion → **Term + metric** (no silent JetStream drop); a delete of an absent row or an update whose doc vanished → Ack (skip + metric).
 - **Correlation:** stamp `request_id` at consume; propagate via `context.Context` into every log line.
 - **Metrics (Prometheus):** processed / nak / term / skipped / exhausted, labelled by `op` + `collection`; plus upsert-vs-delete counts.
-- **Security / logging (important):** `tsmc_tsso_tokens`, `ufsTokens`, `tsmc_bot_authorization`, and `user_devices` carry tokens / credentials / device secrets. The handler logs **only** `_id`, `collection`, and `op` — **never document contents**. No token or full body reaches a log line or an error `cause` (CLAUDE.md secret-logging rule; keeps `gosec`/`semgrep` clean).
+- **Security / logging (important):** `company_tsso_tokens`, `ufsTokens`, `company_bot_authorization`, and `user_devices` carry tokens / credentials / device secrets. The handler logs **only** `_id`, `collection`, and `op` — **never document contents**. No token or full body reaches a log line or an error `cause` (CLAUDE.md secret-logging rule; keeps `gosec`/`semgrep` clean).
 
 ---
 
@@ -149,6 +149,6 @@ This service creates **no** indexes on the destination collections. Docs are key
 
 ## 12. Open confirmations (source engineers)
 
-- Do all 8 collections carry a stable `_id` safe to adopt as the destination `_id`? (Assumed yes — RocketChat/TSMC collections are `_id`-keyed.)
+- Do all 8 collections carry a stable `_id` safe to adopt as the destination `_id`? (Assumed yes — RocketChat/Company collections are `_id`-keyed.)
 - Confirm each source collection has TTL/expiry handled by a `delete` change event (so mirrored deletes suffice) rather than any out-of-band expiry the change stream wouldn't surface.
 - Confirm the file-store split: metadata in these collections, bytes elsewhere (out of scope).

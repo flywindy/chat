@@ -49,7 +49,7 @@ estimate (§6.1/§9). `{siteID}` is the local site; `HR_` is keyed by the centra
 | `PUSH_NOTIFICATION_{siteID}` | `chat.server.notification.push.{siteID}.>` | notification-worker | push-gateway worker → APNs/FCM | ✅ |
 | `HR_{centralSiteID}` | `chat.hr.{centralSiteID}.>` | hr-syncer (central site) | search-sync-worker (every fab) | ✅ |
 | `SYSTEM_{siteID}` | `chat.system.{siteID}.>` | system services (admin/ops events) | system consumers | ✅ *(negligible, ~10/day)* |
-| `MIGRATION_OPLOG_{siteID}` | `chat.oplog.{siteID}.>` | oplog-connector | migration applier (1) | ⏱ §8 phase |
+| `MIGRATION_OPLOG_{siteID}` | `chat.migration.oplog.{siteID}.>` | oplog-connector | migration applier (1) | ⏱ §8 phase |
 | `BOT_MESSAGES_CANONICAL_{siteID}` | `chat.bot.msg.canonical.{siteID}.>` | Bot Msg Handler | Shared Sync Worker, Bot Broadcast Worker, Bot Notification Worker | ✅ |
 | `BOT_PUSH_NOTIFICATION_{siteID}` | `chat.bot.server.notification.push.{siteID}.>` | Bot Notification Worker | Bot Push Notification | ✅ |
 | `BOT_PLATFORM_{siteID}` | `chat.bot.event.{siteID}.>` | Broadcast Worker | Bot Webhook Worker | ✅ |
@@ -437,7 +437,7 @@ TTL 8 hr.
 
 | Flow | Rate | Per day | Bytes/s | Bytes/day |
 |------|-----:|--------:|--------:|----------:|
-| Publish (`chat.oplog.{siteID}.>`) | 200 msg/s | 17.28M | 26 MB/s | ~2.25 TB |
+| Publish (`chat.migration.oplog.{siteID}.>`) | 200 msg/s | 17.28M | 26 MB/s | ~2.25 TB |
 | Consumer delivery (×1 applier) | 200 msg/s | 17.28M | 26 MB/s | ~2.25 TB |
 | **Total** | **400 msg/s** | **34.56M** | **~52 MB/s** | **~4.49 TB/day** |
 

@@ -525,6 +525,106 @@ func TestHandle_ThreadOnlyReply_ParentSenderAlwaysNotified(t *testing.T) {
 		"parent author carol notified; uninvolved dave excluded")
 }
 
+// failIfCalledParent is a ParentFetcher double that fails the test if FetchParent
+// is ever invoked — used to prove the event-carried parent values are used and the
+// history-service round-trip is skipped.
+type failIfCalledParent struct{ t *testing.T }
+
+func (p failIfCalledParent) FetchParent(context.Context, string, string, string, string) (*ParentMessageInfo, error) {
+	p.t.Helper()
+	p.t.Error("FetchParent must not be called when the event carries the parent createdAt + sender account")
+	return &ParentMessageInfo{}, nil
+}
+
+// When the gatekeeper resolved the parent on the send path, the event carries both
+// the parent createdAt and the parent sender account. notification-worker must use
+// them directly and skip FetchParent — while still notifying the parent author
+// (race-free) and gating restricted followers by the event's createdAt.
+func TestHandle_ThreadOnlyReply_UsesEventParent_SkipsFetch(t *testing.T) {
+	parentMillis := int64(1700000000000)
+	parentCreatedAt := time.UnixMilli(parentMillis).UTC()
+	before := parentMillis - 1000 // joined before the parent → not restricted
+	after := parentMillis + 1000  // joined after the parent → restricted
+
+	members := &stubMembers{out: map[string][]roomsubcache.Member{
+		"r1": {
+			{ID: "alice", Account: "alice"},                          // reply sender
+			{ID: "carol", Account: "carol"},                          // parent author (from event)
+			{ID: "bob", Account: "bob", HistorySharedSince: &before}, // follower, unrestricted
+			{ID: "eve", Account: "eve", HistorySharedSince: &after},  // follower, restricted
+		},
+	}}
+	followers := &stubFollowers{
+		out: map[string]map[string]struct{}{"parent-1": {"bob": {}, "eve": {}}},
+	}
+	emit := &recordingEmitter{}
+	h := NewHandler(HandlerDeps{
+		Members:            members,
+		Followers:          followers,
+		Parent:             failIfCalledParent{t}, // must NOT be called
+		Presence:           noopPresenceSnapshotter{},
+		Hook:               noopVetoer{},
+		Emitter:            emit,
+		LargeRoomThreshold: 500,
+	})
+
+	evt := model.MessageEvent{
+		Message: model.Message{
+			ID: "m1", RoomID: "r1", UserID: "alice", UserAccount: "alice", CreatedAt: time.Now(),
+			ThreadParentMessageID:        "parent-1",
+			ThreadParentMessageCreatedAt: &parentCreatedAt, // gatekeeper-resolved
+			TShow:                        false,
+			Content:                      "thread reply",
+		},
+		SiteID:                    "site-a",
+		ThreadParentSenderAccount: "carol", // gatekeeper-resolved parent author
+	}
+	data, _ := json.Marshal(evt)
+	require.NoError(t, h.HandleMessage(context.Background(), data))
+	assert.ElementsMatch(t, []string{"carol", "bob"}, emit.accounts(),
+		"parent author + unrestricted follower notified; restricted follower suppressed by event createdAt")
+}
+
+// When the event lacks the parent sender account (gatekeeper soft-fail, or an
+// edit/delete event that bypassed the gatekeeper), notification-worker falls back to
+// FetchParent even if createdAt is present — both values come from the same fetch.
+func TestHandle_ThreadOnlyReply_MissingSenderAccount_FallsBackToFetch(t *testing.T) {
+	parentCreatedAt := time.UnixMilli(1700000000000).UTC()
+	members := &stubMembers{out: map[string][]roomsubcache.Member{
+		"r1": {
+			{ID: "alice", Account: "alice"}, // reply sender
+			{ID: "carol", Account: "carol"}, // parent author, only reachable via fetch
+		},
+	}}
+	followers := &stubFollowers{}
+	emit := &recordingEmitter{}
+	h := NewHandler(HandlerDeps{
+		Members:            members,
+		Followers:          followers,
+		Parent:             stubParent{info: &ParentMessageInfo{SenderAccount: "carol", CreatedAt: parentCreatedAt}},
+		Presence:           noopPresenceSnapshotter{},
+		Hook:               noopVetoer{},
+		Emitter:            emit,
+		LargeRoomThreshold: 500,
+	})
+
+	// createdAt present on the event, but no sender account → fetch fallback.
+	evt := model.MessageEvent{
+		Message: model.Message{
+			ID: "m1", RoomID: "r1", UserID: "alice", UserAccount: "alice", CreatedAt: time.Now(),
+			ThreadParentMessageID:        "parent-1",
+			ThreadParentMessageCreatedAt: &parentCreatedAt,
+			TShow:                        false,
+			Content:                      "thread reply",
+		},
+		SiteID: "site-a",
+	}
+	data, _ := json.Marshal(evt)
+	require.NoError(t, h.HandleMessage(context.Background(), data))
+	assert.ElementsMatch(t, []string{"carol"}, emit.accounts(),
+		"parent author from fetch fallback is notified")
+}
+
 type errFollowers struct{}
 
 func (errFollowers) Lookup(context.Context, string) (ThreadRoomInfo, error) {

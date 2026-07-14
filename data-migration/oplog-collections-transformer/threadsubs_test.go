@@ -51,7 +51,7 @@ func newResolvedTarget() *threadSubTarget {
 	}
 }
 
-// threadSubEv builds an oplogEvent for the tsmc_thread_subscriptions collection.
+// threadSubEv builds an oplogEvent for the company_thread_subscriptions collection.
 func threadSubEv(op, doc string) oplogEvent {
 	ev := oplogEvent{Op: op, Collection: threadSubColl, EventID: "ts1"}
 	if doc != "" {

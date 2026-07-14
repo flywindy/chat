@@ -107,7 +107,7 @@ type config struct {
 
 	// DirectCollections is the set of source collections copied verbatim to the same-named
 	// destination collection. Config-driven so adding one is an env + WATCH_COLLECTIONS change.
-	DirectCollections []string `env:"DIRECT_COLLECTIONS" envSeparator:"," envDefault:"rocketchat_avatar,tsmc_apps_v,tsmc_bot_cmd_men,tsmc_tsso_tokens,rocketchat_uploads,tsmc_bot_authorization,ufsTokens,user_devices"`
+	DirectCollections []string `env:"DIRECT_COLLECTIONS" envSeparator:"," envDefault:"rocketchat_avatar,company_apps_v,company_bot_cmd_men,company_tsso_tokens,rocketchat_uploads,company_bot_authorization,ufsTokens,user_devices"`
 
 	NatsURL       string `env:"NATS_URL,required"`
 	NatsCredsFile string `env:"NATS_CREDS_FILE" envDefault:""`
@@ -817,7 +817,7 @@ func (h *handler) resolveDoc(ctx context.Context, ev oplogEvent, id any) (bson.D
 }
 ```
 
-> **Note on `SourceLookup.FindByID(ctx, id string)`:** the shared interface takes a `string` id. For string `_id`s this is exact. For non-string `_id`s, `fmt.Sprintf("%v", id)` is a lossy key — see Task 9's integration note. If any direct-transfer collection turns out to use a non-string `_id` that receives `update` events, extend `pkg/migration.SourceLookup` with a `FindByRawID(ctx, id any)` in a follow-up. For the initial 8 (RocketChat/TSMC app collections, string-keyed), the string path is correct.
+> **Note on `SourceLookup.FindByID(ctx, id string)`:** the shared interface takes a `string` id. For string `_id`s this is exact. For non-string `_id`s, `fmt.Sprintf("%v", id)` is a lossy key — see Task 9's integration note. If any direct-transfer collection turns out to use a non-string `_id` that receives `update` events, extend `pkg/migration.SourceLookup` with a `FindByRawID(ctx, id any)` in a follow-up. For the initial 8 (RocketChat/Company app collections, string-keyed), the string path is correct.
 
 - [ ] **Step 4: Run to verify it passes**
 
@@ -1401,7 +1401,7 @@ ENTRYPOINT ["/oplog-direct-transfer"]
 
 - [ ] **Step 3: Extend the connector's `WATCH_COLLECTIONS`** — the connector rejects duplicates, and `rocketchat_uploads` is already present. Add the other 7 direct-transfer collections. In `data-migration/oplog-connector/deploy/docker-compose.yml`, change the `WATCH_COLLECTIONS=` line to append:
 
-`rocketchat_avatar,tsmc_apps_v,tsmc_bot_cmd_men,tsmc_tsso_tokens,tsmc_bot_authorization,ufsTokens,user_devices`
+`rocketchat_avatar,company_apps_v,company_bot_cmd_men,company_tsso_tokens,company_bot_authorization,ufsTokens,user_devices`
 
 (i.e. every direct-transfer collection except `rocketchat_uploads`, which is already listed). Verify no duplicate remains in the final comma list.
 
@@ -1442,8 +1442,8 @@ the destination adopts the source `_id`, **delete is actionable** (unlike the re
 | `delete` | delete by `_id` (idempotent) |
 | collection-level (`drop`/`rename`/`invalidate`) | ⚠️ out of scope, deferred |
 
-Collections: `rocketchat_avatar`, `tsmc_apps_v`, `tsmc_bot_cmd_men`, `tsmc_tsso_tokens`,
-`rocketchat_uploads`, `tsmc_bot_authorization`, `ufsTokens`, `user_devices`.
+Collections: `rocketchat_avatar`, `company_apps_v`, `company_bot_cmd_men`, `company_tsso_tokens`,
+`rocketchat_uploads`, `company_bot_authorization`, `ufsTokens`, `user_devices`.
 **Metadata only** — file/blob bytes (UFS/GridFS) are out of scope. No destination indexes or TTL
 (removal is CDC-driven). Design: `docs/superpowers/specs/2026-07-01-oplog-direct-transfer-design.md`.
 ```

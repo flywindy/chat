@@ -116,11 +116,12 @@ func (h *Handler) HandleMessage(ctx context.Context, data []byte) error {
 	isThreadOnlyReply := msg.ThreadParentMessageID != "" && !msg.TShow
 
 	var followers map[string]struct{}
-	// parentCreatedAt + parentSenderAccount are read from history-service, not the
-	// event or thread_rooms: message-gatekeeper no longer carries the parent createdAt,
-	// and thread_rooms may not exist yet on the first reply. The parent pre-exists, so
-	// this fetch is race-free and authoritative for both the suppression gate and the
-	// parent-author recipient.
+	// parentCreatedAt + parentSenderAccount feed the suppression gate and the
+	// parent-author recipient. The gatekeeper resolves both best-effort on the send
+	// path and carries them on the event; use them when present and fall back to a
+	// history-service fetch only when either is absent (edit/delete events bypass the
+	// gatekeeper, or a gatekeeper soft-fail). The parent pre-exists, so the fetch is
+	// race-free and authoritative.
 	var parentCreatedAt *time.Time
 	var parentSenderAccount string
 	if isThreadOnlyReply {
@@ -132,14 +133,19 @@ func (h *Handler) HandleMessage(ctx context.Context, data []byte) error {
 			return fmt.Errorf("lookup thread room for parent %s: %w", msg.ThreadParentMessageID, ferr)
 		}
 		followers = info.Followers
-		// The reply sender can always read the parent they replied to; fetch on their behalf.
-		parent, perr := h.deps.Parent.FetchParent(ctx, msg.UserAccount, msg.RoomID, evt.SiteID, msg.ThreadParentMessageID)
-		if perr != nil {
-			return fmt.Errorf("fetch thread parent %s: %w", msg.ThreadParentMessageID, perr)
+		if msg.ThreadParentMessageCreatedAt != nil && evt.ThreadParentSenderAccount != "" {
+			parentCreatedAt = msg.ThreadParentMessageCreatedAt
+			parentSenderAccount = evt.ThreadParentSenderAccount
+		} else {
+			// The reply sender can always read the parent they replied to; fetch on their behalf.
+			parent, perr := h.deps.Parent.FetchParent(ctx, msg.UserAccount, msg.RoomID, evt.SiteID, msg.ThreadParentMessageID)
+			if perr != nil {
+				return fmt.Errorf("fetch thread parent %s: %w", msg.ThreadParentMessageID, perr)
+			}
+			pc := parent.CreatedAt
+			parentCreatedAt = &pc
+			parentSenderAccount = parent.SenderAccount
 		}
-		pc := parent.CreatedAt
-		parentCreatedAt = &pc
-		parentSenderAccount = parent.SenderAccount
 	}
 
 	roomType := members[0].RoomType

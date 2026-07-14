@@ -37,7 +37,7 @@ func TestParseConfig_Defaults(t *testing.T) {
 
 	assert.Equal(t, "rocketchat_rooms", cfg.RoomsCollection)
 	assert.Equal(t, "rocketchat_subscriptions", cfg.SubscriptionsCollection)
-	assert.Equal(t, "tsmc_thread_subscriptions", cfg.ThreadSubsCollection)
+	assert.Equal(t, "company_thread_subscriptions", cfg.ThreadSubsCollection)
 	assert.Equal(t, "users", cfg.UsersCollection)
 
 	assert.Equal(t, "primaryPreferred", cfg.SourceReadPreference)
@@ -45,8 +45,7 @@ func TestParseConfig_Defaults(t *testing.T) {
 	assert.Equal(t, 1000, cfg.MaxDeliver)
 	assert.Equal(t, 60, cfg.DeleteMaxDeliver)
 	assert.Equal(t, false, cfg.Bootstrap.Enabled)
-	assert.Equal(t, ":9090", cfg.MetricsAddr)
-	assert.Equal(t, "info", cfg.LogLevel)
+	assert.Equal(t, ":9090", cfg.HealthAddr)
 }
 
 func TestParseConfig_MissingRequired(t *testing.T) {
@@ -152,4 +151,19 @@ func TestParseConfig_WhitespaceSourceMongoURI_Errors(t *testing.T) {
 	_, err := parseConfig()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "SOURCE_MONGO_URI must be non-empty")
+}
+
+func TestParseConfig_RoomMembersCollectionDefault(t *testing.T) {
+	setRequiredEnv(t)
+	cfg, err := parseConfig()
+	require.NoError(t, err)
+	assert.Equal(t, "company_room_members", cfg.RoomMembersCollection)
+}
+
+func TestParseConfig_RoomMembersCollectionBlankFails(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("ROOM_MEMBERS_COLLECTION", "   ")
+	_, err := parseConfig()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ROOM_MEMBERS_COLLECTION")
 }

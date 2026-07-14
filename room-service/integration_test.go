@@ -14,13 +14,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Marz32onE/instrumentation-go/otel-nats/otelnats"
+	o11ynats "github.com/flywindy/o11y/nats"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace/noop"
 
 	"github.com/hmchangw/chat/pkg/errcode"
 	"github.com/hmchangw/chat/pkg/idgen"
@@ -112,10 +114,12 @@ func TestMongoStore_GetRoom_ProjectionFields_Integration(t *testing.T) {
 
 	lastMsg := time.Now().UTC().Add(-time.Hour).Truncate(time.Millisecond)
 	minSeen := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Millisecond)
+	lastMentionAll := time.Now().UTC().Add(-90 * time.Minute).Truncate(time.Millisecond)
 	mustInsertRoom(t, db, &model.Room{
 		ID: "rproj", Name: "proj-room", Type: model.RoomTypeChannel, SiteID: "site-a",
 		UserCount: 7, AppCount: 3, Restricted: true, ExternalAccess: true,
 		LastMsgAt: &lastMsg, MinUserLastSeenAt: &minSeen, LastMsgID: "m123",
+		LastMentionAllAt: &lastMentionAll,
 	})
 
 	got, err := store.GetRoom(ctx, "rproj")
@@ -131,6 +135,8 @@ func TestMongoStore_GetRoom_ProjectionFields_Integration(t *testing.T) {
 	assert.WithinDuration(t, lastMsg, *got.LastMsgAt, time.Second)
 	require.NotNil(t, got.MinUserLastSeenAt)
 	assert.WithinDuration(t, minSeen, *got.MinUserLastSeenAt, time.Second)
+	require.NotNil(t, got.LastMentionAllAt, "lastMentionAllAt must be in the projection (read event computes hasGroupMention from it)")
+	assert.WithinDuration(t, lastMentionAll, *got.LastMentionAllAt, time.Second)
 }
 
 // TestMongoStore_GetSubscription_ProjectionFields_Integration pins the field
@@ -1475,7 +1481,7 @@ func TestAddMembers_TwoSiteEndToEnd(t *testing.T) {
 	storeA := NewMongoStore(dbA)
 	storeB := NewMongoStore(dbB)
 
-	otelNCb, err := otelnats.Connect(natsURLb)
+	otelNCb, err := o11ynats.Connect(context.Background(), natsURLb, noop.NewTracerProvider(), propagation.TraceContext{})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = otelNCb.Drain() })
 
@@ -1558,7 +1564,7 @@ func TestAddMembers_CrossSiteTimeout(t *testing.T) {
 	natsURL := setupNATS(t)
 	keyStore := setupKeyStore(t, db)
 	store := NewMongoStore(db)
-	otelNC, err := otelnats.Connect(natsURL)
+	otelNC, err := o11ynats.Connect(context.Background(), natsURL, noop.NewTracerProvider(), propagation.TraceContext{})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = otelNC.Drain() })
 
@@ -1609,7 +1615,7 @@ func TestRoomsInfoBatchRPC_NoRequestID(t *testing.T) {
 
 	mustInsertRoom(t, db, &model.Room{ID: "r1", Name: "room-1", Type: model.RoomTypeChannel, SiteID: "site-a"})
 
-	otelNC, err := otelnats.Connect(natsURL)
+	otelNC, err := o11ynats.Connect(context.Background(), natsURL, noop.NewTracerProvider(), propagation.TraceContext{})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = otelNC.Drain() })
 
@@ -1666,7 +1672,7 @@ func TestRoomsInfoBatchRPC(t *testing.T) {
 	_, err = keyStore.Set(ctx, "r2", roomkeystore.RoomKeyPair{PrivateKey: privKey2})
 	require.NoError(t, err)
 
-	otelNC, err := otelnats.Connect(natsURL)
+	otelNC, err := o11ynats.Connect(context.Background(), natsURL, noop.NewTracerProvider(), propagation.TraceContext{})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = otelNC.Drain() })
 
@@ -2244,6 +2250,42 @@ func TestMongoStore_ListReadReceipts_Integration(t *testing.T) {
 	require.Equal(t, "Bob", rows[0].EngName)
 
 	rows, err = store.ListReadReceipts(ctx, "r1", msgTime.Add(2*time.Hour), "alice", 100)
+	require.NoError(t, err)
+	require.Empty(t, rows)
+}
+
+func TestMongoStore_ListThreadReadReceipts_Integration(t *testing.T) {
+	ctx := context.Background()
+	db := setupMongo(t)
+	store := NewMongoStore(db)
+	require.NoError(t, store.EnsureIndexes(ctx))
+
+	_, err := db.Collection("users").InsertMany(ctx, []any{
+		bson.M{"_id": "uA", "account": "alice", "chineseName": "愛麗絲", "engName": "Alice"},
+		bson.M{"_id": "uB", "account": "bob", "chineseName": "鮑勃", "engName": "Bob"},
+		bson.M{"_id": "uC", "account": "carol", "chineseName": "卡羅", "engName": "Carol"},
+	})
+	require.NoError(t, err)
+
+	// thread_subscriptions store userAccount/userId flat (no embedded "u"). Only
+	// bob's thread lastSeenAt is at/after the reply; carol's is before; alice is the sender.
+	msgTime := time.Date(2026, 5, 8, 12, 0, 0, 0, time.UTC)
+	_, err = db.Collection("thread_subscriptions").InsertMany(ctx, []any{
+		bson.M{"_id": "tsA", "threadRoomId": "tr1", "userId": "uA", "userAccount": "alice", "lastSeenAt": msgTime.Add(time.Hour)},
+		bson.M{"_id": "tsB", "threadRoomId": "tr1", "userId": "uB", "userAccount": "bob", "lastSeenAt": msgTime.Add(time.Minute)},
+		bson.M{"_id": "tsC", "threadRoomId": "tr1", "userId": "uC", "userAccount": "carol", "lastSeenAt": msgTime.Add(-time.Minute)},
+	})
+	require.NoError(t, err)
+
+	rows, err := store.ListThreadReadReceipts(ctx, "tr1", msgTime, "alice", 100)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.Equal(t, "uB", rows[0].UserID)
+	require.Equal(t, "bob", rows[0].Account)
+	require.Equal(t, "鮑勃", rows[0].ChineseName)
+	require.Equal(t, "Bob", rows[0].EngName)
+
+	rows, err = store.ListThreadReadReceipts(ctx, "tr1", msgTime.Add(2*time.Hour), "alice", 100)
 	require.NoError(t, err)
 	require.Empty(t, rows)
 }
@@ -3055,7 +3097,7 @@ func TestIntegration_RoomRename(t *testing.T) {
 		js := setupRoomsStream(t, clientNC, siteID)
 
 		// Wire a JetStream-backed publishToStream on the handler.
-		handlerNC, err := otelnats.Connect(natsURL)
+		handlerNC, err := o11ynats.Connect(context.Background(), natsURL, noop.NewTracerProvider(), propagation.TraceContext{})
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = handlerNC.Drain() })
 
@@ -3128,7 +3170,7 @@ func TestIntegration_RoomRename(t *testing.T) {
 		store := NewMongoStore(db)
 
 		natsURL := setupNATS(t)
-		handlerNC, err := otelnats.Connect(natsURL)
+		handlerNC, err := o11ynats.Connect(context.Background(), natsURL, noop.NewTracerProvider(), propagation.TraceContext{})
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = handlerNC.Drain() })
 
@@ -3190,7 +3232,7 @@ func TestIntegration_RoomRestricted(t *testing.T) {
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = clientNC.Drain() })
 
-		handlerNC, err := otelnats.Connect(natsURL)
+		handlerNC, err := o11ynats.Connect(context.Background(), natsURL, noop.NewTracerProvider(), propagation.TraceContext{})
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = handlerNC.Drain() })
 
@@ -3297,7 +3339,7 @@ func TestIntegration_RoomRestricted(t *testing.T) {
 		store := NewMongoStore(db)
 
 		natsURL := setupNATS(t)
-		handlerNC, err := otelnats.Connect(natsURL)
+		handlerNC, err := o11ynats.Connect(context.Background(), natsURL, noop.NewTracerProvider(), propagation.TraceContext{})
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = handlerNC.Drain() })
 

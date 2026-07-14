@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -19,6 +20,7 @@ import (
 	"github.com/hmchangw/chat/pkg/errcode"
 	"github.com/hmchangw/chat/pkg/errcode/errtest"
 	pkgoidc "github.com/hmchangw/chat/pkg/oidc"
+	"github.com/hmchangw/chat/pkg/principal"
 )
 
 // fakeValidator implements TokenValidator for testing.
@@ -277,6 +279,86 @@ func TestHandleAuth_DevMode_ValidRequest(t *testing.T) {
 	assert.Contains(t, claims.Tags, "account:alice")
 }
 
+// TestHandleAuth_DevMode_NoToken_DoesNotValidate confirms the tokenless dev
+// branch mints directly without calling either SSO or botplatform
+// validation, even when both validators are configured.
+func TestHandleAuth_DevMode_NoToken_DoesNotValidate(t *testing.T) {
+	signingKP, accPub := mustAccountKP(t)
+	userPub := mustUserNKey(t)
+
+	bp := &fakeBPValidator{}
+	handler := NewAuthHandler(nil, signingKP, accPub, 2*time.Hour, true, WithBotplatformValidator(bp))
+	router := setupRouter(t, handler)
+
+	body := `{"account":"alice","natsPublicKey":"` + userPub + `"}`
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+	assert.Equal(t, 0, bp.calls, "tokenless dev request must not call botplatform")
+
+	var resp authResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "alice", resp.UserInfo.Account)
+}
+
+// TestHandleAuth_DevMode_WithSSOToken_UsesSSO ensures dev mode's tokenless
+// short-circuit does not swallow a request that does carry an ssoToken —
+// it must still route through the ordinary OIDC validation path.
+func TestHandleAuth_DevMode_WithSSOToken_UsesSSO(t *testing.T) {
+	signingKP, accPub := mustAccountKP(t)
+	userPub := mustUserNKey(t)
+
+	validator := &fakeValidator{account: "alice", subject: "uuid-alice"}
+	handler := NewAuthHandler(validator, signingKP, accPub, 2*time.Hour, true)
+	router := setupRouter(t, handler)
+
+	body := `{"ssoToken":"valid-token","natsPublicKey":"` + userPub + `"}`
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+
+	var resp authResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "alice", resp.UserInfo.Account)
+}
+
+// TestHandleAuth_DevMode_WithAuthToken_UsesSession ensures dev mode's
+// tokenless short-circuit does not swallow a request that does carry an
+// authToken — it must still validate via botplatform, not dev-mint.
+func TestHandleAuth_DevMode_WithAuthToken_UsesSession(t *testing.T) {
+	signingKP, accPub := mustAccountKP(t)
+	userPub := mustUserNKey(t)
+
+	bp := &fakeBPValidator{principal: principal.Principal{
+		UserID:  "u1",
+		Account: "p_admin",
+		SiteID:  "site-a",
+		Roles:   []string{"admin"},
+	}}
+	handler := NewAuthHandler(nil, signingKP, accPub, 2*time.Hour, true, WithBotplatformValidator(bp))
+	router := setupRouter(t, handler)
+
+	body := `{"authToken":"session-token","natsPublicKey":"` + userPub + `"}`
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+	assert.Equal(t, 1, bp.calls, "authToken must route to botplatform validation, not dev mint")
+	assert.Equal(t, "session-token", bp.lastToken)
+
+	var resp authResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "p_admin", resp.UserInfo.Account)
+}
+
 func TestHandleAuth_DevMode_MissingAccount(t *testing.T) {
 	signingKP, accPub := mustAccountKP(t)
 	userPub := mustUserNKey(t)
@@ -489,6 +571,202 @@ func TestHandleAuth_InvalidAccountFormat(t *testing.T) {
 			assert.Equal(t, http.StatusOK, w.Code)
 		})
 	}
+}
+
+// ----- session-token branch tests --------------------------------------
+
+// fakeBPValidator implements BotplatformValidator for unit tests.
+type fakeBPValidator struct {
+	principal principal.Principal
+	err       error
+	calls     int
+	lastToken string
+}
+
+func (f *fakeBPValidator) Validate(_ context.Context, authToken string) (principal.Principal, error) {
+	f.calls++
+	f.lastToken = authToken
+	if f.err != nil {
+		return principal.Principal{}, f.err
+	}
+	return f.principal, nil
+}
+
+func TestHandleAuth_SessionToken_Bot_HappyPath(t *testing.T) {
+	signingKP, accPub := mustAccountKP(t)
+	userPub := mustUserNKey(t)
+	bp := &fakeBPValidator{principal: principal.Principal{
+		UserID:  "u1",
+		Account: "name.shortcode.bot",
+		SiteID:  "site-a",
+		Roles:   []string{"bot"},
+	}}
+	// SSO validator must NOT be called for session-token requests; nil
+	// validator would panic if the wrong branch fires.
+	handler := NewAuthHandler(nil, signingKP, accPub, 2*time.Hour, false, WithBotplatformValidator(bp))
+	router := setupRouter(t, handler)
+
+	body := `{"authToken":"bp-session","natsPublicKey":"` + userPub + `"}`
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+
+	var resp authResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	// Bot account dots collapse to underscores for the NATS subject slot.
+	assert.Equal(t, "name_shortcode_bot", resp.UserInfo.Account)
+	assert.Empty(t, resp.UserInfo.EmployeeID, "bot session: no employee fields")
+
+	claims, err := jwt.DecodeUserClaims(resp.NATSJWT)
+	require.NoError(t, err)
+	// Perms live on the scoped signing key template; the JWT only carries
+	// the account tag used for {{tag(account)}} substitution.
+	assert.Contains(t, claims.Tags, "account:name_shortcode_bot")
+	assert.Empty(t, claims.Pub.Allow)
+	assert.Empty(t, claims.Sub.Allow)
+	assert.Equal(t, 1, bp.calls)
+	assert.Equal(t, "bp-session", bp.lastToken)
+}
+
+func TestHandleAuth_SessionToken_Admin(t *testing.T) {
+	signingKP, accPub := mustAccountKP(t)
+	userPub := mustUserNKey(t)
+	bp := &fakeBPValidator{principal: principal.Principal{
+		UserID:  "u1",
+		Account: "p_admin",
+		SiteID:  "site-a",
+		Roles:   []string{"admin"},
+	}}
+	handler := NewAuthHandler(nil, signingKP, accPub, 2*time.Hour, false, WithBotplatformValidator(bp))
+	router := setupRouter(t, handler)
+
+	body := `{"authToken":"admin-session","natsPublicKey":"` + userPub + `"}`
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+
+	var resp authResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	claims, err := jwt.DecodeUserClaims(resp.NATSJWT)
+	require.NoError(t, err)
+	assert.Contains(t, claims.Tags, "account:p_admin")
+	assert.Empty(t, claims.Pub.Allow)
+	assert.Empty(t, claims.Sub.Allow)
+}
+
+func TestHandleAuth_SessionToken_InvalidToken(t *testing.T) {
+	signingKP, accPub := mustAccountKP(t)
+	userPub := mustUserNKey(t)
+	bp := &fakeBPValidator{err: errcode.Unauthenticated("session token invalid",
+		errcode.WithReason(errcode.BotplatformInvalidToken))}
+	handler := NewAuthHandler(nil, signingKP, accPub, 2*time.Hour, false, WithBotplatformValidator(bp))
+	router := setupRouter(t, handler)
+
+	body := `{"authToken":"bad","natsPublicKey":"` + userPub + `"}`
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+	errtest.AssertReason(t, w.Body.Bytes(), errcode.BotplatformInvalidToken)
+}
+
+func TestHandleAuth_SessionToken_UpstreamUnavailable(t *testing.T) {
+	signingKP, accPub := mustAccountKP(t)
+	userPub := mustUserNKey(t)
+	bp := &fakeBPValidator{err: errors.New("connection refused")}
+	handler := NewAuthHandler(nil, signingKP, accPub, 2*time.Hour, false, WithBotplatformValidator(bp))
+	router := setupRouter(t, handler)
+
+	body := `{"authToken":"x","natsPublicKey":"` + userPub + `"}`
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+	errtest.AssertReason(t, w.Body.Bytes(), errcode.BotplatformUpstreamUnavailable)
+}
+
+func TestHandleAuth_SessionToken_WithoutBPValidator_503(t *testing.T) {
+	// No WithBotplatformValidator option -> session-token requests must
+	// fail with 503 upstream_unavailable, not run the OIDC path with a
+	// non-OIDC payload.
+	signingKP, accPub := mustAccountKP(t)
+	userPub := mustUserNKey(t)
+	handler := NewAuthHandler(nil, signingKP, accPub, 2*time.Hour, false)
+	router := setupRouter(t, handler)
+
+	body := `{"authToken":"any","natsPublicKey":"` + userPub + `"}`
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+	errtest.AssertReason(t, w.Body.Bytes(), errcode.BotplatformUpstreamUnavailable)
+}
+
+func TestHandleAuth_AmbiguousToken(t *testing.T) {
+	signingKP, accPub := mustAccountKP(t)
+	userPub := mustUserNKey(t)
+	bp := &fakeBPValidator{}
+	handler := NewAuthHandler(&fakeValidator{account: "alice", subject: "u"}, signingKP, accPub, 2*time.Hour, false,
+		WithBotplatformValidator(bp))
+	router := setupRouter(t, handler)
+
+	body := `{"ssoToken":"a","authToken":"b","natsPublicKey":"` + userPub + `"}`
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	errtest.AssertReason(t, w.Body.Bytes(), errcode.BotplatformAmbiguousToken)
+	assert.Equal(t, 0, bp.calls, "ambiguous request must not call botplatform")
+}
+
+func TestHandleAuth_MissingToken(t *testing.T) {
+	signingKP, accPub := mustAccountKP(t)
+	userPub := mustUserNKey(t)
+	handler := NewAuthHandler(&fakeValidator{}, signingKP, accPub, 2*time.Hour, false)
+	router := setupRouter(t, handler)
+
+	body := `{"natsPublicKey":"` + userPub + `"}`
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	errtest.AssertReason(t, w.Body.Bytes(), errcode.BotplatformMissingToken)
+}
+
+// Regression: existing SSO path must NOT call botplatform even when a
+// validator is configured.
+func TestHandleAuth_SSO_DoesNotCallBotplatform(t *testing.T) {
+	signingKP, accPub := mustAccountKP(t)
+	userPub := mustUserNKey(t)
+	bp := &fakeBPValidator{}
+	validator := &fakeValidator{account: "alice", subject: "u", description: "E1,Alice,A"}
+	handler := NewAuthHandler(validator, signingKP, accPub, 2*time.Hour, false, WithBotplatformValidator(bp))
+	router := setupRouter(t, handler)
+
+	body := `{"ssoToken":"ok","natsPublicKey":"` + userPub + `"}`
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+	assert.Equal(t, 0, bp.calls, "SSO path must never hit botplatform")
 }
 
 func TestHandleAuth_TokenGenerationFailure(t *testing.T) {

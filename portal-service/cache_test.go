@@ -13,17 +13,15 @@ import (
 )
 
 var (
-	aliceEmployee = employee{
+	alice = employee{
 		Account:    "alice",
 		EmployeeID: "E001",
 		SiteID:     "site-a",
-		NATSURL:    "wss://nats-3.site-a.example.com",
 	}
-	bobEmployee = employee{
+	bob = employee{
 		Account:    "bob",
 		EmployeeID: "E002",
 		SiteID:     "site-b",
-		NATSURL:    "wss://nats.site-b.example.com",
 	}
 )
 
@@ -38,7 +36,7 @@ func TestDirectoryCache_EmptyUntilLoaded(t *testing.T) {
 func TestDirectoryCache_Load(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	store := NewMockDirectoryStore(ctrl)
-	store.EXPECT().ListEmployees(gomock.Any()).Return([]employee{aliceEmployee, bobEmployee}, nil)
+	store.EXPECT().ListEmployees(gomock.Any()).Return([]employee{alice, bob}, nil)
 
 	cache := newDirectoryCache()
 	require.NoError(t, cache.Load(context.Background(), store))
@@ -46,10 +44,10 @@ func TestDirectoryCache_Load(t *testing.T) {
 	assert.True(t, cache.Ready())
 	got, ok := cache.Get("alice")
 	require.True(t, ok)
-	assert.Equal(t, aliceEmployee, got)
+	assert.Equal(t, alice, got)
 	got, ok = cache.Get("bob")
 	require.True(t, ok)
-	assert.Equal(t, bobEmployee, got)
+	assert.Equal(t, bob, got)
 	_, ok = cache.Get("mallory")
 	assert.False(t, ok)
 }
@@ -68,7 +66,7 @@ func TestDirectoryCache_LoadErrorKeepsPreviousEntries(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	store := NewMockDirectoryStore(ctrl)
 	gomock.InOrder(
-		store.EXPECT().ListEmployees(gomock.Any()).Return([]employee{aliceEmployee}, nil),
+		store.EXPECT().ListEmployees(gomock.Any()).Return([]employee{alice}, nil),
 		store.EXPECT().ListEmployees(gomock.Any()).Return(nil, errors.New("mongo down")),
 	)
 
@@ -96,7 +94,7 @@ func TestDirectoryCache_EmptyRefreshAfterReadyKeepsPrevious(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	store := NewMockDirectoryStore(ctrl)
 	gomock.InOrder(
-		store.EXPECT().ListEmployees(gomock.Any()).Return([]employee{aliceEmployee}, nil),
+		store.EXPECT().ListEmployees(gomock.Any()).Return([]employee{alice}, nil),
 		// The daily HR cron rewrites hr_employee; a refresh racing it can see zero rows.
 		store.EXPECT().ListEmployees(gomock.Any()).Return([]employee{}, nil),
 	)
@@ -114,11 +112,11 @@ func TestDirectoryCache_EmptyRefreshAfterReadyKeepsPrevious(t *testing.T) {
 func TestDirectoryCache_DuplicateAccountSkippedKeepsRest(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	store := NewMockDirectoryStore(ctrl)
-	dupAlice := aliceEmployee
+	dupAlice := alice
 	dupAlice.SiteID = "site-b"
 	// The first occurrence wins; the later duplicate row is skipped (with a
 	// warning) rather than rejecting the whole snapshot.
-	store.EXPECT().ListEmployees(gomock.Any()).Return([]employee{aliceEmployee, bobEmployee, dupAlice}, nil)
+	store.EXPECT().ListEmployees(gomock.Any()).Return([]employee{alice, bob, dupAlice}, nil)
 
 	cache := newDirectoryCache()
 	require.NoError(t, cache.Load(context.Background(), store),
@@ -127,7 +125,7 @@ func TestDirectoryCache_DuplicateAccountSkippedKeepsRest(t *testing.T) {
 	assert.True(t, cache.Ready())
 	got, ok := cache.Get("alice")
 	require.True(t, ok)
-	assert.Equal(t, aliceEmployee, got, "the first occurrence wins")
+	assert.Equal(t, alice, got, "the first occurrence wins")
 	_, ok = cache.Get("bob")
 	assert.True(t, ok, "non-duplicate rows are still published")
 }
@@ -135,7 +133,7 @@ func TestDirectoryCache_DuplicateAccountSkippedKeepsRest(t *testing.T) {
 func TestDirectoryCache_DuplicateAccountAtStartupReady(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	store := NewMockDirectoryStore(ctrl)
-	store.EXPECT().ListEmployees(gomock.Any()).Return([]employee{aliceEmployee, aliceEmployee}, nil)
+	store.EXPECT().ListEmployees(gomock.Any()).Return([]employee{alice, alice}, nil)
 
 	cache := newDirectoryCache()
 	require.NoError(t, cache.Load(context.Background(), store))
@@ -143,7 +141,7 @@ func TestDirectoryCache_DuplicateAccountAtStartupReady(t *testing.T) {
 	assert.True(t, cache.Ready(), "a duplicate at startup is skipped, not fatal")
 	got, ok := cache.Get("alice")
 	require.True(t, ok)
-	assert.Equal(t, aliceEmployee, got)
+	assert.Equal(t, alice, got)
 }
 
 // TestDirectoryCache_ConcurrentReadDuringLoad guards the lock-free read path:
@@ -152,7 +150,7 @@ func TestDirectoryCache_DuplicateAccountAtStartupReady(t *testing.T) {
 func TestDirectoryCache_ConcurrentReadDuringLoad(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	store := NewMockDirectoryStore(ctrl)
-	store.EXPECT().ListEmployees(gomock.Any()).Return([]employee{aliceEmployee, bobEmployee}, nil).AnyTimes()
+	store.EXPECT().ListEmployees(gomock.Any()).Return([]employee{alice, bob}, nil).AnyTimes()
 
 	cache := newDirectoryCache()
 	require.NoError(t, cache.Load(context.Background(), store))
@@ -193,7 +191,7 @@ func TestDirectoryCache_RefreshLoop(t *testing.T) {
 		}),
 		store.EXPECT().ListEmployees(gomock.Any()).DoAndReturn(func(context.Context) ([]employee, error) {
 			loads <- struct{}{}
-			return []employee{aliceEmployee}, nil
+			return []employee{alice}, nil
 		}),
 	)
 

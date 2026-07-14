@@ -8,14 +8,13 @@ import (
 	"github.com/hmchangw/chat/history-service/internal/config"
 	"github.com/hmchangw/chat/history-service/internal/models"
 	"github.com/hmchangw/chat/history-service/internal/mongorepo"
-	"github.com/hmchangw/chat/pkg/emoji"
 	pkgmodel "github.com/hmchangw/chat/pkg/model"
 	"github.com/hmchangw/chat/pkg/mongoutil"
 	"github.com/hmchangw/chat/pkg/natsrouter"
 	"github.com/hmchangw/chat/pkg/subject"
 )
 
-//go:generate mockgen -destination=mocks/mock_repository.go -package=mocks . MessageReader,MessageWriter,MessageRepository,SubscriptionRepository,RoomRepository,EventPublisher,ThreadRoomRepository,ThreadSubscriptionRepository,UserStore,CustomEmojiStore,AppStore
+//go:generate mockgen -destination=mocks/mock_repository.go -package=mocks . MessageReader,MessageWriter,MessageRepository,SubscriptionRepository,RoomRepository,EventPublisher,ThreadRoomRepository,ThreadSubscriptionRepository,UserStore,AppStore
 
 type MessageReader interface {
 	GetMessagesBefore(ctx context.Context, roomID string, before time.Time, floor time.Time, pageReq cassrepo.PageRequest) (cassrepo.Page[models.Message], error)
@@ -94,11 +93,6 @@ type UserStore interface {
 	FindUserByAccount(ctx context.Context, account string) (*pkgmodel.User, error)
 }
 
-// CustomEmojiStore reports whether a custom emoji shortcode is registered for the site.
-type CustomEmojiStore interface {
-	CustomEmojiExists(ctx context.Context, siteID, shortcode string) (bool, error)
-}
-
 // AppStore resolves a bot account's app display name for reaction Actor rendering.
 type AppStore interface {
 	// AppNameByAccount returns ("", nil) when no app matches botAccount.
@@ -116,8 +110,7 @@ type HistoryService struct {
 	threadSubs         ThreadSubscriptionRepository
 	users              UserStore
 	apps               AppStore
-	emojiValidator     *emoji.Validator // owns the CustomEmojiStore lookup; reused per request
-	historyFloor       time.Duration    // from MESSAGE_HISTORY_FLOOR_DAYS
+	historyFloor       time.Duration // from MESSAGE_HISTORY_FLOOR_DAYS
 	largeRoomThreshold int
 	maxPinnedPerRoom   int
 	pinEnabled         bool // from PIN_ENABLED env var; false disables pin/unpin globally
@@ -131,7 +124,6 @@ func New(
 	threadRooms ThreadRoomRepository,
 	threadSubs ThreadSubscriptionRepository,
 	users UserStore,
-	customEmojis CustomEmojiStore,
 	apps AppStore,
 	cfg *config.Config,
 ) *HistoryService {
@@ -145,7 +137,6 @@ func New(
 		threadSubs:         threadSubs,
 		users:              users,
 		apps:               apps,
-		emojiValidator:     emoji.NewValidator(customEmojis),
 		historyFloor:       time.Duration(cfg.MessageHistoryFloorDays) * 24 * time.Hour,
 		largeRoomThreshold: cfg.LargeRoomThreshold,
 		maxPinnedPerRoom:   cfg.MaxPinnedPerRoom,

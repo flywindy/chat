@@ -37,6 +37,7 @@ type AppRepository interface {
 	GetApp(ctx context.Context, appID string) (*model.App, error)
 	ListApps(ctx context.Context, account string, page mongoutil.OffsetPageRequest) (mongoutil.OffsetPageHasMore[models.AppListItem], error)
 	GetAppsByAssistants(ctx context.Context, botAccounts []string) (map[string]*model.App, error)
+	ListAppCategories(ctx context.Context) ([]models.AppCategory, error)
 }
 
 // RoomClient is the consumer-defined interface for room-service / room-worker RPC calls.
@@ -127,4 +128,5 @@ func (s *UserService) RegisterHandlers(r *natsrouter.Router) {
 	natsrouter.Register(r, subject.UserSubscriptionCountPattern(s.siteID), s.CountSubscriptions)
 	natsrouter.Register(r, subject.UserSubscriptionSetAppSubscriptionPattern(s.siteID), s.SetAppSubscription)
 	natsrouter.Register(r, subject.UserAppsListPattern(s.siteID), s.ListApps)
+	natsrouter.RegisterNoBody(r, subject.UserAppsCategoriesPattern(s.siteID), s.ListAppCategories)
 }

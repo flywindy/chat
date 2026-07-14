@@ -26,7 +26,7 @@ type fakeJSMsg struct {
 
 func (m *fakeJSMsg) Data() []byte         { return m.data }
 func (m *fakeJSMsg) Headers() nats.Header { return nil }
-func (m *fakeJSMsg) Subject() string      { return "chat.oplog.site1.rocketchat_avatar.insert" }
+func (m *fakeJSMsg) Subject() string      { return "chat.migration.oplog.site1.rocketchat_avatar.insert" }
 func (m *fakeJSMsg) Metadata() (*jetstream.MsgMetadata, error) {
 	return &jetstream.MsgMetadata{NumDelivered: m.numDelivered}, nil
 }

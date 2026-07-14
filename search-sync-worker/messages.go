@@ -100,10 +100,15 @@ func (c *messageCollection) BuildAction(data []byte) ([]searchengine.BulkAction,
 	return []searchengine.BulkAction{buildMessageAction(&evt, c.indexPrefix)}, nil
 }
 
-// resolveThreadParentCreatedAt re-resolves the parent createdAt from the ES index
-// (the canonical event omits it); no-op for nil resolver/non-thread/delete, miss→unset.
+// resolveThreadParentCreatedAt fills the parent createdAt for a thread reply.
+// The gatekeeper's best-effort resolution rides the canonical event and wins
+// when present; only re-resolve from the ES index when it is absent. No-op for
+// nil resolver/non-thread/delete; a miss leaves the field unset.
 func (c *messageCollection) resolveThreadParentCreatedAt(evt *model.MessageEvent) {
 	if c.parentResolver == nil || evt.Message.ThreadParentMessageID == "" || evt.Event == model.EventDeleted {
+		return
+	}
+	if evt.Message.ThreadParentMessageCreatedAt != nil {
 		return
 	}
 	if createdAt, ok := c.parentResolver.ResolveParentCreatedAt(context.Background(), evt.Message.ThreadParentMessageID); ok {

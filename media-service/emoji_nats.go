@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/hmchangw/chat/pkg/emoji"
 	"github.com/hmchangw/chat/pkg/errcode"
@@ -27,8 +28,7 @@ func (h *handler) HandleEmojiList(c *natsrouter.Context) (*model.EmojiListRespon
 			ImageURL:    e.ImageURL,
 			ContentType: e.ContentType,
 			ETag:        e.ETag,
-			CreatedBy:   e.CreatedBy,
-			UpdatedAt:   e.UpdatedAt,
+			UpdatedAt:   time.UnixMilli(e.UpdatedAt).UTC(),
 		})
 	}
 	return &model.EmojiListResponse{Emojis: entries}, nil

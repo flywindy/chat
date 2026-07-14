@@ -21,7 +21,7 @@ type sourceRoom struct {
 	TeamID string `bson:"teamId"`
 	Name   string `bson:"name"`
 	FName  string `bson:"fname"`
-	// Restricted is the TSMC-custom restriction flag (confirmed authoritative on TKMS; absent ⇒
+	// Restricted is the Company-custom restriction flag (confirmed authoritative on TKMS; absent ⇒
 	// false). RocketChat's separate `ro` (read-only/announcement mode) is a different concept
 	// with no destination equivalent and is deliberately NOT decoded.
 	Restricted bool      `bson:"restricted"`

@@ -41,11 +41,11 @@ services:
       - TARGET_DB=chat
       - ROOMS_COLLECTION=rocketchat_rooms
       - SUBSCRIPTIONS_COLLECTION=rocketchat_subscriptions
-      - THREAD_SUBS_COLLECTION=tsmc_thread_subscriptions
+      - THREAD_SUBS_COLLECTION=company_thread_subscriptions
       - USERS_COLLECTION=users
+      - ROOM_MEMBERS_COLLECTION=company_room_members
       - SOURCE_READ_PREFERENCE=primaryPreferred
       - BOOTSTRAP_STREAMS=true
-      - LOG_LEVEL=info
     networks:
       - oplog-col-local
 

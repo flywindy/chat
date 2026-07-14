@@ -12,8 +12,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/v2/bson"
-
-	"github.com/Marz32onE/instrumentation-go/otel-nats/oteljetstream"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace/noop"
 
 	"github.com/hmchangw/chat/pkg/migration"
 	"github.com/hmchangw/chat/pkg/model"
@@ -138,11 +138,11 @@ func TestInboxPublisher_RoundTrip(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	nc, err := natsutil.Connect(testutil.NATS(t), "")
+	nc, err := natsutil.Connect(context.Background(), testutil.NATS(t), "", noop.NewTracerProvider(), propagation.TraceContext{})
 	require.NoError(t, err)
 	defer func() { assert.NoError(t, nc.Drain()) }()
 
-	js, err := oteljetstream.New(nc)
+	js, err := jetstream.New(nc.NatsConn())
 	require.NoError(t, err)
 
 	// Create the INBOX stream so publishes are captured.
@@ -220,10 +220,10 @@ func TestEndToEnd_UserInsert(t *testing.T) {
 		"username": "charlie",
 		"type":     "user",
 		"customFields": bson.M{
-			"engName":  "Charlie C",
-			"tsmcName": "查理",
-			"deptId":   "dept1",
-			"deptName": "Engineering",
+			"engName":     "Charlie C",
+			"companyName": "查理",
+			"deptId":      "dept1",
+			"deptName":    "Engineering",
 		},
 	})
 	require.NoError(t, err)
@@ -233,10 +233,10 @@ func TestEndToEnd_UserInsert(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, fullDoc)
 
-	nc, err := natsutil.Connect(testutil.NATS(t), "")
+	nc, err := natsutil.Connect(context.Background(), testutil.NATS(t), "", noop.NewTracerProvider(), propagation.TraceContext{})
 	require.NoError(t, err)
 	defer func() { assert.NoError(t, nc.Drain()) }()
-	js, err := oteljetstream.New(nc)
+	js, err := jetstream.New(nc.NatsConn())
 	require.NoError(t, err)
 
 	tgtStore := NewMongoTargetStore(tgtDB)
@@ -246,7 +246,7 @@ func TestEndToEnd_UserInsert(t *testing.T) {
 		siteID:         site,
 		roomsColl:      "rocketchat_rooms",
 		subsColl:       "rocketchat_subscriptions",
-		threadSubsColl: "tsmc_thread_subscriptions",
+		threadSubsColl: "company_thread_subscriptions",
 		usersColl:      "users",
 		pub:            &jetstreamPublisher{publish: js.PublishMsg},
 		target:         tgtStore,
@@ -294,10 +294,10 @@ func TestEndToEnd_RoomInsert_PublishesRoomSync(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, fullDoc)
 
-	nc, err := natsutil.Connect(testutil.NATS(t), "")
+	nc, err := natsutil.Connect(context.Background(), testutil.NATS(t), "", noop.NewTracerProvider(), propagation.TraceContext{})
 	require.NoError(t, err)
 	defer func() { assert.NoError(t, nc.Drain()) }()
-	js, err := oteljetstream.New(nc)
+	js, err := jetstream.New(nc.NatsConn())
 	require.NoError(t, err)
 
 	// Create the INBOX stream so the room_sync publish is captured.
@@ -315,7 +315,7 @@ func TestEndToEnd_RoomInsert_PublishesRoomSync(t *testing.T) {
 		siteID:         site,
 		roomsColl:      "rocketchat_rooms",
 		subsColl:       "rocketchat_subscriptions",
-		threadSubsColl: "tsmc_thread_subscriptions",
+		threadSubsColl: "company_thread_subscriptions",
 		usersColl:      "users",
 		pub:            &jetstreamPublisher{publish: js.PublishMsg},
 		target:         tgtStore,
@@ -370,7 +370,7 @@ func TestEndToEnd_ThreadSub_NakThenResolve(t *testing.T) {
 
 	srcDB := testutil.MongoDB(t, "src")
 	tgtDB := testutil.MongoDB(t, "tgt")
-	srcColl := srcDB.Collection("tsmc_thread_subscriptions")
+	srcColl := srcDB.Collection("company_thread_subscriptions")
 	lookup := migration.NewMongoSourceLookup(srcColl)
 
 	// Seed a source thread sub doc.
@@ -396,10 +396,10 @@ func TestEndToEnd_ThreadSub_NakThenResolve(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, fullDoc)
 
-	nc, err := natsutil.Connect(testutil.NATS(t), "")
+	nc, err := natsutil.Connect(context.Background(), testutil.NATS(t), "", noop.NewTracerProvider(), propagation.TraceContext{})
 	require.NoError(t, err)
 	defer func() { assert.NoError(t, nc.Drain()) }()
-	js, err := oteljetstream.New(nc)
+	js, err := jetstream.New(nc.NatsConn())
 	require.NoError(t, err)
 
 	// Create the INBOX stream.
@@ -417,17 +417,17 @@ func TestEndToEnd_ThreadSub_NakThenResolve(t *testing.T) {
 		siteID:         site,
 		roomsColl:      "rocketchat_rooms",
 		subsColl:       "rocketchat_subscriptions",
-		threadSubsColl: "tsmc_thread_subscriptions",
+		threadSubsColl: "company_thread_subscriptions",
 		usersColl:      "users",
 		pub:            &jetstreamPublisher{publish: js.PublishMsg},
 		target:         tgtStore,
-		lookups:        map[string]migration.SourceLookup{"tsmc_thread_subscriptions": lookup},
+		lookups:        map[string]migration.SourceLookup{"company_thread_subscriptions": lookup},
 		now:            func() int64 { return 1700000000000 },
 	}
 
 	// Phase 1: thread_room and user both absent → transient error (Nak).
 	err = h.handle(ctx, oplogEvent{
-		Collection:   "tsmc_thread_subscriptions",
+		Collection:   "company_thread_subscriptions",
 		Op:           "insert",
 		FullDocument: fullDoc,
 	})
@@ -453,7 +453,7 @@ func TestEndToEnd_ThreadSub_NakThenResolve(t *testing.T) {
 	require.True(t, inserted)
 
 	err = h.handle(ctx, oplogEvent{
-		Collection:   "tsmc_thread_subscriptions",
+		Collection:   "company_thread_subscriptions",
 		Op:           "insert",
 		FullDocument: fullDoc,
 	})
@@ -485,4 +485,73 @@ func TestEndToEnd_ThreadSub_NakThenResolve(t *testing.T) {
 	require.NoError(t, json.Unmarshal(got.Data(), &outboxEvt))
 	assert.Equal(t, model.InboxThreadSubscriptionUpserted, outboxEvt.Type)
 	assert.Equal(t, site, outboxEvt.SiteID)
+}
+
+func TestMongoTargetStore_RoomMemberUpsertAndDelete(t *testing.T) {
+	db := testutil.MongoDB(t, "collxform-rm")
+	store := NewMongoTargetStore(db)
+	ctx := context.Background()
+
+	rm := model.RoomMember{
+		ID: "legacyRandomId17ch", RoomID: "GENERAL",
+		Ts:     time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC),
+		Member: model.RoomMemberEntry{ID: "org-123", Type: model.RoomMemberOrg},
+	}
+	require.NoError(t, store.UpsertRoomMember(ctx, rm))
+	var got model.RoomMember
+	require.NoError(t, db.Collection("room_members").FindOne(ctx, bson.M{"_id": rm.ID}).Decode(&got))
+	assert.Equal(t, "GENERAL", got.RoomID)
+	assert.Equal(t, model.RoomMemberOrg, got.Member.Type)
+
+	// Redelivery-idempotent: same _id replaced, still one doc.
+	require.NoError(t, store.UpsertRoomMember(ctx, rm))
+	n, err := db.Collection("room_members").CountDocuments(ctx, bson.M{"_id": rm.ID})
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), n)
+
+	deleted, err := store.DeleteRoomMember(ctx, rm.ID)
+	require.NoError(t, err)
+	assert.True(t, deleted)
+	n, err = db.Collection("room_members").CountDocuments(ctx, bson.M{"_id": rm.ID})
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), n)
+
+	// Delete of a never-migrated id is a no-op, not an error.
+	deleted, err = store.DeleteRoomMember(ctx, "ghost")
+	require.NoError(t, err)
+	assert.False(t, deleted)
+}
+
+func TestRoomMembers_EndToEnd_InsertThenDelete(t *testing.T) {
+	db := testutil.MongoDB(t, "collxform-rm-e2e")
+	store := NewMongoTargetStore(db)
+	ctx := context.Background()
+
+	// Seed the user the individual entry resolves against.
+	_, err := db.Collection("users").InsertOne(ctx, bson.M{"_id": "newU1", "account": "jdoe"})
+	require.NoError(t, err)
+
+	h := &handler{
+		siteID:          "site1",
+		roomMembersColl: "company_room_members",
+		target:          store,
+		lookups:         map[string]migration.SourceLookup{},
+	}
+
+	ins := oplogEvent{Op: "insert", Collection: "company_room_members",
+		DocumentKey:  json.RawMessage(`{"_id":"srcE2E"}`),
+		FullDocument: json.RawMessage(`{"_id":"srcE2E","rid":"GENERAL","member":{"type":"individual","id":"legacyU9","username":"jdoe"},"ts":{"$date":"2026-07-04T00:00:00Z"}}`)}
+	require.NoError(t, h.handle(ctx, ins))
+
+	var got model.RoomMember
+	require.NoError(t, db.Collection("room_members").FindOne(ctx, bson.M{"_id": "srcE2E"}).Decode(&got))
+	assert.Equal(t, "newU1", got.Member.ID)
+	assert.Equal(t, "jdoe", got.Member.Account)
+
+	del := oplogEvent{Op: "delete", Collection: "company_room_members",
+		DocumentKey: json.RawMessage(`{"_id":"srcE2E"}`)}
+	require.NoError(t, h.handle(ctx, del))
+	n, err := db.Collection("room_members").CountDocuments(ctx, bson.M{"_id": "srcE2E"})
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), n)
 }

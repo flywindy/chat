@@ -43,6 +43,8 @@ type DirectoryReader interface {
 
 // NewDirectoryClient returns an app-only directory reader (shares the graph
 // client used for meetings; New always returns a *graphClient).
+//
+//nolint:gocritic // hugeParam: startup-only constructor; Config passed by value is intentional.
 func NewDirectoryClient(cfg Config, opts ...Option) DirectoryReader {
 	return New(cfg, opts...).(*graphClient)
 }
@@ -85,6 +87,16 @@ type Config struct {
 	// TLSInsecureSkipVerify disables Graph TLS verification. Opt-in, dev/on-prem
 	// only (e.g. a self-signed cert fronting Graph). Never enable in production.
 	TLSInsecureSkipVerify bool
+	// ProxyURL, when non-empty, routes the presence client's HTTP requests
+	// through this proxy (overriding HTTPS_PROXY/HTTP_PROXY). Honored only by the
+	// presence client (NewPresenceClient); the app-only and directory clients
+	// ignore it. Must include a scheme and host (e.g. "http://proxy.corp:8080").
+	ProxyURL string
+	// UserAgent overrides the User-Agent header sent on presence requests. When
+	// empty the presence client falls back to defaultUserAgent. Honored only by
+	// the presence client (NewPresenceClient). Set this to whatever a fronting
+	// proxy/WAF expects (e.g. a browser string) when the default is rejected.
+	UserAgent string
 }
 
 const (
@@ -126,6 +138,8 @@ func WithTokenURL(u string) Option {
 }
 
 // New constructs a live Graph client for the given config.
+//
+//nolint:gocritic // hugeParam: startup-only constructor; Config passed by value is intentional.
 func New(cfg Config, opts ...Option) Client {
 	hc := &http.Client{Timeout: 30 * time.Second}
 	if cfg.TLSInsecureSkipVerify {

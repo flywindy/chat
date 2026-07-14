@@ -1,6 +1,6 @@
 # oplog-transformer — migration stream → new-stack message pipeline (Design)
 
-> **Status:** DESIGN — stage 2 of the data-migration suite. Consumes `MIGRATION_OPLOG_{site}` (produced by stage-1 `oplog-connector`) and re-injects migrated RocketChat **messages** into the existing message pipeline. Depends on the stage-1 contract (`model.OplogEvent`, `chat.oplog.*` subjects). Built on branch `claude/oplog-transformer` (stacked on the stage-1 branch).
+> **Status:** DESIGN — stage 2 of the data-migration suite. Consumes `MIGRATION_OPLOG_{site}` (produced by stage-1 `oplog-connector`) and re-injects migrated RocketChat **messages** into the existing message pipeline. Depends on the stage-1 contract (`model.OplogEvent`, `chat.migration.oplog.*` subjects). Built on branch `claude/oplog-transformer` (stacked on the stage-1 branch).
 
 *A JetStream consumer — the counterpart to the connector's producer. One durable consumer on `MIGRATION_OPLOG_{site}`, routing each change event by collection. This spec covers the `rocketchat_message` path only; other collections (e.g. `users` → inbox-worker) are deferred to a later spec.*
 
@@ -36,7 +36,7 @@ The connector deliberately did no enrichment ("the transformer's job"). The tran
 
 **Out of scope (deferred / later specs):**
 - **Message reactions, file attachments, pins, and system-message types (`t`: `room_changed_*`/`user_added`/…)** — named here so the omission is **intentional, not silent fidelity loss**. Migrated messages carry text + core fields; these enrichments are a later stage. Source-E2E messages (`t:"msg_encrypted"`, ciphertext in `msg`) are also skipped — we can't decrypt them.
-- All non-message collections (`users`, `rocketchat_room`, `rocketchat_subscription`, `tsmc_*`, …). The router logs-and-skips them for now.
+- All non-message collections (`users`, `rocketchat_room`, `rocketchat_subscription`, `company_*`, …). The router logs-and-skips them for now.
 - The bulk `history-migrator` (sibling, separate).
 
 ## 1.1 Migration context — cold cutover, not parallel-live
@@ -173,11 +173,11 @@ message-worker is the **third** `MESSAGES_CANONICAL` consumer and must process m
 |---|---|---|
 | Persist reply (Cassandra) + durable tcount (`SaveThreadMessage`) | message-worker (history) | **run** |
 | `thread_rooms` create + `replyAccounts` + last-message pointer + parent `thread_room_id` stamp | message-worker (`thread_rooms` — no source doc; collections only FK-references it) | **run** |
-| `thread_subscriptions` insert/upsert + cross-site outbox | **collections migration** (`tsmc_thread_subscriptions`) | **skip** |
+| `thread_subscriptions` insert/upsert + cross-site outbox | **collections migration** (`company_thread_subscriptions`) | **skip** |
 | `hasMention` mark (+ outbox) | **collections migration** | **skip** |
 | live tcount badge (`chat.server.broadcast.{site}.thread.tcount`, no header) | nobody — transient notify | **skip** |
 
-**Invariant that makes the skip safe — DO NOT REVERT:** the collections transformer migrates `rocketchat_subscriptions` and `tsmc_thread_subscriptions` **without** a federation-origin filter — every subscription / thread-subscription doc, every origin, is carried. So the thread-subscription state message-worker skips here is owned and reproduced by collections; suppressing it is **not** data loss. Re-deriving it here is actively harmful: `InsertThreadSubscription` would dup-key the unique `(threadRoomId, userAccount)` index (poison-Nak the reply), and `MarkThreadSubscriptionMention` would `$set hasMention=true`, clobbering the source's read state. The tcount badge carries **no** `X-Migration` header, so without this skip broadcast-worker would push it live — defeating the §6 skip for thread replies.
+**Invariant that makes the skip safe — DO NOT REVERT:** the collections transformer migrates `rocketchat_subscriptions` and `company_thread_subscriptions` **without** a federation-origin filter — every subscription / thread-subscription doc, every origin, is carried. So the thread-subscription state message-worker skips here is owned and reproduced by collections; suppressing it is **not** data loss. Re-deriving it here is actively harmful: `InsertThreadSubscription` would dup-key the unique `(threadRoomId, userAccount)` index (poison-Nak the reply), and `MarkThreadSubscriptionMention` would `$set hasMention=true`, clobbering the source's read state. The tcount badge carries **no** `X-Migration` header, so without this skip broadcast-worker would push it live — defeating the §6 skip for thread replies.
 
 **Rollout coupling:** because message-worker no longer creates thread subscriptions for migrated replies, a migrated thread has no subscription rows until the collections migration runs. This is eventual-consistent but makes the message + collections migrations a **joint** unit — deploy together (or collections-first). message-worker keeps owning `thread_rooms`, which the collections thread-sub FK resolver depends on.
 

@@ -461,6 +461,21 @@ func (mr *MockRoomStoreMockRecorder) ListSubscriptionsByRoom(ctx, roomID any) *g
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListSubscriptionsByRoom", reflect.TypeOf((*MockRoomStore)(nil).ListSubscriptionsByRoom), ctx, roomID)
 }
 
+// ListThreadReadReceipts mocks base method.
+func (m *MockRoomStore) ListThreadReadReceipts(ctx context.Context, threadRoomID string, since time.Time, excludeAccount string, limit int) ([]ReadReceiptRow, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListThreadReadReceipts", ctx, threadRoomID, since, excludeAccount, limit)
+	ret0, _ := ret[0].([]ReadReceiptRow)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListThreadReadReceipts indicates an expected call of ListThreadReadReceipts.
+func (mr *MockRoomStoreMockRecorder) ListThreadReadReceipts(ctx, threadRoomID, since, excludeAccount, limit any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListThreadReadReceipts", reflect.TypeOf((*MockRoomStore)(nil).ListThreadReadReceipts), ctx, threadRoomID, since, excludeAccount, limit)
+}
+
 // MinSubscriptionLastSeenByRoomID mocks base method.
 func (m *MockRoomStore) MinSubscriptionLastSeenByRoomID(ctx context.Context, roomID string) (*time.Time, error) {
 	m.ctrl.T.Helper()
@@ -768,22 +783,20 @@ func (m *MockMessageReader) EXPECT() *MockMessageReaderMockRecorder {
 	return m.recorder
 }
 
-// GetMessageRoomAndCreatedAt mocks base method.
-func (m *MockMessageReader) GetMessageRoomAndCreatedAt(ctx context.Context, account, roomID, messageID string) (string, time.Time, string, bool, error) {
+// GetMessageReadMeta mocks base method.
+func (m *MockMessageReader) GetMessageReadMeta(ctx context.Context, account, roomID, messageID string) (MessageReadMeta, bool, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetMessageRoomAndCreatedAt", ctx, account, roomID, messageID)
-	ret0, _ := ret[0].(string)
-	ret1, _ := ret[1].(time.Time)
-	ret2, _ := ret[2].(string)
-	ret3, _ := ret[3].(bool)
-	ret4, _ := ret[4].(error)
-	return ret0, ret1, ret2, ret3, ret4
+	ret := m.ctrl.Call(m, "GetMessageReadMeta", ctx, account, roomID, messageID)
+	ret0, _ := ret[0].(MessageReadMeta)
+	ret1, _ := ret[1].(bool)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
 }
 
-// GetMessageRoomAndCreatedAt indicates an expected call of GetMessageRoomAndCreatedAt.
-func (mr *MockMessageReaderMockRecorder) GetMessageRoomAndCreatedAt(ctx, account, roomID, messageID any) *gomock.Call {
+// GetMessageReadMeta indicates an expected call of GetMessageReadMeta.
+func (mr *MockMessageReaderMockRecorder) GetMessageReadMeta(ctx, account, roomID, messageID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetMessageRoomAndCreatedAt", reflect.TypeOf((*MockMessageReader)(nil).GetMessageRoomAndCreatedAt), ctx, account, roomID, messageID)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetMessageReadMeta", reflect.TypeOf((*MockMessageReader)(nil).GetMessageReadMeta), ctx, account, roomID, messageID)
 }
 
 // MockTeamsMeetingStore is a mock of TeamsMeetingStore interface.

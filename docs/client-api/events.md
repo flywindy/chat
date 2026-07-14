@@ -1,6 +1,6 @@
 > Request/Reply and Events views of the chat client API — see also [client-api.md](../client-api.md).
 
-<!-- last synced: client-api.md @ 3cabb454 -->
+<!-- last synced: client-api.md @ 117da0c -->
 
 # Chat — Server-to-Client Events
 
@@ -98,7 +98,7 @@ Two shapes exist — discriminated by `action`:
 | Field | Type | Notes |
 |---|---|---|
 | `userId` | string | The affected user's internal user ID. Omitted on the org-removal path. |
-| `subscription` | [Subscription](../client-api.md#subscription) | Full Subscription record for `added` / `role_updated` / `mute_toggled` / `favorite_toggled` / `read`. |
+| `subscription` | [Subscription](../client-api.md#subscription) | Full Subscription record for `added` / `role_updated` / `mute_toggled` / `favorite_toggled` / `read`. On `read`, `hasMention` and `hasGroupMention` are both `false` — reading the room clears both. |
 | `action` | string | `"added"`, `"role_updated"`, `"mute_toggled"`, `"favorite_toggled"`, or `"read"`. |
 | `roomName` | string | Per-subscriber display label. On `added`: channel name / DM counterpart's display name / bot app name. On `role_updated`: the channel name. Omitted on `mute_toggled` / `favorite_toggled` / `read`. |
 | `timestamp` | number | Epoch ms (UTC). |
@@ -268,6 +268,7 @@ Cassandra projection).
 | `editedAt` | string | Optional. RFC 3339. |
 | `updatedAt` | string | Optional. RFC 3339. |
 | `threadParentMessageId` | string | Optional. Set for a thread reply. |
+| `threadParentMessageCreatedAt` | string | Optional. RFC 3339. Server-resolved best-effort; absent when unresolved at send time. |
 | `tshow` | boolean | Optional. Whether a thread reply is also shown in the parent room. |
 | `type` | string | Optional. System-message type. |
 | `sysMsgData` | string | Optional. Base64-encoded raw JSON payload for system messages. |

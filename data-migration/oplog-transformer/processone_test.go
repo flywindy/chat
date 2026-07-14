@@ -32,7 +32,7 @@ func (m *fakeJSMsg) Data() []byte { return m.data }
 
 // Headers/Subject feed natsutil.StampRequestID at the top of processOne; nil/"" → a fresh id is minted.
 func (m *fakeJSMsg) Headers() nats.Header { return nil }
-func (m *fakeJSMsg) Subject() string      { return "chat.oplog.site1.rocketchat_message.insert" }
+func (m *fakeJSMsg) Subject() string      { return "chat.migration.oplog.site1.rocketchat_message.insert" }
 
 func (m *fakeJSMsg) Metadata() (*jetstream.MsgMetadata, error) {
 	if m.metaErr != nil {

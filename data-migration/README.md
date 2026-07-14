@@ -77,8 +77,8 @@ and the matching `docs/superpowers/plans/2026-06-11-…` + `…2026-06-15-oplog-
 ## oplog-connector at a glance
 
 - **Watched collections (8):** `rocketchat_message`, `rocketchat_room`,
-  `rocketchat_subscription`, `rocketchat_uploads`, `tsmc_room_members`,
-  `tsmc_thread_subscriptions`, `tsmc_hr_acct_org`, `users`. All op types
+  `rocketchat_subscription`, `rocketchat_uploads`, `company_room_members`,
+  `company_thread_subscriptions`, `company_hr_acct_org`, `users`. All op types
   (insert/update/replace/delete) are traced for every collection, identically.
 - **No lookups.** The connector forwards native oplog content only — `fullDocument`
   for insert/replace, `updateDescription` (the delta) for update, `documentKey` for
@@ -95,12 +95,13 @@ and the matching `docs/superpowers/plans/2026-06-11-…` + `…2026-06-15-oplog-
     delete-cap reseed window). It's **scoped to the one message collection** (other watchers advance
     normally), and is a **connector-internal** concern; advancing from the post-batch resume token (PBRT)
     is a future connector change, not part of the federation-filter work.
-- **Subjects:** `chat.oplog.{siteID}.{rawCollection}.{op}`; dedup via
+- **Subjects:** `chat.migration.oplog.{siteID}.{rawCollection}.{op}`; dedup via
   `Nats-Msg-Id` = change-stream `_id._data`.
 - **Checkpoints:** one doc per collection in `oplog_checkpoints` (in `CHECKPOINT_DB`
   on the source RS). The resume token is the real checkpoint; saved only after a
   pub-ack (lossless).
-- **Observability:** Prometheus `/metrics` + `/healthz` on `METRICS_ADDR` —
+- **Observability:** `/healthz` on `HEALTH_ADDR` for k8s probes; metrics are
+  exported by the o11y SDK on its own Prometheus endpoint —
   `oplog_events_published_total`, `oplog_publish_errors_total`,
   `oplog_events_skipped_total`, `oplog_replication_lag_ms` (all by `collection`).
   For a single-replica pump, **alert on lag and sustained publish errors** — that's
@@ -129,8 +130,7 @@ fail-fast at startup.
 | `START_AT_TIME` | | `""` | RFC3339 or unix-ms; used by `START_MODE=time` **and** as an override (see below) |
 | `START_RESUME_TOKEN` | | `""` | `_data` hex; one-off seed override (see below) |
 | `BOOTSTRAP_STREAMS` | | `false` | dev-only stream creation; **keep `false` in prod** (ops/IaC owns the stream) |
-| `METRICS_ADDR` | | `:9090` | bind addr for the Prometheus `/metrics` + `/healthz` listener |
-| `LOG_LEVEL` | | `info` | slog level (`debug`\|`info`\|`warn`\|`error`) |
+| `HEALTH_ADDR` | | `:9090` | bind addr for the `/healthz` probe listener (metrics are on the o11y SDK's own endpoint) |
 
 **Where the change stream starts (per collection, first match wins):**
 

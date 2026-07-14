@@ -34,10 +34,9 @@ func newThreadListService(t *testing.T) (
 	threadRooms := mocks.NewMockThreadRoomRepository(ctrl)
 	threadSubs := mocks.NewMockThreadSubscriptionRepository(ctrl)
 	users := mocks.NewMockUserStore(ctrl)
-	customEmojis := mocks.NewMockCustomEmojiStore(ctrl)
 	apps := mocks.NewMockAppStore(ctrl)
 	cfg := &config.Config{MessageHistoryFloorDays: 90, LargeRoomThreshold: 500, MaxPinnedPerRoom: 10, PinEnabled: true}
-	svc := service.New(msgs, subs, rooms, pub, threadRooms, threadSubs, users, customEmojis, apps, cfg)
+	svc := service.New(msgs, subs, rooms, pub, threadRooms, threadSubs, users, apps, cfg)
 	return svc, msgs, subs, rooms, threadSubs
 }
 

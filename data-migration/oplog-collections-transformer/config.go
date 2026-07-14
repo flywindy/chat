@@ -35,8 +35,9 @@ type config struct {
 	// Source collection names (the connector's raw collection names).
 	RoomsCollection         string `env:"ROOMS_COLLECTION" envDefault:"rocketchat_rooms"`
 	SubscriptionsCollection string `env:"SUBSCRIPTIONS_COLLECTION" envDefault:"rocketchat_subscriptions"`
-	ThreadSubsCollection    string `env:"THREAD_SUBS_COLLECTION" envDefault:"tsmc_thread_subscriptions"`
+	ThreadSubsCollection    string `env:"THREAD_SUBS_COLLECTION" envDefault:"company_thread_subscriptions"`
 	UsersCollection         string `env:"USERS_COLLECTION" envDefault:"users"`
+	RoomMembersCollection   string `env:"ROOM_MEMBERS_COLLECTION" envDefault:"company_room_members"`
 
 	SourceReadPreference string `env:"SOURCE_READ_PREFERENCE" envDefault:"primaryPreferred"`
 
@@ -46,8 +47,7 @@ type config struct {
 
 	Bootstrap bootstrapConfig `envPrefix:"BOOTSTRAP_"`
 
-	MetricsAddr string `env:"METRICS_ADDR" envDefault:":9090"`
-	LogLevel    string `env:"LOG_LEVEL" envDefault:"info"`
+	HealthAddr string `env:"HEALTH_ADDR" envDefault:":9090"`
 }
 
 type bootstrapConfig struct {
@@ -71,6 +71,7 @@ func parseConfig() (config, error) {
 	cfg.SubscriptionsCollection = strings.TrimSpace(cfg.SubscriptionsCollection)
 	cfg.ThreadSubsCollection = strings.TrimSpace(cfg.ThreadSubsCollection)
 	cfg.UsersCollection = strings.TrimSpace(cfg.UsersCollection)
+	cfg.RoomMembersCollection = strings.TrimSpace(cfg.RoomMembersCollection)
 	for name, v := range map[string]string{
 		"SITE_ID":                  cfg.SiteID,
 		"NATS_URL":                 cfg.NatsURL,
@@ -80,6 +81,7 @@ func parseConfig() (config, error) {
 		"SUBSCRIPTIONS_COLLECTION": cfg.SubscriptionsCollection,
 		"THREAD_SUBS_COLLECTION":   cfg.ThreadSubsCollection,
 		"USERS_COLLECTION":         cfg.UsersCollection,
+		"ROOM_MEMBERS_COLLECTION":  cfg.RoomMembersCollection,
 	} {
 		if v == "" {
 			return config{}, fmt.Errorf("%s must be non-empty", name)

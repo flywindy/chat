@@ -2,14 +2,9 @@ package main
 
 import (
 	"context"
-	"errors"
 	"log/slog"
-	"net"
-	"net/http"
 	"os"
 	"time"
-
-	"github.com/Marz32onE/instrumentation-go/otel-nats/oteljetstream"
 
 	"github.com/hmchangw/chat/history-service/internal/cassrepo"
 	"github.com/hmchangw/chat/history-service/internal/config"
@@ -19,14 +14,13 @@ import (
 	"github.com/hmchangw/chat/history-service/internal/service"
 	"github.com/hmchangw/chat/pkg/atrest"
 	"github.com/hmchangw/chat/pkg/cassutil"
-	"github.com/hmchangw/chat/pkg/emoji"
 	"github.com/hmchangw/chat/pkg/health"
 	"github.com/hmchangw/chat/pkg/logctx"
 	"github.com/hmchangw/chat/pkg/mongoutil"
 	"github.com/hmchangw/chat/pkg/msgbucket"
 	"github.com/hmchangw/chat/pkg/natsrouter"
 	"github.com/hmchangw/chat/pkg/natsutil"
-	"github.com/hmchangw/chat/pkg/otelutil"
+	"github.com/hmchangw/chat/pkg/obs"
 	"github.com/hmchangw/chat/pkg/shutdown"
 	"github.com/hmchangw/chat/pkg/userstore"
 )
@@ -77,30 +71,25 @@ func main() {
 
 	ctx := context.Background()
 
-	tracerShutdown, err := otelutil.InitTracer(ctx, "history-service")
+	sdk, obsShutdown, err := obs.InitWithLoggerHandler(ctx, logctx.LevelTrace, logctx.NewHandler)
 	if err != nil {
-		slog.Error("init tracer failed", "error", err)
-		os.Exit(1)
-	}
-	meterShutdown, err := otelutil.InitMeter("history-service")
-	if err != nil {
-		slog.Error("init meter failed", "error", err)
+		slog.Error("init observability failed", "error", err)
 		os.Exit(1)
 	}
 
-	nc, err := natsutil.Connect(cfg.NATS.URL, cfg.NATS.CredsFile)
+	nc, err := natsutil.Connect(ctx, cfg.NATS.URL, cfg.NATS.CredsFile, sdk.TracerProvider(), sdk.Propagator)
 	if err != nil {
 		slog.Error("nats connect failed", "error", err)
 		os.Exit(1)
 	}
 
-	js, err := oteljetstream.New(nc)
+	js, err := nc.JetStream()
 	if err != nil {
 		slog.Error("jetstream init failed", "error", err)
 		os.Exit(1)
 	}
 
-	mongoClient, err := mongoutil.Connect(ctx, cfg.Mongo.URI, cfg.Mongo.Username, cfg.Mongo.Password)
+	mongoClient, err := mongoutil.Connect(ctx, cfg.Mongo.URI, cfg.Mongo.Username, cfg.Mongo.Password, mongoutil.WithObservability(sdk))
 	if err != nil {
 		slog.Error("mongo connect failed", "error", err)
 		os.Exit(1)
@@ -112,7 +101,7 @@ func main() {
 		Username: cfg.Cassandra.Username,
 		Password: cfg.Cassandra.Password,
 		NumConns: cfg.Cassandra.NumConns,
-	})
+	}, cassutil.WithObservability(sdk))
 	if err != nil {
 		slog.Error("cassandra connect failed", "error", err)
 		os.Exit(1)
@@ -139,7 +128,6 @@ func main() {
 	roomRepo := mongorepo.NewRoomRepo(db)
 	threadRoomRepo := mongorepo.NewThreadRoomRepo(db)
 	threadSubRepo := mongorepo.NewThreadSubscriptionRepo(db)
-	customEmojiRepo := mongorepo.NewCustomEmojiRepo(db)
 	userStore := userstore.NewMongoStore(db.Collection("users"))
 	appRepo := mongorepo.NewAppRepo(db)
 
@@ -151,20 +139,6 @@ func main() {
 		slog.Error("ensure thread_subscriptions indexes failed", "error", err)
 		os.Exit(1)
 	}
-	if err := customEmojiRepo.EnsureIndexes(ctx); err != nil {
-		slog.Error("ensure custom_emojis indexes failed", "error", err)
-		os.Exit(1)
-	}
-
-	cachedEmojis, err := emoji.NewCachedLookup(customEmojiRepo, cfg.CustomEmojiCacheSize, cfg.CustomEmojiCacheTTL)
-	if err != nil {
-		slog.Error("init custom emoji cache failed", "error", err)
-		os.Exit(1)
-	}
-	slog.Info("custom emoji cache configured",
-		"size", cfg.CustomEmojiCacheSize,
-		"ttl", cfg.CustomEmojiCacheTTL,
-	)
 
 	// Front the per-request Mongo reads with process-local LRU+TTL caches.
 	var subSource service.SubscriptionRepository = subRepo
@@ -190,7 +164,7 @@ func main() {
 	}
 
 	pub := publisher.New(js)
-	svc := service.New(cassRepo, subSource, roomSource, pub, threadRoomRepo, threadSubRepo, userStore, cachedEmojis, appRepo, &cfg)
+	svc := service.New(cassRepo, subSource, roomSource, pub, threadRoomRepo, threadSubRepo, userStore, appRepo, &cfg)
 	router := natsrouter.New(nc, "history-service")
 	router.Use(natsrouter.Recovery())
 	// RequestID must precede any handler that reads request_id from ctx —
@@ -208,31 +182,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Bind synchronously so a port conflict fails startup loudly rather than
-	// running blind — /metrics exposes the cache hit-rate and atrest DEK counters.
-	metricsServer := otelutil.MetricsServer()
-	metricsLn, err := net.Listen("tcp", cfg.MetricsAddr)
-	if err != nil {
-		slog.Error("metrics listen failed", "addr", cfg.MetricsAddr, "error", err)
-		os.Exit(1)
-	}
-	go func() {
-		slog.Info("metrics server listening", "addr", cfg.MetricsAddr)
-		if err := metricsServer.Serve(metricsLn); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			slog.Error("metrics server failed", "error", err)
-		}
-	}()
-
 	slog.Info("history-service running", "site", cfg.SiteID)
 
 	shutdown.Wait(ctx, 25*time.Second,
 		func(ctx context.Context) error { return router.Shutdown(ctx) },
-		// Stop /metrics late so Prometheus can scrape the final drain-window counts,
-		// then flush the meter provider.
-		func(ctx context.Context) error { return metricsServer.Shutdown(ctx) },
 		func(ctx context.Context) error { return nc.Drain() },
-		func(ctx context.Context) error { return tracerShutdown(ctx) },
-		func(ctx context.Context) error { return meterShutdown(ctx) },
 		func(ctx context.Context) error { mongoutil.Disconnect(ctx, mongoClient); return nil },
 		func(ctx context.Context) error { cassutil.Close(cassSession); return nil },
 		func(ctx context.Context) error {
@@ -242,5 +196,6 @@ func main() {
 			return nil
 		},
 		func(ctx context.Context) error { return healthStop(ctx) },
+		func(ctx context.Context) error { return obsShutdown(ctx) },
 	)
 }

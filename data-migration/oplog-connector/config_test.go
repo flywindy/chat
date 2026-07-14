@@ -29,7 +29,7 @@ func TestParseConfig_DefaultsAndSlices(t *testing.T) {
 	assert.Equal(t, "secondary", cfg.ReadPreference)
 	assert.Equal(t, 100, cfg.CheckpointEvery)
 	assert.Equal(t, 30, cfg.CheckpointMaxAgeSeconds)
-	assert.Equal(t, ":9090", cfg.MetricsAddr)
+	assert.Equal(t, ":9090", cfg.HealthAddr)
 	assert.Equal(t, "now", cfg.StartMode)
 	assert.False(t, cfg.Bootstrap.Enabled)
 }
@@ -58,15 +58,21 @@ func TestParseConfig_TrimsCollectionWhitespace(t *testing.T) {
 	assert.Equal(t, []string{"rocketchat_message", "users"}, cfg.WatchCollections)
 }
 
-func TestParseConfig_MessageCollectionNotWatchedFails(t *testing.T) {
+func TestParseConfig_MessageCollectionNotWatchedPasses(t *testing.T) {
 	setRequiredEnv(t)
-	// MESSAGE_COLLECTION is not present in WATCH_COLLECTIONS — the federation
-	// $match would never run, silently migrating all foreign messages.
+	// Collections role: the message collection is tailed by a separate deployment, so its absence is legitimate.
 	t.Setenv("WATCH_COLLECTIONS", "rocketchat_room,users")
 	t.Setenv("MESSAGE_COLLECTION", "rocketchat_message")
-	_, err := parseConfig()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "MESSAGE_COLLECTION")
+	cfg, err := parseConfig()
+	require.NoError(t, err)
+	assert.False(t, cfg.watchesMessages())
+}
+
+func TestParseConfig_WatchesMessagesWhenPresent(t *testing.T) {
+	setRequiredEnv(t) // WATCH_COLLECTIONS includes rocketchat_message
+	cfg, err := parseConfig()
+	require.NoError(t, err)
+	assert.True(t, cfg.watchesMessages())
 }
 
 func TestParseConfig_EmptyMessageCollectionFails(t *testing.T) {

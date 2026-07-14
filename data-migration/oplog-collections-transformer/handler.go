@@ -43,17 +43,23 @@ type targetStore interface {
 	// threadRoomID, and the thread room's home siteID (thread-subs inherit the room's site, §6).
 	FindThreadRoom(ctx context.Context, parentMessageID string) (roomID, threadRoomID, siteID string, found bool, err error)
 	FindUserID(ctx context.Context, account string) (userID string, found bool, err error)
+	// UpsertRoomMember replaces-or-inserts a migrated room-member doc keyed by its (source-adopted)
+	// _id — idempotent under redelivery. DeleteRoomMember removes by _id; deleted is false when
+	// the row was already absent (a no-op, not an error).
+	UpsertRoomMember(ctx context.Context, rm model.RoomMember) error
+	DeleteRoomMember(ctx context.Context, id string) (deleted bool, err error)
 }
 
 type handler struct {
-	siteID         string
-	allSiteIDs     []string
-	roomsColl      string
-	subsColl       string
-	threadSubsColl string
-	usersColl      string
-	pub            inboxPublisher
-	target         targetStore
+	siteID          string
+	allSiteIDs      []string
+	roomsColl       string
+	subsColl        string
+	threadSubsColl  string
+	usersColl       string
+	roomMembersColl string
+	pub             inboxPublisher
+	target          targetStore
 	// lookups re-read the current source doc on update events (the connector forwards only the
 	// delta), keyed by source collection name — one SourceLookup per watched collection.
 	lookups map[string]migration.SourceLookup
@@ -83,6 +89,8 @@ func (h *handler) handle(ctx context.Context, ev oplogEvent) error {
 		return h.handleSubscription(ctx, ev)
 	case h.threadSubsColl:
 		return h.handleThreadSub(ctx, ev)
+	case h.roomMembersColl:
+		return h.handleRoomMember(ctx, ev)
 	default:
 		slog.Debug("skip non-migrated collection",
 			"collection", ev.Collection, "request_id", natsutil.RequestIDFromContext(ctx))
@@ -92,7 +100,8 @@ func (h *handler) handle(ctx context.Context, ev oplogEvent) error {
 }
 
 // resolveDoc returns the full current source doc for the event, or (nil, true, nil) to skip.
-// insert/replace carry the doc inline; update re-reads by documentKey._id; delete is always skip.
+// insert/replace carry the doc inline; update re-reads by documentKey._id; delete is always skip
+// (room-members intercepts deletes in handleRoomMember before calling here).
 //
 //nolint:gocritic // ev passed by value to mirror handle's signature; off the hot path.
 func (h *handler) resolveDoc(ctx context.Context, ev oplogEvent) (doc []byte, skip bool, err error) {

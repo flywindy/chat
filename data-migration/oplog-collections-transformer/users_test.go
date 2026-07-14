@@ -28,7 +28,7 @@ func TestHandleUser_InsertMapsFields(t *testing.T) {
 
 	doc := `{"_id":"u1","username":"alice","type":"user","statusText":"hi",` +
 		`"roles":["admin","user"],` +
-		`"customFields":{"engName":"Alice","tsmcName":"愛麗絲","deptId":"D1","deptName":"Dept","sectId":"S1","sectName":"Sect"}}`
+		`"customFields":{"engName":"Alice","companyName":"愛麗絲","deptId":"D1","deptName":"Dept","sectId":"S1","sectName":"Sect"}}`
 	err := h.handleUser(context.Background(), userEv("insert", doc))
 	require.NoError(t, err)
 

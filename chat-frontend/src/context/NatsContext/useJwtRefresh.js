@@ -29,12 +29,19 @@ const MAX_REFRESH_ATTEMPTS = RETRY_BACKOFF_MS.length + 1
  * getAuthUrl is read at each refresh, so the target can be resolved after
  * mount (portal lookup).
  */
-export function useJwtRefresh({ getAuthUrl, ncRef }) {
+export function useJwtRefresh({ getAuthUrl, ncRef, onSessionLost }) {
   const jwtRef = useRef(null)
   const seedRef = useRef(null)
   const pubKeyRef = useRef(null)
   const timerRef = useRef(null)
   const refreshRef = useRef(() => {})
+  // Credential mode ('sso' | 'session'). SSO re-mints via silent renew; a
+  // session (bot/admin) token is permanent and re-mints directly with the
+  // stored authToken. Defaults to 'sso' so existing callers are unaffected.
+  const modeRef = useRef('sso')
+  const authTokenRef = useRef(null)
+  // Latest onSessionLost in a ref so the timer closure reads the current one.
+  const onSessionLostRef = useRef(onSessionLost)
   // Bumped by setCredentials/stop to invalidate an in-flight refresh, so a
   // relogin landing mid-refresh cannot be clobbered by a stale result
   // (codebase "stale-cycle protection" convention).
@@ -72,6 +79,12 @@ export function useJwtRefresh({ getAuthUrl, ncRef }) {
     // No token/body in the log — just the reason and a coarse detail.
     console.warn(`NATS JWT refresh: ${reason}; redirecting to login`, detail)
     clearTimer()
+    // Session (bot/admin) tokens have no IdP to bounce to — hand control back
+    // to NatsContext, which clears the stored session and drops to the form.
+    if (modeRef.current === 'session') {
+      onSessionLostRef.current?.()
+      return
+    }
     await redirectToReloginOnTokenInvalid()
   }, [clearTimer])
 
@@ -79,23 +92,30 @@ export function useJwtRefresh({ getAuthUrl, ncRef }) {
     const myGen = genRef.current
     const stale = () => genRef.current !== myGen
 
-    // 1) Renew the SSO token. A failure here means the session is gone — terminal.
-    let ssoToken
-    try {
-      ssoToken = await renewSsoToken()
-    } catch (err) {
-      if (!stale()) await redirect('silent renew failed', { error: err?.message })
-      return
+    // 1) Build the /auth body. SSO renews the access token first (terminal on
+    //    failure); a session token is permanent, so re-mint with it directly.
+    let authBody
+    if (modeRef.current === 'session') {
+      authBody = { authToken: authTokenRef.current, natsPublicKey: pubKeyRef.current }
+    } else {
+      let ssoToken
+      try {
+        ssoToken = await renewSsoToken()
+      } catch (err) {
+        if (!stale()) await redirect('silent renew failed', { error: err?.message })
+        return
+      }
+      if (stale()) return
+      authBody = { ssoToken, natsPublicKey: pubKeyRef.current }
     }
-    if (stale()) return
 
     // 2) Re-mint the NATS JWT. Transport failures are transient (retry with
     //    backoff); a 4xx rejection is terminal.
     try {
-      const resp = await fetch(`${getAuthUrl()}/auth`, {
+      const resp = await fetch(`${getAuthUrl()}/api/v1/auth`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ssoToken, natsPublicKey: pubKeyRef.current }),
+        body: JSON.stringify(authBody),
       })
       if (stale()) return
       if (!resp.ok) {
@@ -130,12 +150,15 @@ export function useJwtRefresh({ getAuthUrl, ncRef }) {
   // Keep refreshRef current so the timer always calls the latest closure —
   // this breaks the scheduleRefresh <-> refresh dependency cycle.
   useEffect(() => { refreshRef.current = refresh }, [refresh])
+  useEffect(() => { onSessionLostRef.current = onSessionLost }, [onSessionLost])
 
-  const setCredentials = useCallback(({ jwt, seed, natsPublicKey, refreshable }) => {
+  const setCredentials = useCallback(({ jwt, seed, natsPublicKey, refreshable, mode = 'sso', authToken = null }) => {
     genRef.current += 1
     jwtRef.current = jwt
     seedRef.current = seed
     pubKeyRef.current = natsPublicKey
+    modeRef.current = mode
+    authTokenRef.current = authToken
     if (refreshable) scheduleRefresh(jwt)
     else clearTimer()
   }, [scheduleRefresh, clearTimer])
@@ -146,6 +169,8 @@ export function useJwtRefresh({ getAuthUrl, ncRef }) {
     jwtRef.current = null
     seedRef.current = null
     pubKeyRef.current = null
+    modeRef.current = 'sso'
+    authTokenRef.current = null
   }, [clearTimer])
 
   useEffect(() => () => clearTimer(), [clearTimer])

@@ -157,8 +157,8 @@ func TestWatcher_PublishesInOrderAndCheckpointsOnDrain(t *testing.T) {
 	require.NoError(t, w.run(context.Background()))
 
 	require.Len(t, pub.msgs, 3)
-	assert.Equal(t, "chat.oplog.site1.rocketchat_message.insert", pub.msgs[0].Subject)
-	assert.Equal(t, "chat.oplog.site1.rocketchat_message.delete", pub.msgs[2].Subject)
+	assert.Equal(t, "chat.migration.oplog.site1.rocketchat_message.insert", pub.msgs[0].Subject)
+	assert.Equal(t, "chat.migration.oplog.site1.rocketchat_message.delete", pub.msgs[2].Subject)
 	assert.Equal(t, "E1", pub.msgs[0].Header.Get("Nats-Msg-Id"))
 	assert.Equal(t, []string{"E1", "E2", "E3"}, msgIDs(pub.msgs), "publish order = oplog order")
 

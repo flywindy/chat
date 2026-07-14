@@ -112,7 +112,7 @@ Example document (values rotated/sanitized):
 | `uids` / `usernames` | array | Members; for `t:d` length **can exceed 2** (group DM) | ✅ |
 | `u` | object | Creator (`u._id`, `u.username`) | ❓ |
 | `ts` / `_updatedAt` | date | Created / last-updated | ❓ |
-| `restricted` | bool (opt) | **Authoritative restriction flag** (TSMC custom; absent ⇒ false). Confirmed on TKMS. RC's `ro` (read-only/announcement) is a **different concept** — deliberately ignored | ✅ |
+| `restricted` | bool (opt) | **Authoritative restriction flag** (Company custom; absent ⇒ false). Confirmed on TKMS. RC's `ro` (read-only/announcement) is a **different concept** — deliberately ignored | ✅ |
 | **external/federation access** | ? | **Which field is authoritative for "external access allowed"?** | ❓ |
 | `federation.origin` | string (opt) | Origin site | ✅ |
 | `federation.domains[]` | array | Member domains, service-synced, may be stale | ✅ ⛔ |
@@ -136,7 +136,7 @@ One row per (user, room). ✅ Unique index `{ rid:1, 'u._id':1 }`.
 | `userMentions` / `groupMentions` | int | Unread `@user` / `@all`,`@here` counts | ✅ |
 | `tunread[]` | string[] | Parent-message ids (`tmid`) of threads with any unread | ✅ |
 | `tunreadGroup[]` / `tunreadUser[]` | string[] | …group-mention / direct-mention variants | ✅ |
-| `disableNotifications` | bool | **TSMC custom — authoritative mute (all-off)** | ✅ |
+| `disableNotifications` | bool | **Company custom — authoritative mute (all-off)** | ✅ |
 | `muteGroupMentions` | bool | `@all`/`@here` only (**not** our mute flag) | ✅ |
 | `f` | bool (opt) | Favorited (absent ⇒ false) | ✅ |
 | `favoritedAt` | date (opt) | Last favorite time. Exists at source (TKMS) but **unused by CDC** — per the agreed guard mapping below, all guards derive from `_updatedAt` | ✅ ⛔ |
@@ -152,7 +152,7 @@ No null-when-false conditional, no `favoritedAt` source. Note: the canonical res
 (`restrictedUpdatedAt`) is not in the destination codebase yet; inbox-worker currently applies
 `room_restricted` via `visibilityUpdatedAt` — accepted until the rename lands in main.
 
-## 5. `tsmc_thread_subscriptions`
+## 5. `company_thread_subscriptions`
 
 One row per (user, thread). ✅ Unique index `{ 'u._id':1, 'parentMessage._id':1 }`.
 
@@ -178,11 +178,11 @@ Lifecycle: created lazily; **unfollow deletes the row** (no soft-delete); no `fe
 | `type` | string | `user` or `bot` (bot has `appId`); no other non-human types | ✅ |
 | `appId` | string (opt) | Present on bot/app accounts | ✅ |
 | `name` | string | Display name | ✅ |
-| `customFields.engName` / `tsmcName` | string | English / Chinese name | ✅ |
+| `customFields.engName` / `companyName` | string | English / Chinese name | ✅ |
 | `customFields.deptId` / `deptName` | string | Department id / name | ✅ |
 | `customFields.sectId` / `sectName` | string | Section id / name | ✅ |
 | `customFields.appId` / `appName` | string | App id / name | ✅ |
-| `hrInfo` | `ITsmcUser[]` | HR directory records | ❓ (not consumed yet) |
+| `hrInfo` | `ICompanyUser[]` | HR directory records | ❓ (not consumed yet) |
 | `statusText` / `status` | string | Status message / presence | ✅ |
 | `roles[]` | string[] | Global roles (`admin` marker) | ✅ |
 | `active` | bool | Deactivation ⇒ `active:false` (no deletion) | ✅ |
@@ -191,7 +191,7 @@ Lifecycle: created lazily; **unfollow deletes the row** (no soft-delete); no `fe
 | **employee id** | ? | **Where does an employee id live — is it `username`?** | ❓ |
 | **Traditional-Chinese dept/sect names** | ? | Is there a TC variant of `deptName`/`sectName`? | ❓ |
 
-Seeded (insert-if-absent, keyed by account): `username`, `engName`, `tsmcName`, dept/sect ids+names, `roles`, `statusText`, site, bot flag. Everything else is owned by the company-wide user sync.
+Seeded (insert-if-absent, keyed by account): `username`, `engName`, `companyName`, dept/sect ids+names, `roles`, `statusText`, site, bot flag. Everything else is owned by the company-wide user sync.
 
 Post-seed **updates**: HR fields are **not** re-propagated (the company-wide sync keeps them current). The **one exception is `statusText`** — it is chat-originated (not in the HR dataset), so a live `statusText` change fans a `user_status_updated` event to all sites (design §4.1a); without it, legacy status changes during the migration window would be lost.
 
@@ -200,9 +200,114 @@ Post-seed **updates**: HR fields are **not** re-propagated (the company-wide syn
 
 
 ## Collection for direct transfer:
-rocketchat_avatar, tsmc_apps_v, tsmc_bot_cmd_men , tsmc_tsso_tokens, rocketchat_uploads, tsmc_bot_authorization, ufsTokens, user_devices
+rocketchat_avatar, company_apps_v, company_bot_cmd_men , company_tsso_tokens, rocketchat_uploads, company_bot_authorization, ufsTokens, user_devices
 
 Handled by **`oplog-direct-transfer`**: copied verbatim (whole doc, same `_id`) into the same-named
 new-stack collection, mirroring insert/update/replace/delete. Metadata only — the actual file/blob
 bytes for `rocketchat_uploads`/`ufsTokens`/`rocketchat_avatar` (UFS/GridFS) are a separate owner's
 concern. See `docs/superpowers/specs/2026-07-01-oplog-direct-transfer-design.md`.
+
+## 7. `company_room_members` — open questions (room-member migration)
+
+> For the source engineers / migration owner. Destination: new-stack `room_members`
+> (`{_id, rid, ts, member:{id, type: individual|org, account}}`), written **directly** by
+> `oplog-collections-transformer` (decision: no room-worker involvement). Please answer inline
+> under each question; a few pasted sample documents are worth more than prose.
+
+**Q1 — Document shape.** Is `company_room_members` one document per (room, member), or one document
+per room containing a members array? What are the exact field names for the room id, the member
+id, and the member kind? Please paste 2–3 real (redacted) sample docs — ideally one org entry and
+one individual entry if both exist.
+
+**Answer:**
+it is one document per (room, member) pair
+_id, rid, member: {type: , id:, }ts federation: {origin:  }
+
+key fields:  rid (room id), member.type org|individual|app|user member.id _id or HR org ID member.username (individual only) and ts
+
+
+**Q2 — `_id` format.** What does `_id` look like, and is it deterministic/composite (e.g.
+`{rid}:{orgId}`) or opaque (ObjectId/random)? Context: a change-stream `delete` carries only the
+`_id` of the already-deleted doc — if the natural key `(rid, member kind, member id)` can be
+derived from `_id`, deletes map directly; if not, we must persist the source `_id` on each target
+doc to route deletes.
+
+**Answer:**
+Opaque, both code paths use RandomID()
+no deterministic composition
+must persist the source _id on target docs to resolve deletes, without showExpandedEvents: true you lose the triple on hard delete
+
+
+
+**Q3 — Contents: orgs only, or individuals too?** Does the collection hold only org/department
+memberships, or also individual user entries? Context: the new-stack reader
+(`room-service.ListRoomMembers`) returns *only* `room_members` rows once a room has any — the
+subscriptions fallback then stops. If the source is org-only, rooms would lose their individual
+members from the member list after migration unless individual entries are synthesized; if the
+source holds both, a faithful copy is complete as-is.
+
+**Answer:**
+both org and individuals
+.member.type helps here
+
+
+**Q4 — Org member id semantics.** For an org entry, what exactly is the member identifier (HR
+org/dept id?), and does it match the ids used by `company_hr_acct_org` / the HR org sync? (The
+new-stack enrichment joins `member.id` against the HR org data — the ids must line up.)
+
+**Answer:**
+identical to company_hr_acct_org.orgs[].id no mapping or transfromation is applied.
+
+**Q5 — Mutation pattern.** How does the legacy app maintain this collection — insert/delete only,
+or in-place updates too? Are removals hard deletes, or a soft-delete flag? Any TTL/out-of-band
+cleanup that would bypass the change stream?
+
+**Answer:**
+insert/delete only, hard deletes
+insert + hard delete only . no in-plce updates. No soft-delete flag.
+
+no updateone/updatemany calls
+change stream: we see insert and delete events only no updates
+
+
+**Q6 — Timestamp.** Which source field (if any) records when the member was added? The target's
+`ts` drives the member-list sort order.
+
+**Answer:**
+ts filed. set at insert time. insertation timestamp no seperate updated timestamp. 
+
+
+
+**Q7 — Bulk-migration mapping.** The bulk owner will populate `room_members` for state ≤ the
+checkpoint. What mapping will they apply (field mapping, `_id` strategy, org/individual handling)?
+Our CDC tail must apply the **identical** mapping or the data diverges at the checkpoint boundary.
+
+**Answer:**
+do we need this answer?
+Bulk is not our job.
+
+
+**Q8 — Volume/churn.** Rough doc count and change rate (events/day)? Only used to sanity-check
+that the sequential consumer is sufficient.
+
+**Answer:**
+will see later. This question can be asked about any collection we handle, we dont need this answer.
+
+### §7 finding — `member.type` value-set mismatch (decision recorded 2026-07-13)
+
+**Finding:** the legacy collection carries **four** `member.type` values — `org | individual | app | user` —
+while the new-stack `room_members` schema defines exactly **two** (`individual | org`). The semantics of
+legacy `app` and `user` entries are not yet confirmed (they come from two different legacy code paths).
+
+**Decision:** the transformer maps ONLY the two types whose meaning is known — `org` and `individual`.
+**Any other `member.type` value** (the known `app`/`user`, or anything unexpected) is **error-logged and
+skipped** (Ack + `skipped` metric with a distinct reason label, so the volume is visible) — a catch-all
+rule, not an enumerated skip-list. These entries are NOT migrated for now; where `app`/`user` map will be
+decided in a follow-up once their semantics are confirmed. Anyone reading counts: skipped ≠ lost — the events remain
+in the source collection and can be re-migrated once mapped.
+
+**Individual-entry mapping (code-anchored, for the record):** target `member.account` ← legacy
+`member.username` (the reader's enrichment joins individuals on `account`); target `member.id` ← the
+**new-stack** user `_id` resolved via the transformer's existing `FindUserID(account)` (room-worker's
+dedup queries match `member.id` against new-stack user ids — carrying the legacy user `_id` would break
+them). Unresolvable user at event time ⇒ Nak-retry until the user is seeded (thread-subs precedent).

@@ -34,7 +34,7 @@ type emojiStore interface {
 	// (minioKey, etag). found=false when the emoji is not registered.
 	EmojiDoc(ctx context.Context, siteID, shortcode string) (*model.CustomEmoji, bool, error)
 	// ListEmojis returns a site's emoji sorted by shortcode, projecting only
-	// the wire fields (shortcode, imageUrl, contentType, etag, createdBy, updatedAt).
+	// the wire fields (shortcode, imageUrl, contentType, etag, updatedAt).
 	ListEmojis(ctx context.Context, siteID string) ([]model.CustomEmoji, error)
 	// UpsertEmoji inserts or overwrites by (siteId, shortcode). createdBy and
 	// createdAt are set on insert only; all blob fields update on overwrite.

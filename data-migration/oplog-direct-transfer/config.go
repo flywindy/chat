@@ -14,7 +14,7 @@ type config struct {
 
 	// DirectCollections is the set of source collections copied verbatim to the same-named
 	// destination collection. Config-driven so adding one is an env + WATCH_COLLECTIONS change.
-	DirectCollections []string `env:"DIRECT_COLLECTIONS" envSeparator:"," envDefault:"rocketchat_avatar,tsmc_apps_v,tsmc_bot_cmd_men,tsmc_tsso_tokens,rocketchat_uploads,tsmc_bot_authorization,ufsTokens,user_devices"`
+	DirectCollections []string `env:"DIRECT_COLLECTIONS" envSeparator:"," envDefault:"rocketchat_avatar,company_apps_v,company_bot_cmd_men,company_tsso_tokens,rocketchat_uploads,company_bot_authorization,ufsTokens,user_devices"`
 
 	NatsURL       string `env:"NATS_URL,required"`
 	NatsCredsFile string `env:"NATS_CREDS_FILE" envDefault:""`
@@ -38,8 +38,7 @@ type config struct {
 
 	Bootstrap bootstrapConfig `envPrefix:"BOOTSTRAP_"`
 
-	MetricsAddr string `env:"METRICS_ADDR" envDefault:":9090"`
-	LogLevel    string `env:"LOG_LEVEL" envDefault:"info"`
+	HealthAddr string `env:"HEALTH_ADDR" envDefault:":9090"`
 }
 
 type bootstrapConfig struct {

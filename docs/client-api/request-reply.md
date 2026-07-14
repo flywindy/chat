@@ -1,6 +1,6 @@
 > Request/Reply and Events views of the chat client API — see also [client-api.md](../client-api.md).
 
-<!-- last synced: client-api.md @ 3cabb454 -->
+<!-- last synced: client-api.md @ 117da0c -->
 
 # Chat — Request/Reply Methods & Publish Operations
 
@@ -27,11 +27,15 @@ For connection, auth, shared schemas, and error reference, see [../client-api.md
    - [GET /api/v1/file/rooms/:roomId/file/:fileId](#get-apiv1fileroomsroomidfilefileid)
    - [GET /api/v1/file-upload/:fileId/:fileName](#get-apiv1file-uploadfileidfilename)
    - [Media Service — avatar endpoints](#media-service--avatar-endpoints)
-2. [room-service (§3.1)](#room-service)
-3. [history-service (§3.2)](#history-service)
-4. [search-service (§3.3)](#search-service)
-5. [user-service (§3.4)](#user-service)
-6. [Publish operations](#publish-operations)
+   - [Media Service — emoji endpoints](#media-service--emoji-endpoints)
+2. [HTTP — Botplatform Service](#http--botplatform-service)
+3. [HTTP — Admin Service](#http--admin-service)
+4. [room-service (§3.1)](#room-service)
+5. [history-service (§3.2)](#history-service)
+6. [search-service (§3.3)](#search-service)
+7. [user-service (§3.4)](#user-service)
+8. [media-service (§3.5)](#media-service)
+9. [Publish operations](#publish-operations)
    - [Send Message](#send-message)
    - [Room Encryption Key Get](#room-encryption-key-get)
    - [Presence publishes](#presence-publishes)
@@ -165,6 +169,62 @@ Full decision logic, redirect/caching rules, and the `PUT` upload contract are i
 | `GET /api/v1/avatar/:accountName` | synchronous HTTP (redirect, image bytes, or default SVG) | User/bot avatar; frontend also uses this for DM/botDM room avatars. |
 | `GET /api/v1/avatar/room/:roomID` | synchronous HTTP (image bytes or default SVG) | Channel/discussion room avatar. |
 | `PUT /api/v1/avatar/bot/:botName` | synchronous HTTP | Upload a bot's custom avatar. ⚠️ Unauthenticated — must be network-restricted. |
+
+**Emits:** `None — HTTP-only.`
+
+---
+
+### Media Service — emoji endpoints
+
+Public HTTP endpoints served by `media-service` (no `ssoToken`/auth required).
+Full decision logic, limits, and response schemas are in
+[../client-api.md §7](../client-api.md#7-media-service).
+
+| Endpoint | Reply | Purpose |
+|---|---|---|
+| `GET /api/v1/emoji/:shortcode` | synchronous HTTP (image bytes, `304`, `307`, or `404`) | Serve a custom emoji image. Defaults to this cluster's site; optional lowercase `?siteid=` names a site — known remote `307`-redirects, unknown `404`. No generated default (unlike avatars). Cache-bust with `?v={etag}`. |
+| `PUT /api/v1/emoji/:shortcode` | synchronous HTTP | Upload (upsert) a custom emoji — PNG/JPEG/GIF, env-capped size/dimensions. Always writes to this cluster's site. ⚠️ Unauthenticated; optional `?uploader={account}` is audit-only. |
+
+**Emits:** `None — HTTP-only.`
+
+---
+
+## HTTP — Botplatform Service
+
+Password login and session-token validation for bot/admin accounts, served by
+`botplatform-service`. Any user may authenticate against any cluster (no home-site
+gate). Full schemas, examples, and error tables are in
+[../client-api.md §10](../client-api.md#10-botplatform-service); the portal-fronted
+login is [../client-api.md §2.5](../client-api.md#25-http--post-apiv1login-portal-service).
+
+| Endpoint | Reply | Purpose |
+|---|---|---|
+| `POST /api/v1/login` (portal-service) | synchronous HTTP | Web/mobile/desktop/admin password login; portal forwards to botplatform and returns a merged identity + home-site URL bundle (§2.5). |
+| `POST /api/v1/login` (botplatform, bot SDK direct) | synchronous HTTP | Direct bot-SDK login; legacy `{userId, authToken, me}` shape (§10.1). |
+| `POST /api/v1/auth/validate` | synchronous HTTP | Server-to-server session-token validation; returns the principal (§10.2). |
+
+**Emits:** `None — HTTP-only.`
+
+---
+
+## HTTP — Admin Service
+
+Account-management REST endpoints served by `admin-service`. All `/v1/admin/…`
+routes require an admin session token (`Authorization: Bearer <authToken>`,
+`admin` role + matching `siteId`). Full schemas, examples, and error tables are in
+[../client-api.md §9](../client-api.md#9-admin-service).
+
+| Endpoint | Reply | Purpose |
+|---|---|---|
+| `GET /v1/admin/users` | synchronous HTTP | List/search users (§9.1). |
+| `POST /v1/admin/users` | synchronous HTTP | Create a user (§9.2). |
+| `GET /v1/admin/users/:account` | synchronous HTTP | Get a user by account (§9.3). |
+| `PATCH /v1/admin/users/:account` | synchronous HTTP | Update a user by account (§9.4). |
+| `POST /v1/admin/users/:account/password` | synchronous HTTP | Admin set/reset a user's password by account (§9.5). |
+| `GET /v1/admin/sessions?account=<account>` | synchronous HTTP | List an account's active sessions (§9.6). |
+| `DELETE /v1/admin/sessions?account=<account>` | synchronous HTTP | Revoke all of an account's sessions (§9.7). |
+| `DELETE /v1/admin/sessions/:sessionId?account=<account>` | synchronous HTTP | Revoke a single session (§9.8). |
+| `GET /v1/admin/audit` | synchronous HTTP | List the audit log (§9.9). |
 
 **Emits:** `None — HTTP-only.`
 
@@ -554,6 +614,12 @@ clients must debounce. No request body required.
 Synchronous, sender-only RPC. Returns local-site users whose `subscription.lastSeenAt`
 is at or after the target message's `createdAt`. The message author is excluded from
 results.
+
+For a **thread-only reply** (a threaded reply not mirrored to the channel, i.e. not
+`tshow`), readers are resolved from **thread** read-state (`thread_subscriptions.lastSeenAt`)
+instead of the room's — the reply never appears in the channel, so a member's channel
+read-position is not evidence they saw it. Channel messages and `tshow` replies use room
+read-state.
 
 #### Request body
 
@@ -1042,7 +1108,7 @@ state. Can always **remove** from a soft-deleted message; cannot **add** to one.
 | Field | Type | Notes |
 |---|---|---|
 | `messageId` | string | Required. |
-| `shortcode` | string | Required. Bare shortcode without colons (`thumbsup`, `acme_party`). Must match `^[a-z0-9_+-]{1,32}$` after NFC normalisation. Accepts a built-in standard-emoji set (gemoji/GitHub-style) with no per-site setup, falling back to the site's `custom_emojis` collection. |
+| `shortcode` | string | Required. Bare shortcode without colons (`thumbsup`, `acme_party`). Must match `^[a-z0-9_+-]{1,32}$` after NFC normalisation. Format-only validation — no registration check; clients offer only picker-sourced shortcodes (standard set + local [`emoji.list`](#emojilist)). |
 
 #### Success response
 
@@ -1056,8 +1122,7 @@ state. Can always **remove** from a soft-deleted message; cannot **add** to one.
 #### Errors
 
 `"messageId is required"`, `"shortcode is required"`, `"invalid reaction shortcode"`
-(malformed format), `"unknown reaction shortcode"` (well-formed but not a built-in or
-registered custom emoji), `"message not found"`, `"not subscribed to room"`.
+(malformed format), `"message not found"`, `"not subscribed to room"`.
 
 **Emits:** [`message_reacted`](events.md#message_reacted-reactroomevent) (channel `chat.room.{roomID}.event`; DM `chat.user.{account}.event.room` per non-bot member), [`notification`](events.md#notification--reaction-notification) (to message author on add only) → [events.md](events.md)
 
@@ -1264,6 +1329,7 @@ No client-facing events are emitted.
 | `chat.user.{account}.request.user.{siteID}.subscription.count` | [subscription.count](#subscriptioncount) |
 | `chat.user.{account}.request.user.{siteID}.subscription.setAppSubscription` | [subscription.setAppSubscription](#subscriptionsetappsubscription) |
 | `chat.user.{account}.request.user.{siteID}.apps.list` | [apps.list](#appslist) |
+| `chat.user.{account}.request.user.{siteID}.apps.categories` | [apps.categories](#appscategories) |
 | `chat.user.{account}.request.user.{siteID}.thread.list` | [List User Threads](#list-user-threads) |
 | `chat.user.{account}.request.user.{siteID}.thread.unread.summary` | [Get Thread Unread Summary](#get-thread-unread-summary) |
 
@@ -1524,6 +1590,34 @@ advance `offset` by your `limit`). See [../client-api.md §3.4](../client-api.md
 
 ---
 
+### apps.categories
+
+**Subject:** `chat.user.{account}.request.user.{siteID}.apps.categories`
+
+Returns the full fab-domain → site mapping used to group apps in the UI,
+sorted by `name` ascending (rows sharing a `name` are ordered by `id`, so
+ordering is deterministic across calls). Global, slow-changing reference
+data, populated out-of-band; an unpopulated site returns `{ "categories": [] }`.
+
+#### Request body
+
+None — send an empty payload.
+
+#### Success response
+
+`{ "categories": AppCategory[] }` where `AppCategory` is `{ "id", "name", "siteId" }`
+(`id` is the hex form of the Mongo ObjectID, exposed under the `id` key per the
+API-wide `_id`→`id` convention), sorted by `name`; always an array (`[]` when
+empty, never `null`). See [../client-api.md §3.4](../client-api.md#appscategories).
+
+#### Errors
+
+`internal` (Mongo read failed).
+
+**Emits:** None.
+
+---
+
 ### List User Threads
 
 **Subject:** `chat.user.{account}.request.user.{siteID}.thread.list`
@@ -1580,6 +1674,75 @@ failures degrade into `unavailableSites` rather than erroring.
 
 ---
 
+## media-service
+
+| RPC subject | Method |
+|---|---|
+| `chat.user.{account}.request.emoji.{siteID}.list` | [emoji.list](#emojilist) |
+| `chat.user.{account}.request.emoji.{siteID}.delete` | [emoji.delete](#emojidelete) |
+
+`{siteID}` is the target site whose emoji set you want — in v1 the FE fetches only its
+**local** site's list (non-local shortcodes are not rendered). The supercluster routes
+the request to that site's media-service.
+
+---
+
+### emoji.list
+
+**Subject:** `chat.user.{account}.request.emoji.{siteID}.list`
+**Reply:** auto-generated `_INBOX.>` (NATS request/reply)
+
+Lists the site's custom emoji, sorted by `shortcode`.
+
+#### Request body
+
+Empty. Send `{}` or no payload.
+
+#### Success response
+
+| Field | Type | Notes |
+|---|---|---|
+| `emojis` | EmojiEntry[] | `[]` when the site has none. |
+
+`EmojiEntry`: `{ "shortcode", "imageUrl", "contentType", "etag", "updatedAt" }` —
+`imageUrl` is the bare relative serve path `/api/v1/emoji/{shortcode}` (resolve against
+the media-service base URL of the site the list came from; cache-bust with `?v={etag}`);
+`updatedAt` is an RFC 3339 timestamp (UTC).
+See [../client-api.md §3.5](../client-api.md#emojientry) for the full schema + example.
+
+#### Errors
+
+`internal` — store failure.
+
+**Emits:** None — reply only.
+
+---
+
+### emoji.delete
+
+**Subject:** `chat.user.{account}.request.emoji.{siteID}.delete`
+**Reply:** auto-generated `_INBOX.>` (NATS request/reply)
+
+Deletes a custom emoji. Any authenticated user may delete (v1). Disabled by default —
+gated by media-service's `EMOJI_DELETE_ENABLED` (default `false`).
+
+#### Request body
+
+`{ "shortcode": "acme_party" }`
+
+#### Success response
+
+`{ "shortcode": "acme_party", "deleted": true }` — `shortcode` is the canonical (NFC) form.
+
+#### Errors
+
+Malformed/missing `shortcode` (`bad_request`), no such emoji on this site (`not_found`),
+kill-switch off (`forbidden`, reason `emoji_delete_disabled`), store failure (`internal`).
+
+**Emits:** None — reply only.
+
+---
+
 ## Publish operations
 
 ### Send Message
@@ -1620,6 +1783,7 @@ Delivered on `chat.user.{account}.response.{requestId}`.
 | `content` | string | Message body as sent. |
 | `createdAt` | string | RFC 3339. Server-assigned send time. |
 | `threadParentMessageId` | string | Present only for a thread reply. |
+| `threadParentMessageCreatedAt` | string | Optional. RFC 3339. Server-resolved best-effort; absent when unresolved at send time. |
 | `tshow` | boolean | Present only when `tshow: true` on a thread reply. |
 | `quotedParentMessage` | [QuotedParentMessage](../client-api.md#quotedparentmessage) | Present only for a quoted send. |
 

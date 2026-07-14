@@ -47,7 +47,6 @@ func newPinTestService(t *testing.T) (*service.HistoryService, *mocks.MockMessag
 	threadRooms := mocks.NewMockThreadRoomRepository(ctrl)
 	threadSubs := mocks.NewMockThreadSubscriptionRepository(ctrl)
 	users := mocks.NewMockUserStore(ctrl)
-	customEmojis := mocks.NewMockCustomEmojiStore(ctrl)
 	apps := mocks.NewMockAppStore(ctrl)
 	rooms.EXPECT().
 		GetRoomTimes(gomock.Any(), gomock.Any()).
@@ -60,7 +59,7 @@ func newPinTestService(t *testing.T) (*service.HistoryService, *mocks.MockMessag
 		MaxPinnedPerRoom:        testMaxPinnedPerRoom,
 		PinEnabled:              true,
 	}
-	return service.New(msgs, subs, rooms, pub, threadRooms, threadSubs, users, customEmojis, apps, cfg), msgs, subs, rooms, pub, threadRooms
+	return service.New(msgs, subs, rooms, pub, threadRooms, threadSubs, users, apps, cfg), msgs, subs, rooms, pub, threadRooms
 }
 
 // testMaxPinnedPerRoom: kept small (3) so fixtures stay short.
@@ -79,7 +78,7 @@ func pinnedPage(msgs []models.Message) cassrepo.Page[models.Message] {
 
 func TestPinMessage_HappyPath(t *testing.T) {
 	// Uses newServiceWithRoomMock — no explicit GetRoomUserCount override to avoid gomock FIFO conflicts.
-	svc, msgs, subs, rooms, pub, _, _, _, _ := newServiceWithRoomMock(t)
+	svc, msgs, subs, rooms, pub, _, _, _ := newServiceWithRoomMock(t)
 	rooms.EXPECT().GetMinUserLastSeenAt(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 	subs.EXPECT().GetSubscription(gomock.Any(), "u1", "r1").Return(subFor(model.RoleMember), nil)
 	msgs.EXPECT().GetMessageByID(gomock.Any(), "m1").Return(pinnableMsg(), nil)
@@ -111,14 +110,13 @@ func TestPinMessage_KillSwitchDisabled(t *testing.T) {
 	threadRooms := mocks.NewMockThreadRoomRepository(ctrl)
 	threadSubs := mocks.NewMockThreadSubscriptionRepository(ctrl)
 	users := mocks.NewMockUserStore(ctrl)
-	customEmojis := mocks.NewMockCustomEmojiStore(ctrl)
 	apps := mocks.NewMockAppStore(ctrl)
 	rooms.EXPECT().
 		GetRoomTimes(gomock.Any(), gomock.Any()).
 		Return(defaultRoomLastMsgAt, defaultRoomCreatedAt, nil).
 		MinTimes(0)
 	rooms.EXPECT().GetMinUserLastSeenAt(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
-	svc := service.New(msgs, subs, rooms, pub, threadRooms, threadSubs, users, customEmojis, apps, &config.Config{
+	svc := service.New(msgs, subs, rooms, pub, threadRooms, threadSubs, users, apps, &config.Config{
 		MessageHistoryFloorDays: 90,
 		LargeRoomThreshold:      500,
 		MaxPinnedPerRoom:        testMaxPinnedPerRoom,
@@ -131,7 +129,7 @@ func TestPinMessage_KillSwitchDisabled(t *testing.T) {
 }
 
 func TestPinMessage_NotSubscribed(t *testing.T) {
-	svc, _, subs, rooms, _, _, _, _, _ := newServiceWithRoomMock(t)
+	svc, _, subs, rooms, _, _, _, _ := newServiceWithRoomMock(t)
 	rooms.EXPECT().GetMinUserLastSeenAt(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 	subs.EXPECT().GetSubscription(gomock.Any(), "u1", "r1").Return(nil, nil)
 
@@ -273,7 +271,7 @@ func TestUnpinMessage_IdempotentNotPinned(t *testing.T) {
 }
 
 func TestListPinnedMessages_HappyPath(t *testing.T) {
-	svc, msgs, subs, _, _, _, _, _, _ := newServiceWithRoomMock(t)
+	svc, msgs, subs, _, _, _, _, _ := newServiceWithRoomMock(t)
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, true, nil)
 	msgs.EXPECT().GetPinnedMessages(gomock.Any(), "r1", gomock.Any()).Return(pinnedPage([]models.Message{*pinnableMsg()}), nil)
 
@@ -285,7 +283,7 @@ func TestListPinnedMessages_HappyPath(t *testing.T) {
 
 func TestListPinnedMessages_PaginationPlumbedThrough(t *testing.T) {
 	// Request Cursor/Limit → repo PageRequest; repo NextCursor/HasNext → response.
-	svc, msgs, subs, _, _, _, _, _, _ := newServiceWithRoomMock(t)
+	svc, msgs, subs, _, _, _, _, _ := newServiceWithRoomMock(t)
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, true, nil)
 
 	var gotPageReq cassrepo.PageRequest
@@ -314,7 +312,7 @@ func TestListPinnedMessages_PaginationPlumbedThrough(t *testing.T) {
 func TestListPinnedMessages_StubsPreAccessPinContent(t *testing.T) {
 	// Restricted caller sees same row count; pre-access pin content is blanked
 	// while identifiers/sender/pin-metadata stay for placeholder rendering.
-	svc, msgs, subs, _, _, _, _, _, _ := newServiceWithRoomMock(t)
+	svc, msgs, subs, _, _, _, _, _ := newServiceWithRoomMock(t)
 	accessSince := time.Date(2026, 5, 10, 0, 0, 0, 0, time.UTC)
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(&accessSince, true, nil)
 
@@ -357,7 +355,7 @@ func TestListPinnedMessages_StubsSystemMessageMetadata(t *testing.T) {
 	// Pinned system messages carry event data in Type/SysMsgData. Without
 	// scrubbing those, "Msg = unavailable" would still leak the original
 	// event type and payload to a restricted caller.
-	svc, msgs, subs, _, _, _, _, _, _ := newServiceWithRoomMock(t)
+	svc, msgs, subs, _, _, _, _, _ := newServiceWithRoomMock(t)
 	accessSince := time.Date(2026, 5, 10, 0, 0, 0, 0, time.UTC)
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(&accessSince, true, nil)
 
@@ -385,7 +383,7 @@ func TestListPinnedMessages_StubsSystemMessageMetadata(t *testing.T) {
 func TestListPinnedMessages_StubsThreadReplyWithPreAccessParent(t *testing.T) {
 	// Post-access reply with pre-access parent → stubbed. Unlike quoteInaccessible,
 	// pinInaccessible doesn't gate on TShow (TestListPinnedMessages_StubsThreadOnlyReply... covers TShow=false).
-	svc, msgs, subs, _, _, _, _, _, _ := newServiceWithRoomMock(t)
+	svc, msgs, subs, _, _, _, _, _ := newServiceWithRoomMock(t)
 	accessSince := time.Date(2026, 5, 10, 0, 0, 0, 0, time.UTC)
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(&accessSince, true, nil)
 
@@ -413,7 +411,7 @@ func TestListPinnedMessages_StubsThreadReplyWithPreAccessParent(t *testing.T) {
 func TestListPinnedMessages_StubsThreadReplyWithMissingParentTime(t *testing.T) {
 	// nil ThreadParentCreatedAt → redact conservatively. TShow=false locks in
 	// that the fallback fires for ALL thread replies, not just TShow=true ones.
-	svc, msgs, subs, _, _, _, _, _, _ := newServiceWithRoomMock(t)
+	svc, msgs, subs, _, _, _, _, _ := newServiceWithRoomMock(t)
 	accessSince := time.Date(2026, 5, 10, 0, 0, 0, 0, time.UTC)
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(&accessSince, true, nil)
 
@@ -439,7 +437,7 @@ func TestListPinnedMessages_StubsThreadReplyWithMissingParentTime(t *testing.T) 
 func TestListPinnedMessages_StubsThreadOnlyReplyWithPreAccessParent(t *testing.T) {
 	// TShow=false reply with pre-access parent → stubbed; user can't reach
 	// thread-only replies without thread access, so the pin must be redacted.
-	svc, msgs, subs, _, _, _, _, _, _ := newServiceWithRoomMock(t)
+	svc, msgs, subs, _, _, _, _, _ := newServiceWithRoomMock(t)
 	accessSince := time.Date(2026, 5, 10, 0, 0, 0, 0, time.UTC)
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(&accessSince, true, nil)
 
@@ -465,7 +463,7 @@ func TestListPinnedMessages_StubsThreadOnlyReplyWithPreAccessParent(t *testing.T
 
 func TestListPinnedMessages_ShowsThreadReplyWithPostAccessParent(t *testing.T) {
 	// Both reply and parent post-access → fully visible (positive case).
-	svc, msgs, subs, _, _, _, _, _, _ := newServiceWithRoomMock(t)
+	svc, msgs, subs, _, _, _, _, _ := newServiceWithRoomMock(t)
 	accessSince := time.Date(2026, 5, 10, 0, 0, 0, 0, time.UTC)
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(&accessSince, true, nil)
 
@@ -491,7 +489,7 @@ func TestListPinnedMessages_ShowsThreadReplyWithPostAccessParent(t *testing.T) {
 
 func TestListPinnedMessages_RedactsPreAccessQuotedParent(t *testing.T) {
 	// Post-access pin with pre-access quoted parent → quote body redacted.
-	svc, msgs, subs, _, _, _, _, _, _ := newServiceWithRoomMock(t)
+	svc, msgs, subs, _, _, _, _, _ := newServiceWithRoomMock(t)
 	accessSince := time.Date(2026, 5, 10, 0, 0, 0, 0, time.UTC)
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(&accessSince, true, nil)
 
@@ -517,7 +515,7 @@ func TestListPinnedMessages_RedactsPreAccessQuotedParent(t *testing.T) {
 }
 
 func TestListPinnedMessages_NotSubscribed(t *testing.T) {
-	svc, _, subs, _, _, _, _, _, _ := newServiceWithRoomMock(t)
+	svc, _, subs, _, _, _, _, _ := newServiceWithRoomMock(t)
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, false, nil)
 
 	_, err := svc.ListPinnedMessages(testContext(), models.ListPinnedMessagesRequest{})
@@ -576,7 +574,7 @@ func TestUnpinMessage_WriteError(t *testing.T) {
 }
 
 func TestListPinnedMessages_StoreError(t *testing.T) {
-	svc, msgs, subs, _, _, _, _, _, _ := newServiceWithRoomMock(t)
+	svc, msgs, subs, _, _, _, _, _ := newServiceWithRoomMock(t)
 	subs.EXPECT().GetHistorySharedSince(gomock.Any(), "u1", "r1").Return(nil, true, nil)
 	msgs.EXPECT().GetPinnedMessages(gomock.Any(), "r1", gomock.Any()).
 		Return(cassrepo.Page[models.Message]{}, errors.New("cass down"))

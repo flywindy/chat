@@ -12,21 +12,24 @@ import (
 	"github.com/hmchangw/chat/pkg/model"
 )
 
-// mongoTargetStore is the new-stack per-site Mongo access the transformer needs:
-// user insert-if-absent plus thread_room / user FK resolution for thread-sub mapping.
+// mongoTargetStore is the new-stack per-site Mongo access the transformer needs: user
+// insert-if-absent, thread_room / user FK resolution for thread-sub mapping, and room-member
+// direct writes.
 type mongoTargetStore struct {
 	users       *mongo.Collection // TargetDB.users
 	threadRooms *mongo.Collection // TargetDB.thread_rooms
+	roomMembers *mongo.Collection // TargetDB.room_members
 }
 
 // Compile-time assertion that *mongoTargetStore satisfies targetStore.
 var _ targetStore = (*mongoTargetStore)(nil)
 
-// NewMongoTargetStore binds the users and thread_rooms collections on the target DB.
+// NewMongoTargetStore binds the users, thread_rooms, and room_members collections on the target DB.
 func NewMongoTargetStore(db *mongo.Database) *mongoTargetStore {
 	return &mongoTargetStore{
 		users:       db.Collection("users"),
 		threadRooms: db.Collection("thread_rooms"),
+		roomMembers: db.Collection("room_members"),
 	}
 }
 
@@ -88,4 +91,28 @@ func (s *mongoTargetStore) FindUserID(ctx context.Context, account string) (stri
 		return "", false, fmt.Errorf("find user id by account: %w", err)
 	}
 	return u.ID, true, nil
+}
+
+// UpsertRoomMember replaces-or-inserts the migrated doc by its source-adopted _id (idempotent under
+// redelivery). room_members indexes are room-worker-owned — none created here (thread_rooms principle).
+//
+//nolint:gocritic // model.RoomMember passed by value: one per migrated room-member record, off the hot path.
+func (s *mongoTargetStore) UpsertRoomMember(ctx context.Context, rm model.RoomMember) error {
+	_, err := s.roomMembers.ReplaceOne(ctx,
+		bson.D{{Key: "_id", Value: rm.ID}}, rm, options.Replace().SetUpsert(true))
+	if err != nil {
+		return fmt.Errorf("upsert room member %q: %w", rm.ID, err)
+	}
+	return nil
+}
+
+// DeleteRoomMember removes the migrated doc by _id; a missing row (e.g. never-mapped type) is a
+// no-op, not an error. deleted reports whether a row was actually removed, so callers can meter
+// a real write separately from a no-op delete.
+func (s *mongoTargetStore) DeleteRoomMember(ctx context.Context, id string) (bool, error) {
+	res, err := s.roomMembers.DeleteOne(ctx, bson.D{{Key: "_id", Value: id}})
+	if err != nil {
+		return false, fmt.Errorf("delete room member %q: %w", id, err)
+	}
+	return res.DeletedCount > 0, nil
 }

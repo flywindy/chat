@@ -10,6 +10,11 @@
 
 The connector forwards raw change-stream events with **no `updateLookup`** and **no `fullDocumentBeforeChange`**:
 
+> **Deployment note:** the connector runs as two deployments — `oplog-connector-messages`
+> (only `rocketchat_message`) and `oplog-connector-collections` (all other watched
+> collections) — with disjoint `WATCH_COLLECTIONS`, so a collection-side fault cannot stall
+> message CDC. Coverage below is unchanged by the split.
+
 | Op | Payload carried | Source lookup by `_id` |
 |---|---|---|
 | `insert` | full `fullDocument` | in payload |
@@ -43,7 +48,7 @@ The connector forwards raw change-stream events with **no `updateLookup`** and *
 | **Users** |
 | 13 | User create | `insert` — full doc | in payload | `_id`, `username` (mutable), `type`, `customFields.*`, `roles[]`, `federation.origin` | ✅ insert-if-absent by account |
 | 14 | User replace | `replace` — full doc | not needed | whole-doc rewrite | ✅ insert-if-absent (re-classify) |
-| 15 | User **HR-field** change (engName, tsmcName, dept/sect, roles, …) after first seed | `update` — changed fields only | full current doc | company-wide user sync owns these; insert-if-absent leaves existing untouched | ❌ not propagated (other sync keeps it current) |
+| 15 | User **HR-field** change (engName, companyName, dept/sect, roles, …) after first seed | `update` — changed fields only | full current doc | company-wide user sync owns these; insert-if-absent leaves existing untouched | ❌ not propagated (other sync keeps it current) |
 | 15a | User **`statusText`** change | `update` — changed fields only | full current doc | chat-originated (set by the user inside legacy chat), **not** in the HR dataset — no other sync carries it | ✅ fan `user_status_updated` to all sites (global-visibility) |
 | 16 | User deactivate / delete | `update` (`active:false`) or `delete` | `update`: full doc · `delete`: nothing | source sets `active:false` (no row deletion); no destination apply-path wired | ❌ deferred (out of scope) |
 | **All collections** |
@@ -61,10 +66,37 @@ the destination adopts the source `_id`, **delete is actionable** (unlike the re
 | `delete` | delete by `_id` (idempotent) |
 | collection-level (`drop`/`rename`/`invalidate`) | ⚠️ out of scope, deferred |
 
-Collections: `rocketchat_avatar`, `tsmc_apps_v`, `tsmc_bot_cmd_men`, `tsmc_tsso_tokens`,
-`rocketchat_uploads`, `tsmc_bot_authorization`, `ufsTokens`, `user_devices`.
+Collections: `rocketchat_avatar`, `company_apps_v`, `company_bot_cmd_men`, `company_tsso_tokens`,
+`rocketchat_uploads`, `company_bot_authorization`, `ufsTokens`, `user_devices`.
+
 **Metadata only** — file/blob bytes (UFS/GridFS) are out of scope. No destination indexes or TTL
 (removal is CDC-driven). Design: `docs/superpowers/specs/2026-07-01-oplog-direct-transfer-design.md`.
+
+## `company_room_members` coverage (oplog-collections-transformer)
+
+Migrated by **oplog-collections-transformer** (`roommembers.go`) — field-**mapped**, not a verbatim
+copy. Target `_id` is adopted from the source `_id`, but the document itself is remapped (member type
+narrowed, `member.id` re-keyed for individuals — see below), so this collection is covered by the
+collections-transformer, not `oplog-direct-transfer`.
+
+**member.type mapping:** source `member.type` has four values (`org` | `individual` | `app` | `user`);
+target schema admits exactly two (`org` | `individual`). Per SOURCE_DATA §7 decision:
+
+- `org` and `individual` entries → mapped and upserted into target `room_members`: `_id` adopted from
+  source `_id`; `member.account` ← source `member.username`; `ts` copied
+- **Individual member resolution:** target `member.id` = new-stack user id, **re-keyed** via
+  `FindUserID(account)` — not copied verbatim; unresolved → Nak-retry (thread-subs precedent)
+- **Org member:** target `member.id` = legacy org id (identical to HR org data; no transformation)
+- `app` / `user` / unexpected values → error-logged and **skipped** with metric reason
+  `room_member_type_unmapped`, Ack (not Nak) — skipped ≠ lost; re-migration is possible once
+  semantics are confirmed
+
+| Op | Handling |
+|---|---|
+| `insert` / `replace` | map + upsert by adopted `_id` (see mapping above) |
+| `update` | n/a per source contract — source is insert + hard-delete only; handled defensively: re-read full current doc + upsert, `Warn`-logged as unexpected |
+| `delete` | ✅ actionable — delete by `_id` (destination adopts source `_id`); no-op for entries whose type was never migrated (skipped-type, e.g. `app`/`user`) |
+| collection-level (`drop`/`rename`/`invalidate`) | ⚠️ out of scope, deferred |
 
 ## inbox-worker handler coverage
 

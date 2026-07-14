@@ -9,10 +9,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Marz32onE/instrumentation-go/otel-nats/otelnats"
+	o11ynats "github.com/flywindy/o11y/nats"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace/noop"
 
 	"github.com/hmchangw/chat/pkg/model"
 	"github.com/hmchangw/chat/pkg/natsrouter"
@@ -25,7 +27,7 @@ func emojiFixture(siteID, shortcode, by string, at int64) *model.CustomEmoji {
 		ID:          siteID + ":" + shortcode,
 		SiteID:      siteID,
 		Shortcode:   shortcode,
-		ImageURL:    "/api/v1/emoji/" + shortcode + "?siteid=" + siteID,
+		ImageURL:    "/api/v1/emoji/" + shortcode,
 		CreatedBy:   by,
 		CreatedAt:   at,
 		UpdatedBy:   by,
@@ -82,7 +84,7 @@ func TestMongoStore_EmojiCRUD(t *testing.T) {
 	require.Len(t, list, 2)
 	assert.Equal(t, "aaa_first", list[0].Shortcode)
 	assert.Equal(t, "party", list[1].Shortcode)
-	assert.Equal(t, "alice", list[0].CreatedBy)
+	assert.Empty(t, list[0].CreatedBy, "list must not project createdBy")
 	assert.Empty(t, list[0].MinioKey, "list must not project minioKey")
 
 	// Delete returns the minioKey; second delete reports not found.
@@ -128,7 +130,7 @@ func TestEmojiNATS_EndToEnd(t *testing.T) {
 	require.NoError(t, st.EnsureEmojiIndexes(ctx))
 	bs := newMinioBlobStore(client, bucket)
 
-	nc, err := otelnats.Connect(testutil.NATS(t))
+	nc, err := o11ynats.Connect(context.Background(), testutil.NATS(t), noop.NewTracerProvider(), propagation.TraceContext{})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = nc.Drain() })
 
@@ -159,7 +161,9 @@ func TestEmojiNATS_EndToEnd(t *testing.T) {
 	require.NoError(t, json.Unmarshal(msg.Data, &list))
 	require.Len(t, list.Emojis, 1)
 	assert.Equal(t, "party", list.Emojis[0].Shortcode)
-	assert.Equal(t, "/api/v1/emoji/party?siteid=s1", list.Emojis[0].ImageURL)
+	assert.Equal(t, "/api/v1/emoji/party", list.Emojis[0].ImageURL)
+	assert.Equal(t, time.UnixMilli(1000).UTC(), list.Emojis[0].UpdatedAt,
+		"updatedAt must cross the wire as RFC3339")
 
 	// Delete over real NATS request-reply.
 	body, err := json.Marshal(model.EmojiDeleteRequest{Shortcode: "party"})

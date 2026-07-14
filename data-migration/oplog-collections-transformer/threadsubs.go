@@ -14,7 +14,7 @@ import (
 	"github.com/hmchangw/chat/pkg/natsutil"
 )
 
-// sourceThreadSub is the subset of a tsmc_thread_subscriptions doc the mapper decodes (handles $date).
+// sourceThreadSub is the subset of a company_thread_subscriptions doc the mapper decodes (handles $date).
 type sourceThreadSub struct {
 	ID string `bson:"_id"`
 	U  struct {
@@ -30,7 +30,7 @@ type sourceThreadSub struct {
 	CreatedAt     time.Time  `bson:"createdAt"`
 }
 
-// handleThreadSub maps a tsmc_thread_subscriptions change event (§4.4 / §4.0): delete → skip;
+// handleThreadSub maps a company_thread_subscriptions change event (§4.4 / §4.0): delete → skip;
 // insert/replace/update → resolve the thread_room + user FKs, then publish thread_subscription_upserted.
 //
 //nolint:gocritic // ev passed by value to mirror handle's signature; off the hot path.

@@ -51,6 +51,11 @@ type MessageEvent struct {
 	// bson:"-" tag enforces the never-persisted contract — MessageEvent carries
 	// bson tags on its other fields, so an untagged field would round-trip.
 	QuotedParentUnverified bool `json:"quotedParentUnverified,omitempty" bson:"-"`
+	// ThreadParentSenderAccount is the thread parent's author, resolved best-effort
+	// by the gatekeeper (empty on soft-fail or edit/delete events). Envelope-only
+	// like QuotedParentUnverified; lets broadcast/notification workers skip their
+	// own parent fetch, falling back when absent.
+	ThreadParentSenderAccount string `json:"threadParentSenderAccount,omitempty" bson:"-"`
 }
 
 // ReactionAction is the toggle direction on ReactionDelta.Action; defined

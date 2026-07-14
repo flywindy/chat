@@ -9,14 +9,14 @@ import (
 )
 
 func TestMigrationOplog(t *testing.T) {
-	assert.Equal(t, "chat.oplog.site1.rocketchat_message.insert",
+	assert.Equal(t, "chat.migration.oplog.site1.rocketchat_message.insert",
 		subject.MigrationOplog("site1", "rocketchat_message", "insert"))
-	assert.Equal(t, "chat.oplog.site1.rocketchat_room.delete",
+	assert.Equal(t, "chat.migration.oplog.site1.rocketchat_room.delete",
 		subject.MigrationOplog("site1", "rocketchat_room", "delete"))
 }
 
 func TestMigrationOplogWildcard(t *testing.T) {
-	assert.Equal(t, "chat.oplog.site1.>", subject.MigrationOplogWildcard("site1"))
+	assert.Equal(t, "chat.migration.oplog.site1.>", subject.MigrationOplogWildcard("site1"))
 }
 
 func TestMigrationInternalSubjects(t *testing.T) {

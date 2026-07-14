@@ -125,4 +125,10 @@ func TestAppEnsureIndexes_Integration(t *testing.T) {
 
 	names := indexNames(t, appRepo.apps.Raw())
 	require.Contains(t, names, "assistant_name_idx")
+
+	// The compound {name,_id} index backs the apps.categories {name:1,_id:1}
+	// sort — the sort keys must be a full index prefix for Mongo to use it.
+	catKeys := indexKeySpecs(t, appRepo.categories.Raw())
+	require.Contains(t, catKeys, "name:1,_id:1")
+	require.Contains(t, indexNames(t, appRepo.categories.Raw()), "fab_domain_name_id_idx")
 }

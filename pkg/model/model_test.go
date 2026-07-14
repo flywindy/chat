@@ -124,6 +124,13 @@ func TestUserJSON_WithStatus(t *testing.T) {
 	roundTrip(t, &u, &model.User{})
 }
 
+func TestUser_DeactivatedRoundTrip(t *testing.T) {
+	u := model.User{ID: "u1", Account: "alice", SiteID: "site-local", Deactivated: true}
+	got := &model.User{}
+	roundTrip(t, &u, got)
+	assert.True(t, got.Deactivated)
+}
+
 func TestRoomJSON(t *testing.T) {
 	lastMsg := time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
 	lastMention := time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
@@ -2236,6 +2243,61 @@ func TestMessageEvent_QuotedParentUnverified_JSON(t *testing.T) {
 	})
 }
 
+func TestMessageEvent_ThreadParentSenderAccount_JSON(t *testing.T) {
+	t.Run("account round-trips when set", func(t *testing.T) {
+		evt := model.MessageEvent{
+			Event:                     model.EventCreated,
+			Message:                   model.Message{ID: "m1", RoomID: "r1"},
+			SiteID:                    "site-a",
+			Timestamp:                 123,
+			ThreadParentSenderAccount: "alice",
+		}
+		data, err := json.Marshal(&evt)
+		require.NoError(t, err)
+
+		var raw map[string]any
+		require.NoError(t, json.Unmarshal(data, &raw))
+		assert.Equal(t, "alice", raw["threadParentSenderAccount"])
+
+		var dst model.MessageEvent
+		require.NoError(t, json.Unmarshal(data, &dst))
+		assert.Equal(t, "alice", dst.ThreadParentSenderAccount)
+	})
+
+	t.Run("omitted when empty", func(t *testing.T) {
+		evt := model.MessageEvent{
+			Event:     model.EventCreated,
+			Message:   model.Message{ID: "m1", RoomID: "r1"},
+			SiteID:    "site-a",
+			Timestamp: 123,
+		}
+		data, err := json.Marshal(&evt)
+		require.NoError(t, err)
+		var raw map[string]any
+		require.NoError(t, json.Unmarshal(data, &raw))
+		_, present := raw["threadParentSenderAccount"]
+		assert.False(t, present, "threadParentSenderAccount should be omitted when empty")
+	})
+
+	t.Run("never persisted to BSON (envelope-only)", func(t *testing.T) {
+		evt := model.MessageEvent{
+			Event:                     model.EventCreated,
+			Message:                   model.Message{ID: "m1", RoomID: "r1"},
+			SiteID:                    "site-a",
+			Timestamp:                 123,
+			ThreadParentSenderAccount: "alice",
+		}
+		data, err := bson.Marshal(&evt)
+		require.NoError(t, err)
+		var raw bson.M
+		require.NoError(t, bson.Unmarshal(data, &raw))
+		_, present := raw["threadParentSenderAccount"]
+		assert.False(t, present, "threadParentSenderAccount must be excluded from BSON (bson:\"-\")")
+		_, present = raw["threadparentsenderaccount"]
+		assert.False(t, present, "ThreadParentSenderAccount must not be BSON-encoded under the default (lowercase) field name")
+	})
+}
+
 func TestMessage_QuotedParentMessage_JSON(t *testing.T) {
 	parentTS := time.Date(2026, 1, 1, 11, 0, 0, 0, time.UTC)
 	threadParentTS := time.Date(2026, 1, 1, 8, 0, 0, 0, time.UTC)
@@ -3259,7 +3321,7 @@ func TestCustomEmojiRoundtrip(t *testing.T) {
 		ID:          "site-a:acme_party",
 		SiteID:      "site-a",
 		Shortcode:   "acme_party",
-		ImageURL:    "/api/v1/emoji/acme_party?siteid=site-a",
+		ImageURL:    "/api/v1/emoji/acme_party",
 		CreatedBy:   "alice",
 		CreatedAt:   1747800000000,
 		UpdatedBy:   "bob",
@@ -3280,7 +3342,7 @@ func TestCustomEmojiBSON(t *testing.T) {
 		ID:          "site-a:acme_party",
 		SiteID:      "site-a",
 		Shortcode:   "acme_party",
-		ImageURL:    "/api/v1/emoji/acme_party?siteid=site-a",
+		ImageURL:    "/api/v1/emoji/acme_party",
 		CreatedBy:   "alice",
 		CreatedAt:   1747800000000,
 		UpdatedBy:   "bob",
@@ -3300,13 +3362,24 @@ func TestCustomEmojiBSON(t *testing.T) {
 func TestEmojiListResponseRoundtrip(t *testing.T) {
 	src := model.EmojiListResponse{Emojis: []model.EmojiEntry{{
 		Shortcode:   "acme_party",
-		ImageURL:    "/api/v1/emoji/acme_party?siteid=site-a",
+		ImageURL:    "/api/v1/emoji/acme_party",
 		ContentType: "image/png",
 		ETag:        "abc123",
-		CreatedBy:   "alice",
-		UpdatedAt:   1747900000000,
+		UpdatedAt:   time.Date(2026, 5, 22, 8, 26, 40, 0, time.UTC),
 	}}}
 	roundTrip(t, &src, &model.EmojiListResponse{})
+
+	t.Run("updatedAt serializes as RFC3339 string", func(t *testing.T) {
+		data, err := json.Marshal(&src)
+		require.NoError(t, err)
+		var raw struct {
+			Emojis []map[string]any `json:"emojis"`
+		}
+		require.NoError(t, json.Unmarshal(data, &raw))
+		require.Len(t, raw.Emojis, 1)
+		assert.Equal(t, "2026-05-22T08:26:40Z", raw.Emojis[0]["updatedAt"],
+			"updatedAt must be RFC3339, not epoch millis")
+	})
 }
 
 func TestEmojiDeleteRequestRoundtrip(t *testing.T) {

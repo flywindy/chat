@@ -103,12 +103,13 @@ func (s *threadStoreMongo) UpsertThreadSubscription(ctx context.Context, sub *mo
 	return nil
 }
 
-// MarkThreadSubscriptionMention sets hasMention=true on the (threadRoomId, userAccount)
-// subscription. $setOnInsert / $set split: on insert all fields are written; on update
-// only hasMention and updatedAt change so existing subscription state is preserved.
+// MarkThreadSubscriptionMention sets hasMention=true, skipping subs that already
+// read past sub.CreatedAt (else this async write clobbers a read-clear, #467).
+// New subs go via $setOnInsert on the upsert; existing ones get a separate
+// guarded, non-upsert update, so an already-read sub can't be upserted twice.
 func (s *threadStoreMongo) MarkThreadSubscriptionMention(ctx context.Context, sub *model.ThreadSubscription) error {
 	filter := bson.M{"threadRoomId": sub.ThreadRoomID, "userAccount": sub.UserAccount}
-	update := bson.M{
+	upsert := bson.M{
 		"$setOnInsert": bson.M{
 			"_id":             sub.ID,
 			"parentMessageId": sub.ParentMessageID,
@@ -118,15 +119,25 @@ func (s *threadStoreMongo) MarkThreadSubscriptionMention(ctx context.Context, su
 			"userAccount":     sub.UserAccount,
 			"siteId":          sub.SiteID,
 			"lastSeenAt":      sub.LastSeenAt,
+			"hasMention":      true,
 			"createdAt":       sub.CreatedAt,
-		},
-		"$set": bson.M{
-			"hasMention": true,
-			"updatedAt":  sub.UpdatedAt,
+			"updatedAt":       sub.UpdatedAt,
 		},
 	}
-	if _, err := s.threadSubscriptions.UpdateOne(ctx, filter, update, options.UpdateOne().SetUpsert(true)); err != nil {
+	if _, err := s.threadSubscriptions.UpdateOne(ctx, filter, upsert, options.UpdateOne().SetUpsert(true)); err != nil {
 		return fmt.Errorf("mark thread subscription mention: %w", err)
+	}
+
+	guardedFilter := bson.M{
+		"threadRoomId": sub.ThreadRoomID,
+		"userAccount":  sub.UserAccount,
+		// $not/$gte (not $lt): $lt is type-bracketed and won't match a null
+		// lastSeenAt (never-read sub), which must still be flagged.
+		"lastSeenAt": bson.M{"$not": bson.M{"$gte": sub.CreatedAt}},
+	}
+	guardedSet := bson.M{"$set": bson.M{"hasMention": true, "updatedAt": sub.UpdatedAt}}
+	if _, err := s.threadSubscriptions.UpdateOne(ctx, guardedFilter, guardedSet); err != nil {
+		return fmt.Errorf("mark thread subscription mention (existing): %w", err)
 	}
 	return nil
 }

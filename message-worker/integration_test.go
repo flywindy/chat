@@ -995,6 +995,53 @@ func TestThreadStoreMongo_MarkThreadSubscriptionMention(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, int64(1), count, "second upsert must not create a second row")
 	})
+
+	t.Run("does not resurrect hasMention on an already-read subscription (#467)", func(t *testing.T) {
+		readAt := now.Add(time.Minute) // read after the sub was created, before the mention lands
+		original := &model.ThreadSubscription{
+			ID:              "ts-read",
+			ParentMessageID: "msg-parent-mk-4",
+			RoomID:          "r-1",
+			ThreadRoomID:    "tr-mk-4",
+			UserID:          "u-mk-read",
+			UserAccount:     "dave",
+			SiteID:          "site-a",
+			LastSeenAt:      &readAt,
+			HasMention:      false,
+			CreatedAt:       now,
+			UpdatedAt:       now,
+		}
+		require.NoError(t, store.InsertThreadSubscription(ctx, original))
+
+		mention := &model.ThreadSubscription{
+			ID:              "ts-read-mention",
+			ParentMessageID: "msg-parent-mk-4",
+			RoomID:          "r-1",
+			ThreadRoomID:    "tr-mk-4",
+			UserID:          "u-mk-read",
+			UserAccount:     "dave",
+			SiteID:          "site-a",
+			HasMention:      true,
+			CreatedAt:       now, // the mentioning message predates the read
+			UpdatedAt:       now,
+		}
+		require.NoError(t, store.MarkThreadSubscriptionMention(ctx, mention))
+
+		var got model.ThreadSubscription
+		err := db.Collection("thread_subscriptions").FindOne(ctx, bson.M{
+			"threadRoomId": "tr-mk-4",
+			"userAccount":  "dave",
+		}).Decode(&got)
+		require.NoError(t, err)
+		assert.False(t, got.HasMention, "already-read subscription must not be re-flagged")
+
+		count, err := db.Collection("thread_subscriptions").CountDocuments(ctx, bson.M{
+			"threadRoomId": "tr-mk-4",
+			"userAccount":  "dave",
+		})
+		require.NoError(t, err)
+		assert.Equal(t, int64(1), count, "guarded update must not upsert a duplicate")
+	})
 }
 
 func TestThreadStoreMongo_UpdateThreadRoomLastMessage(t *testing.T) {

@@ -155,16 +155,19 @@ func TestHandler_ProcessMessage(t *testing.T) {
 			wantNoPublish: true,
 		},
 		{
-			// The gatekeeper no longer carries the parent createdAt; a client value, if
-			// still sent, is an ignored unknown JSON field (consumers re-resolve it).
-			name:    "thread reply does not carry parent timestamp on canonical event",
+			// A client-sent threadParentMessageCreatedAt is an ignored unknown JSON
+			// field (SendMessageRequest has no such field); the gatekeeper stamps its
+			// OWN server-resolved value on the canonical event.
+			name:    "client-sent parent timestamp ignored; server-resolved value stamped",
 			account: validAccount,
 			roomID:  validRoomID,
 			siteID:  validSiteID,
 			buildData: func() []byte {
+				// Deliberately send a bogus client timestamp distinct from the
+				// server-resolved parentTS below.
 				return []byte(fmt.Sprintf(
 					`{"id":%q,"content":%q,"requestId":%q,"threadParentMessageId":%q,"threadParentMessageCreatedAt":%d}`,
-					validID, validContent, validRequestID, threadParentID, parentTS.UnixMilli(),
+					validID, validContent, validRequestID, threadParentID, parentTS.Add(48*time.Hour).UnixMilli(),
 				))
 			},
 			setupStore: func(s *MockStore) {
@@ -172,7 +175,11 @@ func TestHandler_ProcessMessage(t *testing.T) {
 					GetSubscription(gomock.Any(), validAccount, validRoomID).
 					Return(sub, nil)
 			},
-			// no setupFetcher — gomock fails the test if FetchQuotedParent is called.
+			setupFetcher: func(f *MockParentMessageFetcher) {
+				f.EXPECT().
+					FetchQuotedParent(gomock.Any(), validAccount, validRoomID, validSiteID, threadParentID).
+					Return(&cassandra.QuotedParentMessage{MessageID: threadParentID, CreatedAt: parentTS}, nil)
+			},
 			setupPub: func() (publishFunc, *[]publishedMsg) {
 				var published []publishedMsg
 				return makePublishFunc(&published, nil), &published
@@ -183,19 +190,21 @@ func TestHandler_ProcessMessage(t *testing.T) {
 				var msg model.Message
 				require.NoError(t, json.Unmarshal(data, &msg))
 				require.Equal(t, threadParentID, msg.ThreadParentMessageID)
-				assert.Nil(t, msg.ThreadParentMessageCreatedAt, "gatekeeper no longer stamps the parent createdAt")
+				require.NotNil(t, msg.ThreadParentMessageCreatedAt)
+				assert.True(t, msg.ThreadParentMessageCreatedAt.Equal(parentTS), "server-resolved value wins over any client-sent value")
 
 				require.Len(t, published, 1)
 				var evt model.MessageEvent
 				require.NoError(t, json.Unmarshal(published[0].data, &evt))
-				assert.Nil(t, evt.Message.ThreadParentMessageCreatedAt)
+				require.NotNil(t, evt.Message.ThreadParentMessageCreatedAt)
+				assert.True(t, evt.Message.ThreadParentMessageCreatedAt.Equal(parentTS))
 				assert.Greater(t, evt.Timestamp, int64(0))
 			},
 		},
 		{
-			// A thread reply with no parent timestamp is now valid — the gatekeeper dropped
-			// the required-field check; downstream re-resolution owns the authoritative value.
-			name:    "thread reply without parent timestamp — accepted",
+			// Resolution is best-effort: a parent-fetch outage ships the reply
+			// without the value (downstream workers fall back to their own stores).
+			name:    "thread reply with parent-fetch outage — accepted without timestamp",
 			account: validAccount,
 			roomID:  validRoomID,
 			siteID:  validSiteID,
@@ -213,6 +222,11 @@ func TestHandler_ProcessMessage(t *testing.T) {
 				s.EXPECT().
 					GetSubscription(gomock.Any(), validAccount, validRoomID).
 					Return(sub, nil)
+			},
+			setupFetcher: func(f *MockParentMessageFetcher) {
+				f.EXPECT().
+					FetchQuotedParent(gomock.Any(), validAccount, validRoomID, validSiteID, threadParentID).
+					Return(nil, errcode.Unavailable("history down"))
 			},
 			setupPub: func() (publishFunc, *[]publishedMsg) {
 				var published []publishedMsg
@@ -599,7 +613,13 @@ func TestHandler_ProcessMessage(t *testing.T) {
 					}, nil)
 				// No GetRoom expectation: thread replies must skip the fetch entirely.
 			},
-			// no setupFetcher — thread replies no longer trigger a history read.
+			setupFetcher: func(f *MockParentMessageFetcher) {
+				// The room-meta fast-path is unaffected by the (best-effort)
+				// thread-parent createdAt resolution, which still runs.
+				f.EXPECT().
+					FetchQuotedParent(gomock.Any(), validAccount, validRoomID, validSiteID, threadParentID).
+					Return(&cassandra.QuotedParentMessage{MessageID: threadParentID, CreatedAt: parentTS}, nil)
+			},
 			setupPub: func() (publishFunc, *[]publishedMsg) {
 				var published []publishedMsg
 				return makePublishFunc(&published, nil), &published
@@ -1088,7 +1108,11 @@ func TestHandler_ProcessMessage_WithQuote(t *testing.T) {
 				f.EXPECT().
 					FetchQuotedParent(gomock.Any(), validAccount, validRoomID, validSiteID, parentMessageID).
 					Return(inThreadSnapshot, nil)
-				// no second fetch — thread parent createdAt is re-resolved downstream.
+				// Second fetch: the quoted message is NOT the thread parent, so the
+				// parent's createdAt is resolved separately (best-effort).
+				f.EXPECT().
+					FetchQuotedParent(gomock.Any(), validAccount, validRoomID, validSiteID, threadID).
+					Return(&cassandra.QuotedParentMessage{MessageID: threadID, CreatedAt: threadParentTS}, nil)
 			},
 			setupPub: func() (publishFunc, *[]publishedMsg) {
 				var published []publishedMsg
@@ -1096,7 +1120,8 @@ func TestHandler_ProcessMessage_WithQuote(t *testing.T) {
 			},
 			assertMessage: func(t *testing.T, msg model.Message) {
 				assert.Equal(t, threadID, msg.ThreadParentMessageID)
-				assert.Nil(t, msg.ThreadParentMessageCreatedAt)
+				require.NotNil(t, msg.ThreadParentMessageCreatedAt)
+				assert.True(t, msg.ThreadParentMessageCreatedAt.Equal(threadParentTS))
 				require.NotNil(t, msg.QuotedParentMessage)
 				assert.Equal(t, parentMessageID, msg.QuotedParentMessage.MessageID)
 				assert.Equal(t, threadID, msg.QuotedParentMessage.ThreadParentID)
@@ -1104,7 +1129,8 @@ func TestHandler_ProcessMessage_WithQuote(t *testing.T) {
 		},
 		{
 			// #336: quoting the thread-starter (quotedParentMessageId == threadParentMessageId).
-			// One fetch (the quote is the thread root); createdAt re-resolved downstream.
+			// One fetch — the verified quote snapshot doubles as the thread parent, so
+			// its CreatedAt is reused for ThreadParentMessageCreatedAt.
 			name: "thread T msg quoting its own thread root (P==P) — snapshot embedded",
 			buildData: func() []byte {
 				return []byte(fmt.Sprintf(
@@ -1135,7 +1161,8 @@ func TestHandler_ProcessMessage_WithQuote(t *testing.T) {
 			},
 			assertMessage: func(t *testing.T, msg model.Message) {
 				assert.Equal(t, threadID, msg.ThreadParentMessageID)
-				assert.Nil(t, msg.ThreadParentMessageCreatedAt)
+				require.NotNil(t, msg.ThreadParentMessageCreatedAt, "verified quote snapshot's CreatedAt must be reused")
+				assert.True(t, msg.ThreadParentMessageCreatedAt.Equal(threadParentTS))
 				require.NotNil(t, msg.QuotedParentMessage)
 				assert.Equal(t, threadID, msg.QuotedParentMessage.MessageID)
 				assert.Equal(t, "the thread-starting message", msg.QuotedParentMessage.Msg)
@@ -1270,8 +1297,10 @@ func TestHandler_ProcessMessage_WithQuote(t *testing.T) {
 		},
 		{
 			// Thread reply quoting its own parent during a transient outage: the quote
-			// degrades, send succeeds — one fetch, no second thread-parent fetch, no NAK.
-			name: "thread reply quoting own parent, transient fetch — degrades, single fetch, no NAK",
+			// degrades to the unverified placeholder, so the parent createdAt cannot be
+			// reused from it — a second best-effort fetch runs and also fails. Send
+			// still succeeds without the value; no NAK.
+			name: "thread reply quoting own parent, transient fetch — degrades, no NAK",
 			buildData: func() []byte {
 				return []byte(fmt.Sprintf(
 					`{"id":%q,"content":%q,"requestId":%q,"threadParentMessageId":%q,"quotedParentMessageId":%q}`,
@@ -1282,12 +1311,13 @@ func TestHandler_ProcessMessage_WithQuote(t *testing.T) {
 				s.EXPECT().GetSubscription(gomock.Any(), validAccount, validRoomID).Return(sub, nil)
 			},
 			setupFetcher: func(f *MockParentMessageFetcher) {
-				// Exactly one quote-resolution fetch; it degrades to a placeholder on
-				// the outage. No separate thread-parent createdAt fetch is made.
+				// Two fetches: the quote resolution (degrades to a placeholder) and
+				// the best-effort thread-parent createdAt resolution (soft-fails —
+				// the unverified placeholder's synthetic CreatedAt must not be reused).
 				f.EXPECT().
 					FetchQuotedParent(gomock.Any(), validAccount, validRoomID, validSiteID, threadID).
 					Return(nil, errcode.Internal("history down")).
-					Times(1)
+					Times(2)
 			},
 			setupPub: func() (publishFunc, *[]publishedMsg) {
 				var published []publishedMsg
@@ -1985,4 +2015,163 @@ func TestHandler_processMessage_ConfigurableAttachmentCap(t *testing.T) {
 	var evt model.MessageEvent
 	require.NoError(t, json.Unmarshal(published[0].data, &evt))
 	require.Len(t, evt.Message.Attachments, 2)
+}
+
+// threadReplyHarness builds a Handler + mocks for a plain thread-reply send
+// (no quote). The store expects one successful subscription lookup; the
+// fetcher carries no default expectations, so any unplanned fetch fails.
+func threadReplyHarness(t *testing.T) (*Handler, *MockStore, *MockParentMessageFetcher, *[]publishedMsg) {
+	t.Helper()
+	ctrl := gomock.NewController(t)
+	store := NewMockStore(ctrl)
+	store.EXPECT().
+		GetSubscription(gomock.Any(), "alice", "room-1").
+		Return(&model.Subscription{
+			User:   model.SubscriptionUser{ID: "u1", Account: "alice"},
+			RoomID: "room-1",
+			Roles:  []model.Role{model.RoleMember},
+		}, nil)
+	fetcher := NewMockParentMessageFetcher(ctrl)
+	var published []publishedMsg
+	h := &Handler{
+		store:              store,
+		publish:            makePublishFunc(&published, nil),
+		siteID:             "site-a",
+		parentFetcher:      fetcher,
+		largeRoomThreshold: 500,
+	}
+	return h, store, fetcher, &published
+}
+
+func TestHandler_processMessage_ThreadParentCreatedAt_ResolvedViaFetch(t *testing.T) {
+	h, _, fetcher, published := threadReplyHarness(t)
+	parentID := idgen.GenerateMessageID()
+	parentCreatedAt := time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
+	fetcher.EXPECT().
+		FetchQuotedParent(gomock.Any(), "alice", "room-1", "site-a", parentID).
+		Return(&cassandra.QuotedParentMessage{MessageID: parentID, CreatedAt: parentCreatedAt, Sender: cassandra.Participant{Account: "bob"}}, nil)
+
+	req := model.SendMessageRequest{
+		ID:                    idgen.GenerateMessageID(),
+		Content:               "reply",
+		RequestID:             "01970a4f-8c2d-7c9a-abcd-e0123456789f",
+		ThreadParentMessageID: parentID,
+	}
+	data, err := h.processMessage(context.Background(), "alice", "room-1", "site-a", &req)
+	require.NoError(t, err)
+
+	var msg model.Message
+	require.NoError(t, json.Unmarshal(data, &msg))
+	require.NotNil(t, msg.ThreadParentMessageCreatedAt, "resolved createdAt must ride the reply")
+	assert.True(t, msg.ThreadParentMessageCreatedAt.Equal(parentCreatedAt))
+
+	require.Len(t, *published, 1)
+	var evt model.MessageEvent
+	require.NoError(t, json.Unmarshal((*published)[0].data, &evt))
+	require.NotNil(t, evt.Message.ThreadParentMessageCreatedAt, "resolved createdAt must ride the canonical event")
+	assert.True(t, evt.Message.ThreadParentMessageCreatedAt.Equal(parentCreatedAt))
+	assert.Equal(t, "bob", evt.ThreadParentSenderAccount, "resolved parent sender account must ride the canonical event")
+}
+
+func TestHandler_processMessage_ThreadParentCreatedAt_FetchFails_StillPublishes(t *testing.T) {
+	h, _, fetcher, published := threadReplyHarness(t)
+	parentID := idgen.GenerateMessageID()
+	fetcher.EXPECT().
+		FetchQuotedParent(gomock.Any(), "alice", "room-1", "site-a", parentID).
+		Return(nil, errors.New("history unavailable"))
+
+	req := model.SendMessageRequest{
+		ID:                    idgen.GenerateMessageID(),
+		Content:               "reply",
+		RequestID:             "01970a4f-8c2d-7c9a-abcd-e0123456789f",
+		ThreadParentMessageID: parentID,
+	}
+	data, err := h.processMessage(context.Background(), "alice", "room-1", "site-a", &req)
+	require.NoError(t, err, "fetch failure must NOT block the send (soft-fail)")
+
+	var msg model.Message
+	require.NoError(t, json.Unmarshal(data, &msg))
+	assert.Nil(t, msg.ThreadParentMessageCreatedAt, "unresolved value ships as nil")
+
+	require.Len(t, *published, 1, "canonical event must still be published")
+	var evt model.MessageEvent
+	require.NoError(t, json.Unmarshal((*published)[0].data, &evt))
+	assert.Nil(t, evt.Message.ThreadParentMessageCreatedAt)
+	assert.Empty(t, evt.ThreadParentSenderAccount, "soft-fail ships without the parent sender account")
+}
+
+func TestHandler_processMessage_ThreadParentCreatedAt_NilSnapshot_StillPublishes(t *testing.T) {
+	h, _, fetcher, published := threadReplyHarness(t)
+	parentID := idgen.GenerateMessageID()
+	fetcher.EXPECT().
+		FetchQuotedParent(gomock.Any(), "alice", "room-1", "site-a", parentID).
+		Return(nil, nil) // contract violation: nil snapshot, nil error
+
+	req := model.SendMessageRequest{
+		ID:                    idgen.GenerateMessageID(),
+		Content:               "reply",
+		RequestID:             "01970a4f-8c2d-7c9a-abcd-e0123456789f",
+		ThreadParentMessageID: parentID,
+	}
+	_, err := h.processMessage(context.Background(), "alice", "room-1", "site-a", &req)
+	require.NoError(t, err)
+	require.Len(t, *published, 1)
+	var evt model.MessageEvent
+	require.NoError(t, json.Unmarshal((*published)[0].data, &evt))
+	assert.Nil(t, evt.Message.ThreadParentMessageCreatedAt)
+	assert.Empty(t, evt.ThreadParentSenderAccount, "nil snapshot ships without the parent sender account")
+}
+
+func TestHandler_processMessage_ThreadParentCreatedAt_ReusesVerifiedQuoteSnapshot(t *testing.T) {
+	h, _, fetcher, published := threadReplyHarness(t)
+	parentID := idgen.GenerateMessageID()
+	parentCreatedAt := time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
+	// Quoting the thread parent itself: ONE fetch serves both the quote snapshot
+	// and the parent createdAt (thread-root quote: parent is a main-room message,
+	// so ThreadParentID is empty and the same-conversation rule passes).
+	fetcher.EXPECT().
+		FetchQuotedParent(gomock.Any(), "alice", "room-1", "site-a", parentID).
+		Return(&cassandra.QuotedParentMessage{
+			MessageID: parentID,
+			RoomID:    "room-1",
+			CreatedAt: parentCreatedAt,
+			Sender:    cassandra.Participant{Account: "bob"},
+			Msg:       "the parent",
+		}, nil).
+		Times(1)
+
+	req := model.SendMessageRequest{
+		ID:                    idgen.GenerateMessageID(),
+		Content:               "reply quoting the parent",
+		RequestID:             "01970a4f-8c2d-7c9a-abcd-e0123456789f",
+		ThreadParentMessageID: parentID,
+		QuotedParentMessageID: parentID,
+	}
+	_, err := h.processMessage(context.Background(), "alice", "room-1", "site-a", &req)
+	require.NoError(t, err)
+	require.Len(t, *published, 1)
+	var evt model.MessageEvent
+	require.NoError(t, json.Unmarshal((*published)[0].data, &evt))
+	require.NotNil(t, evt.Message.ThreadParentMessageCreatedAt)
+	assert.True(t, evt.Message.ThreadParentMessageCreatedAt.Equal(parentCreatedAt))
+	assert.Equal(t, "bob", evt.ThreadParentSenderAccount, "verified quote snapshot's Sender account must be reused")
+}
+
+func TestHandler_processMessage_NonThreadMessage_NoParentFetch(t *testing.T) {
+	// The fetcher has no expectations, so any FetchQuotedParent call fails the
+	// test. Non-thread sends also hit the large-room gate → expect the room-meta
+	// lookup.
+	h, store, _, published := threadReplyHarness(t)
+	store.EXPECT().
+		GetRoomMeta(gomock.Any(), "room-1").
+		Return(roommetacache.Meta{ID: "room-1", UserCount: 1}, nil)
+
+	req := model.SendMessageRequest{
+		ID:        idgen.GenerateMessageID(),
+		Content:   "plain message",
+		RequestID: "01970a4f-8c2d-7c9a-abcd-e0123456789f",
+	}
+	_, err := h.processMessage(context.Background(), "alice", "room-1", "site-a", &req)
+	require.NoError(t, err)
+	require.Len(t, *published, 1)
 }

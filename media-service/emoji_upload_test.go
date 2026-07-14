@@ -43,7 +43,7 @@ func TestEmojiUpload_Success_StoresBlobThenUpsertsDoc(t *testing.T) {
 		assert.Equal(t, "s1:party", e.ID)
 		assert.Equal(t, "s1", e.SiteID)
 		assert.Equal(t, "party", e.Shortcode)
-		assert.Equal(t, "/api/v1/emoji/party?siteid=s1", e.ImageURL)
+		assert.Equal(t, "/api/v1/emoji/party", e.ImageURL)
 		assert.Equal(t, "emoji/s1/party", e.MinioKey)
 		assert.Equal(t, "image/png", e.ContentType)
 		assert.Equal(t, "alice", e.CreatedBy)
@@ -60,6 +60,7 @@ func TestEmojiUpload_Success_StoresBlobThenUpsertsDoc(t *testing.T) {
 	assert.Contains(t, body, `"shortcode":"party"`)
 	assert.Contains(t, body, `"etag":"etag-emoji/s1/party"`)
 	assert.Contains(t, body, `"contentType":"image/png"`)
+	assert.Regexp(t, `"updatedAt":"\d{4}-\d{2}-\d{2}T`, body, "updatedAt must be RFC3339, not epoch millis")
 	_, ok := blobs.objects["emoji/s1/party"]
 	assert.True(t, ok, "object stored before the doc")
 }

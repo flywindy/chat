@@ -35,12 +35,21 @@ type PresenceReader interface {
 // maxPresenceIDs is Graph's documented per-request cap for getPresencesByUserId.
 const maxPresenceIDs = 650
 
+// defaultUserAgent is sent on presence requests when Config.UserAgent is empty.
+// Microsoft Graph rejects requests without a User-Agent header, and a fronting
+// corporate proxy/WAF commonly rejects non-browser agents; a desktop-browser
+// string is the value most likely to pass both. Override per-environment via
+// Config.UserAgent (GRAPH_USER_AGENT) since a pinned browser version ages.
+const defaultUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
+	"AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36"
+
 type presenceClient struct {
-	cfg      Config
-	creds    ROPCCredentials
-	hc       *http.Client
-	baseURL  string
-	tokenURL string
+	cfg       Config
+	creds     ROPCCredentials
+	hc        *http.Client
+	baseURL   string
+	tokenURL  string
+	userAgent string
 
 	mu      sync.Mutex
 	token   string
@@ -49,12 +58,41 @@ type presenceClient struct {
 
 // NewPresenceClient builds an ROPC-backed presence reader. It reuses the
 // app-only client's options (WithHTTPClient/WithBaseURL/WithTokenURL) by
-// constructing a throwaway graphClient to resolve them.
-func NewPresenceClient(cfg Config, creds ROPCCredentials, opts ...Option) PresenceReader {
+// constructing a throwaway graphClient to resolve them. When cfg.ProxyURL is
+// set, the presence client's transport is pointed at that proxy (overriding
+// HTTPS_PROXY); an invalid ProxyURL is reported at construction so it fails
+// fast rather than surfacing as an opaque per-request error.
+//
+//nolint:gocritic // hugeParam: startup-only constructor; Config passed by value is intentional.
+func NewPresenceClient(cfg Config, creds ROPCCredentials, opts ...Option) (PresenceReader, error) {
 	g := New(cfg, opts...).(*graphClient)
-	return &presenceClient{
-		cfg: cfg, creds: creds, hc: g.httpClient, baseURL: g.baseURL, tokenURL: g.tokenURL,
+	hc := g.httpClient
+	if cfg.ProxyURL != "" {
+		proxyURL, err := url.Parse(cfg.ProxyURL)
+		if err != nil {
+			return nil, fmt.Errorf("parse graph proxy url: %w", err)
+		}
+		if proxyURL.Scheme == "" || proxyURL.Host == "" {
+			// Redacted() masks any embedded proxy credentials before it reaches logs.
+			return nil, fmt.Errorf("invalid graph proxy url %q: scheme and host are required", proxyURL.Redacted())
+		}
+		// Reuse the throwaway client's transport when it is already a concrete
+		// *http.Transport (preserving TLSInsecureSkipVerify settings); otherwise
+		// clone the default transport so proxy/dial defaults survive.
+		tr, ok := hc.Transport.(*http.Transport)
+		if !ok || tr == nil {
+			tr = http.DefaultTransport.(*http.Transport).Clone()
+		}
+		tr.Proxy = http.ProxyURL(proxyURL)
+		hc.Transport = tr
 	}
+	ua := cfg.UserAgent
+	if ua == "" {
+		ua = defaultUserAgent
+	}
+	return &presenceClient{
+		cfg: cfg, creds: creds, hc: hc, baseURL: g.baseURL, tokenURL: g.tokenURL, userAgent: ua,
+	}, nil
 }
 
 // accessToken returns a cached delegated bearer token, fetching a fresh one via
@@ -78,6 +116,7 @@ func (p *presenceClient) accessToken(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("build ropc token request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("User-Agent", p.userAgent)
 	resp, err := p.hc.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("request ropc token: %w", err)
@@ -143,6 +182,7 @@ func (p *presenceClient) fetch(ctx context.Context, token string, ids []string) 
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", p.userAgent)
 	resp, err := p.hc.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("get presences: %w", err)

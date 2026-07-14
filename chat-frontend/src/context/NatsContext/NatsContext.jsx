@@ -1,7 +1,9 @@
 import { createContext, useContext, useRef, useState, useCallback, useEffect, useMemo } from 'react'
+import { SpanKind } from '@opentelemetry/api'
 import { connect as natsConnect, StringCodec, headers as natsHeaders } from 'nats.ws'
 import { createUser } from 'nkeys.js'
 import { PORTAL_URL } from '@/lib/runtimeConfig'
+import { injectTraceHeaders, natsSpanName, withLinkedSpan, withSpan } from '@/lib/telemetry'
 import { useDebug } from '@/context/DebugContext'
 import { useJwtRefresh } from './useJwtRefresh'
 import {
@@ -15,6 +17,22 @@ export const NatsContext = createContext(null)
 
 const sc = StringCodec()
 
+// Persisted bot/admin login bundle. sessionStorage (not localStorage) scopes it
+// to the tab lifetime so a reload auto-reconnects but closing the tab logs out.
+const BOT_SESSION_KEY = 'chat.botSession'
+
+function readStoredBotSession() {
+  try {
+    const raw = window.sessionStorage.getItem(BOT_SESSION_KEY)
+    return raw ? JSON.parse(raw) : null
+  } catch {
+    return null
+  }
+}
+function clearStoredBotSession() {
+  try { window.sessionStorage.removeItem(BOT_SESSION_KEY) } catch { /* storage unavailable */ }
+}
+
 // Both services emit the errcode envelope {code, reason?, error, metadata?}.
 // Legacy deployments may return {error} only — callers fall back to message.
 async function throwEnvelopeError(resp, fallbackMsg) {
@@ -23,6 +41,25 @@ async function throwEnvelopeError(resp, fallbackMsg) {
     errBody.error || `${fallbackMsg}: ${resp.status}`,
     ASYNC_JOB_ERROR_KINDS.SyncError,
     { code: errBody.code, reason: errBody.reason, metadata: errBody.metadata },
+  )
+}
+
+function tracedFetch(method, url, init = {}) {
+  const parsed = new URL(url)
+  return withSpan(
+    'http.client',
+    {
+      'http.request.method': method,
+      'server.address': parsed.hostname,
+      'server.port': parsed.port ? Number(parsed.port) : undefined,
+      'url.scheme': parsed.protocol.replace(':', ''),
+      'url.path': parsed.pathname,
+    },
+    async () => {
+      const headers = new Headers(init.headers ?? {})
+      injectTraceHeaders(headers)
+      return fetch(url, { ...init, method, headers })
+    },
   )
 }
 
@@ -63,7 +100,17 @@ export function NatsProvider({ children }) {
     return h
   }, [])
 
-  const { authenticator, setCredentials, stop } = useJwtRefresh({ getAuthUrl, ncRef })
+  // Terminal session-token failure: no IdP to bounce to, so tear the link down
+  // and clear the stash. App then renders the login form.
+  const onSessionLost = useCallback(() => {
+    clearStoredBotSession()
+    connectGenRef.current += 1
+    if (ncRef.current) { ncRef.current.drain().catch(() => {}); ncRef.current = null }
+    setConnected(false)
+    setUser(null)
+  }, [])
+
+  const { authenticator, setCredentials, stop } = useJwtRefresh({ getAuthUrl, ncRef, onSessionLost })
 
   /**
    * Resolve the user's home site via the portal lookup, authenticate
@@ -72,9 +119,12 @@ export function NatsProvider({ children }) {
    * any subsequent server-initiated close updates `error`.
    *
    * @param {Object} opts
-   * @param {'dev'|'sso'} opts.mode
+   * @param {'dev'|'sso'|'session'} opts.mode
    * @param {string} [opts.account]   Dev mode: account name to log in as.
    * @param {string} [opts.ssoToken]  Production mode: OIDC access token.
+   * @param {Object} [opts.bundle]    Session mode: bot/admin login bundle from
+   *   `botLogin` (skips the portal lookup — the bundle already carries the
+   *   home-site info).
    * @throws if the portal lookup or auth-service rejects, or the NATS
    *   handshake fails.
    */
@@ -82,18 +132,30 @@ export function NatsProvider({ children }) {
     const myGen = ++connectGenRef.current
     setError(null)
 
-    const { mode, account, ssoToken } = opts || {}
+    const { mode, account, ssoToken, bundle } = opts || {}
 
-    // 1) Site discovery: which auth-service, which NATS, which siteId. Discovery
-    // only — the portal validates no token; the account (derived from the SSO
-    // token's preferred_username in prod) is the lookup key. auth-service is the
-    // real gate that re-validates the token before minting the JWT.
-    const lookupResp = await fetch(`${PORTAL_URL}/api/userInfo?account=${encodeURIComponent(account ?? '')}`)
-    if (!lookupResp.ok) {
-      await throwEnvelopeError(lookupResp, 'Portal lookup failed')
+    // 1) Site discovery: which auth-service, which NATS, which siteId. The
+    // session (bot/admin) path already holds the home-site bundle from portal
+    // /api/v1/login, so it skips the /api/userInfo lookup. For sso/dev this is
+    // discovery only — the portal validates no token; auth-service is the real
+    // gate that re-validates the token before minting the JWT.
+    let portal
+    if (mode === 'session') {
+      portal = bundle
+    } else {
+      const lookupResp = await tracedFetch(
+        'GET',
+        `${PORTAL_URL}/api/userInfo?account=${encodeURIComponent(account ?? '')}`,
+      )
+      if (!lookupResp.ok) {
+        await throwEnvelopeError(lookupResp, 'Portal lookup failed')
+      }
+      portal = await lookupResp.json()
     }
-    const portal = await lookupResp.json()
-    const nextAuthUrl = portal.authServiceUrl
+    // baseUrl is the site's unified API gateway; auth lives at /api/v1/auth
+    // behind it. This backend consolidated the former separate authServiceUrl
+    // into that single baseUrl endpoint.
+    const nextAuthUrl = portal.baseUrl
 
     // 2) Mint the NATS JWT at the resolved site's auth-service.
     const nkey = createUser()
@@ -102,10 +164,11 @@ export function NatsProvider({ children }) {
     const body =
       mode === 'sso'
         ? { ssoToken, natsPublicKey }
-        : { account, natsPublicKey }
+        : mode === 'session'
+          ? { authToken: bundle.authToken, natsPublicKey }
+          : { account, natsPublicKey }
 
-    const authResp = await fetch(`${nextAuthUrl}/auth`, {
-      method: 'POST',
+    const authResp = await tracedFetch('POST', `${nextAuthUrl}/api/v1/auth`, {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     })
@@ -125,7 +188,8 @@ export function NatsProvider({ children }) {
         jwt: natsJwt,
         seed: nkey.getSeed(),
         natsPublicKey,
-        refreshable: mode === 'sso',
+        refreshable: mode === 'sso' || mode === 'session',
+        ...(mode === 'session' ? { mode: 'session', authToken: bundle.authToken } : {}),
       })
 
       // 3) Dial the resolved site's NATS.
@@ -138,6 +202,11 @@ export function NatsProvider({ children }) {
       ncRef.current = nc
       setUser({ ...userInfo, siteId: portal.siteId })
       setConnected(true)
+
+      // Persist the bot/admin bundle so a tab reload resumes the session.
+      if (mode === 'session') {
+        try { window.sessionStorage.setItem(BOT_SESSION_KEY, JSON.stringify(bundle)) } catch { /* storage unavailable */ }
+      }
 
       nc.closed().then((err) => {
         // A newer connect or a disconnect bumped the generation; this old
@@ -153,6 +222,20 @@ export function NatsProvider({ children }) {
       throw err
     }
   }, [authenticator, setCredentials, stop])
+
+  // On mount, resume a persisted bot/admin session (sessionStorage survives a
+  // tab reload). Best-effort: a failed resume clears the stash and falls back
+  // to the login form. Runs once; the ref survives a StrictMode double-invoke.
+  const didResumeRef = useRef(false)
+  useEffect(() => {
+    if (didResumeRef.current) return
+    didResumeRef.current = true
+    const stored = readStoredBotSession()
+    if (!stored) return
+    connectToNats({ mode: 'session', bundle: stored }).catch(() => {
+      clearStoredBotSession()
+    })
+  }, [connectToNats])
 
   /**
    * Send a synchronous NATS request/reply. Use this for handlers that
@@ -215,9 +298,20 @@ export function NatsProvider({ children }) {
    */
   const publish = useCallback((subject, data = {}) => {
     if (!ncRef.current) throw new Error('Not connected')
-    const payload = sc.encode(JSON.stringify(data))
-    const h = buildHeaders()
-    ncRef.current.publish(subject, payload, h ? { headers: h } : undefined)
+    return withSpan(
+      natsSpanName('publish', subject),
+      {
+        'messaging.system': 'nats',
+        'messaging.operation.name': 'publish',
+        'messaging.destination.name': subject,
+      },
+      () => {
+        const payload = sc.encode(JSON.stringify(data))
+        const h = buildHeaders() ?? natsHeaders()
+        injectTraceHeaders(h)
+        ncRef.current.publish(subject, payload, { headers: h })
+      },
+    )
   }, [buildHeaders])
 
   /**
@@ -237,12 +331,26 @@ export function NatsProvider({ children }) {
     const sub = ncRef.current.subscribe(subject)
     ;(async () => {
       for await (const msg of sub) {
-        try {
-          const data = JSON.parse(sc.decode(msg.data))
-          callback(data)
-        } catch {
-          // skip malformed messages
-        }
+        const msgSubject = msg.subject || subject
+        withLinkedSpan(
+          natsSpanName('receive', msgSubject),
+          {
+            'messaging.system': 'nats',
+            'messaging.operation.name': 'receive',
+            'messaging.destination.name': msgSubject,
+            'messaging.subscription.name': subject,
+          },
+          msg.headers,
+          () => {
+            try {
+              const data = JSON.parse(sc.decode(msg.data))
+              callback(data)
+            } catch {
+              // skip malformed messages
+            }
+          },
+          SpanKind.CONSUMER,
+        )
       }
     })()
     return sub
@@ -256,6 +364,7 @@ export function NatsProvider({ children }) {
   const disconnect = useCallback(async () => {
     // Invalidate any in-flight connect and the live link's closed() callback so
     // a late close can't resurrect error/connected state after we tore down.
+    clearStoredBotSession()
     connectGenRef.current += 1
     stop()
     if (ncRef.current) {

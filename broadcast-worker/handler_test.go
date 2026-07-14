@@ -243,7 +243,7 @@ func TestHandler_HandleMessage_ChannelRoom(t *testing.T) {
 			store.EXPECT().GetRoomMeta(gomock.Any(), "room-1").Return(metaOf(testChannelRoom), nil)
 
 			if tc.wantSetMentions != nil {
-				store.EXPECT().SetSubscriptionMentions(gomock.Any(), "room-1", gomock.InAnyOrder(tc.wantSetMentions)).Return(nil)
+				store.EXPECT().SetSubscriptionMentions(gomock.Any(), "room-1", gomock.InAnyOrder(tc.wantSetMentions), msgTime).Return(nil)
 			}
 
 			// Single user lookup: sender + mentions, deduped, sender first.
@@ -350,7 +350,7 @@ func TestHandler_HandleMessage_DMRoom(t *testing.T) {
 			store.EXPECT().ListSubscriptions(gomock.Any(), "dm-1").Return(testDMSubs, nil)
 
 			if tc.wantSetMentions {
-				store.EXPECT().SetSubscriptionMentions(gomock.Any(), "dm-1", gomock.InAnyOrder(tc.mentionedUsers)).Return(nil)
+				store.EXPECT().SetSubscriptionMentions(gomock.Any(), "dm-1", gomock.InAnyOrder(tc.mentionedUsers), msgTime).Return(nil)
 			}
 
 			// Single user lookup: sender first, then mentioned accounts.
@@ -457,7 +457,7 @@ func TestHandler_HandleMessage_Errors(t *testing.T) {
 		store.EXPECT().UpdateRoomLastMessage(gomock.Any(), "room-1", "msg-1", msgTime, false).Return(nil)
 		store.EXPECT().AdvanceSubscriptionLastSeen(gomock.Any(), "room-1", "sender", msgTime).Return(nil)
 		store.EXPECT().GetRoomMeta(gomock.Any(), "room-1").Return(metaOf(testChannelRoom), nil)
-		store.EXPECT().SetSubscriptionMentions(gomock.Any(), "room-1", gomock.Any()).Return(errors.New("db error"))
+		store.EXPECT().SetSubscriptionMentions(gomock.Any(), "room-1", gomock.Any(), gomock.Any()).Return(errors.New("db error"))
 
 		keyStore := NewMockRoomKeyProvider(ctrl)
 		h := NewHandler(store, us, pub, keyStore, defaultParentFetcher, true)
@@ -532,7 +532,7 @@ func TestHandler_HandleMessage_Errors(t *testing.T) {
 		store.EXPECT().UpdateRoomLastMessage(gomock.Any(), "room-1", "msg-1", msgTime, false).Return(nil)
 		store.EXPECT().AdvanceSubscriptionLastSeen(gomock.Any(), "room-1", "sender", msgTime).Return(nil)
 		store.EXPECT().GetRoomMeta(gomock.Any(), "room-1").Return(metaOf(testChannelRoom), nil)
-		store.EXPECT().SetSubscriptionMentions(gomock.Any(), "room-1", []string{"sender"}).Return(nil)
+		store.EXPECT().SetSubscriptionMentions(gomock.Any(), "room-1", []string{"sender"}, msgTime).Return(nil)
 		// Single lookup: sender is both the message author and the mentioned account, so the deduped list is just ["sender"].
 		us.EXPECT().FindUsersByAccounts(gomock.Any(), []string{"sender"}).Return([]model.User{senderUser}, nil)
 
@@ -1157,7 +1157,7 @@ func TestHandler_HandleMessage_ChannelEncryptionDisabled(t *testing.T) {
 			store.EXPECT().AdvanceSubscriptionLastSeen(gomock.Any(), "room-1", "sender", msgTime).Return(nil)
 			store.EXPECT().GetRoomMeta(gomock.Any(), "room-1").Return(metaOf(testChannelRoom), nil)
 			if tc.wantSetMentions != nil {
-				store.EXPECT().SetSubscriptionMentions(gomock.Any(), "room-1", gomock.InAnyOrder(tc.wantSetMentions)).Return(nil)
+				store.EXPECT().SetSubscriptionMentions(gomock.Any(), "room-1", gomock.InAnyOrder(tc.wantSetMentions), msgTime).Return(nil)
 			}
 
 			if tc.name == "plaintext individual mention" {
@@ -2315,6 +2315,115 @@ func TestHandleThreadCreated_ChannelExcludesRestrictedAndNonMemberMentions(t *te
 	assert.True(t, got[subject.UserRoomEvent("bob")], "unrestricted member mentionee receives the reply")
 	assert.False(t, got[subject.UserRoomEvent("carol")], "member who joined after the parent is excluded")
 	assert.False(t, got[subject.UserRoomEvent("dave")], "non-member mentionee is excluded")
+}
+
+// When the gatekeeper already resolved the parent, the event carries both the
+// parent createdAt and the parent sender account. broadcast-worker must use them
+// directly and skip the history-service FetchParent round-trip — while still
+// delivering to the parent author (race-free) and gating mentions by the event's
+// createdAt. The MockParentFetcher registers no EXPECT, so any FetchParent call
+// fails the test.
+func TestHandleThreadCreated_ChannelRoom_UsesEventParent_SkipsFetch(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	store := NewMockStore(ctrl)
+	us := NewMockUserStore(ctrl)
+	pub := &mockPublisher{}
+	keyStore := NewMockRoomKeyProvider(ctrl)
+	parentFetcher := NewMockParentFetcher(ctrl) // no EXPECT → FetchParent must NOT be called
+
+	parentAt := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	joinedAfter := parentAt.Add(time.Hour)
+	msgTime := parentAt.Add(2 * time.Hour)
+
+	// bob: unrestricted member → included. carol: joined after the parent → excluded
+	// (proves the gate ran against the event-carried createdAt, not a fetched value).
+	store.EXPECT().GetRoomMeta(gomock.Any(), "room-1").Return(metaOf(testChannelRoom), nil)
+	store.EXPECT().GetHistorySharedSince(gomock.Any(), "room-1", gomock.Any()).
+		Return(map[string]*time.Time{"bob": nil, "carol": &joinedAfter}, nil)
+	store.EXPECT().GetThreadFollowers(gomock.Any(), "parent-1").Return(map[string]struct{}{}, nil)
+	us.EXPECT().FindUsersByAccounts(gomock.Any(), gomock.Any()).Return(testUsers, nil)
+
+	evt := model.MessageEvent{
+		Event:                     model.EventCreated,
+		SiteID:                    "site-a",
+		Timestamp:                 msgTime.UnixMilli(),
+		ThreadParentSenderAccount: "zoe", // gatekeeper-resolved parent author
+		Message: model.Message{
+			ID:                           "reply-1",
+			RoomID:                       "room-1",
+			UserID:                       "u-alice",
+			UserAccount:                  "alice",
+			Content:                      "@bob @carol hi",
+			CreatedAt:                    msgTime,
+			ThreadParentMessageID:        "parent-1",
+			ThreadParentMessageCreatedAt: &parentAt, // gatekeeper-resolved createdAt
+			TShow:                        false,
+		},
+	}
+	data, _ := json.Marshal(evt)
+
+	h := NewHandler(store, us, pub, keyStore, parentFetcher, false)
+	require.NoError(t, h.HandleMessage(context.Background(), data))
+
+	got := map[string]bool{}
+	for _, r := range pub.records {
+		got[r.subject] = true
+	}
+	assert.True(t, got[subject.UserRoomEvent("alice")], "sender receives their own echo")
+	assert.True(t, got[subject.UserRoomEvent("zoe")], "parent author (from event) receives the reply race-free")
+	assert.True(t, got[subject.UserRoomEvent("bob")], "unrestricted member mentionee receives the reply")
+	assert.False(t, got[subject.UserRoomEvent("carol")], "member who joined after the event-carried parent createdAt is excluded")
+}
+
+// When the event lacks the parent sender account (e.g. gatekeeper soft-fail),
+// broadcast-worker must fall back to FetchParent even if createdAt is present —
+// both values come from the same fetch.
+func TestHandleThreadCreated_ChannelRoom_MissingSenderAccount_FallsBackToFetch(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	store := NewMockStore(ctrl)
+	us := NewMockUserStore(ctrl)
+	pub := &mockPublisher{}
+	keyStore := NewMockRoomKeyProvider(ctrl)
+	parentFetcher := NewMockParentFetcher(ctrl)
+
+	msgTime := time.Date(2026, 4, 1, 10, 0, 0, 0, time.UTC)
+	parentAt := msgTime.Add(-time.Hour)
+
+	store.EXPECT().GetRoomMeta(gomock.Any(), "r1").Return(metaOf(testChannelRoom), nil)
+	store.EXPECT().GetThreadFollowers(gomock.Any(), "parent-1").Return(map[string]struct{}{}, nil)
+	us.EXPECT().FindUsersByAccounts(gomock.Any(), []string{"alice"}).Return([]model.User{testUsers[0]}, nil)
+	// createdAt present but no sender account → must fetch (returns the parent author).
+	parentFetcher.EXPECT().
+		FetchParent(gomock.Any(), "alice", "r1", "site-a", "parent-1").
+		Return(&ParentMessageInfo{SenderAccount: "carol", CreatedAt: parentAt}, nil)
+
+	evt := model.MessageEvent{
+		Event:     model.EventCreated,
+		SiteID:    "site-a",
+		Timestamp: msgTime.UnixMilli(),
+		Message: model.Message{
+			ID:                           "reply-1",
+			RoomID:                       "r1",
+			UserID:                       "u-alice",
+			UserAccount:                  "alice",
+			Content:                      "a plain thread reply",
+			CreatedAt:                    msgTime,
+			ThreadParentMessageID:        "parent-1",
+			ThreadParentMessageCreatedAt: &parentAt,
+			TShow:                        false,
+		},
+	}
+	data, _ := json.Marshal(evt)
+
+	h := NewHandler(store, us, pub, keyStore, parentFetcher, false)
+	require.NoError(t, h.HandleMessage(context.Background(), data))
+
+	got := map[string]bool{}
+	for _, r := range pub.records {
+		got[r.subject] = true
+	}
+	assert.True(t, got[subject.UserRoomEvent("alice")], "reply sender receives their own echo")
+	assert.True(t, got[subject.UserRoomEvent("carol")], "parent author (from fetch fallback) receives the reply")
 }
 
 func TestHandleThreadUpdated_ChannelRoom_FansOutToFollowers(t *testing.T) {

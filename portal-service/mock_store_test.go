@@ -54,3 +54,19 @@ func (mr *MockDirectoryStoreMockRecorder) ListEmployees(ctx any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListEmployees", reflect.TypeOf((*MockDirectoryStore)(nil).ListEmployees), ctx)
 }
+
+// GetByAccount mocks base method.
+func (m *MockDirectoryStore) GetByAccount(ctx context.Context, account string) (employee, bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetByAccount", ctx, account)
+	ret0, _ := ret[0].(employee)
+	ret1, _ := ret[1].(bool)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
+}
+
+// GetByAccount indicates an expected call of GetByAccount.
+func (mr *MockDirectoryStoreMockRecorder) GetByAccount(ctx, account any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetByAccount", reflect.TypeOf((*MockDirectoryStore)(nil).GetByAccount), ctx, account)
+}

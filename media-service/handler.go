@@ -47,13 +47,13 @@ func (h *handler) setImageCacheHeaders(c *gin.Context, etag string) {
 }
 
 func (h *handler) serveDefault(c *gin.Context, kind, seed, name string) {
-	c.Set("avatar_kind", kind)
-	c.Set("avatar_outcome", "default")
+	c.Set("media_kind", kind)
+	c.Set("media_outcome", "default")
 	etag := defaultETag(seed, name)
 	h.setImageCacheHeaders(c, etag)
 	c.Header("Content-Type", "image/svg+xml")
 	if c.GetHeader("If-None-Match") == etag {
-		c.Set("avatar_outcome", "304")
+		c.Set("media_outcome", "304")
 		c.Status(http.StatusNotModified)
 		return
 	}
@@ -61,10 +61,10 @@ func (h *handler) serveDefault(c *gin.Context, kind, seed, name string) {
 }
 
 func (h *handler) serveStored(c *gin.Context, kind string, av *model.Avatar, fbSeed, fbName string) {
-	c.Set("avatar_kind", kind)
+	c.Set("media_kind", kind)
 	h.setImageCacheHeaders(c, av.ETag)
 	if m := c.GetHeader("If-None-Match"); m != "" && m == av.ETag {
-		c.Set("avatar_outcome", "304")
+		c.Set("media_outcome", "304")
 		c.Status(http.StatusNotModified)
 		return
 	}
@@ -74,12 +74,12 @@ func (h *handler) serveStored(c *gin.Context, kind string, av *model.Avatar, fbS
 		return
 	}
 	if err != nil {
-		c.Set("avatar_outcome", "error")
+		c.Set("media_outcome", "error")
 		errhttp.Write(c.Request.Context(), c, err)
 		return
 	}
 	defer rc.Close()
-	c.Set("avatar_outcome", "stream")
+	c.Set("media_outcome", "stream")
 	c.DataFromReader(http.StatusOK, info.Size, info.ContentType, rc, nil)
 }
 
@@ -93,8 +93,8 @@ func (h *handler) redirectCrossCluster(c *gin.Context, kind, owning, path string
 	if base == "" {
 		return false // unknown site → caller falls through to default
 	}
-	c.Set("avatar_kind", kind)
-	c.Set("avatar_outcome", "redirect")
+	c.Set("media_kind", kind)
+	c.Set("media_outcome", "redirect")
 	c.Redirect(http.StatusTemporaryRedirect, base+path+"?fwd=1")
 	return true
 }
@@ -114,7 +114,7 @@ func (h *handler) HandleRoomAvatar(c *gin.Context) {
 
 	siteID, roomType, name, found, err := h.store.RoomSite(ctx, roomID)
 	if err != nil {
-		c.Set("avatar_outcome", "error")
+		c.Set("media_outcome", "error")
 		errhttp.Write(c.Request.Context(), c, err)
 		return
 	}
@@ -136,7 +136,7 @@ func (h *handler) HandleRoomAvatar(c *gin.Context) {
 func (h *handler) serveRoomLocal(c *gin.Context, roomID, name string) {
 	av, found, err := h.store.Avatar(c.Request.Context(), model.AvatarSubjectRoom, roomID)
 	if err != nil {
-		c.Set("avatar_outcome", "error")
+		c.Set("media_outcome", "error")
 		errhttp.Write(c.Request.Context(), c, err)
 		return
 	}
@@ -156,7 +156,7 @@ func (h *handler) HandleAccountAvatar(c *gin.Context) {
 		if owning == "" {
 			s, found, err := h.store.BotSite(ctx, account)
 			if err != nil {
-				c.Set("avatar_outcome", "error")
+				c.Set("media_outcome", "error")
 				errhttp.Write(c.Request.Context(), c, err)
 				return
 			}
@@ -171,7 +171,7 @@ func (h *handler) HandleAccountAvatar(c *gin.Context) {
 		}
 		av, found, err := h.store.Avatar(ctx, model.AvatarSubjectBot, account)
 		if err != nil {
-			c.Set("avatar_outcome", "error")
+			c.Set("media_outcome", "error")
 			errhttp.Write(c.Request.Context(), c, err)
 			return
 		}
@@ -186,7 +186,7 @@ func (h *handler) HandleAccountAvatar(c *gin.Context) {
 	// user (always local)
 	eid, found, err := h.eidCache.get(ctx, account)
 	if err != nil {
-		c.Set("avatar_outcome", "error")
+		c.Set("media_outcome", "error")
 		errhttp.Write(c.Request.Context(), c, err)
 		return
 	}
@@ -194,7 +194,7 @@ func (h *handler) HandleAccountAvatar(c *gin.Context) {
 		h.serveDefault(c, "user", account, account)
 		return
 	}
-	c.Set("avatar_kind", "user")
-	c.Set("avatar_outcome", "redirect")
+	c.Set("media_kind", "user")
+	c.Set("media_outcome", "redirect")
 	c.Redirect(http.StatusTemporaryRedirect, employeePhotoURL(h.cfg.EmployeePhotoBaseURL, eid))
 }

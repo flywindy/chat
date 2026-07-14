@@ -59,7 +59,7 @@ paths.
      - [`search.messages`](#searchmessages--full-text-message-search) · [Search Rooms](#search-rooms) · [Search Apps](#search-apps) · [Search Users](#search-users)
    - [3.4 user-service](#34-user-service)
      - [`me`](#me) · [`status.getByName`](#statusgetbyname) · [`profile.getByName`](#profilegetbyname) · [`status.set`](#statusset) · [`subscription.list`](#subscriptionlist) · [`subscription.getChannels`](#subscriptiongetchannels)
-     - [`subscription.getDM`](#subscriptiongetdm) · [`subscription.getByRoomID`](#subscriptiongetbyroomid) · [`subscription.count`](#subscriptioncount) · [`subscription.setAppSubscription`](#subscriptionsetappsubscription) · [`apps.list`](#appslist)
+     - [`subscription.getDM`](#subscriptiongetdm) · [`subscription.getByRoomID`](#subscriptiongetbyroomid) · [`subscription.count`](#subscriptioncount) · [`subscription.setAppSubscription`](#subscriptionsetappsubscription) · [`apps.list`](#appslist) · [`apps.categories`](#appscategories)
    - [3.5 media-service](#35-media-service)
      - [`emoji.list`](#emojilist--list-a-sites-custom-emoji) · [`emoji.delete`](#emojidelete--delete-a-custom-emoji)
 4. [Message Send](#4-message-send)
@@ -72,6 +72,9 @@ paths.
    - [GET /api/v1/emoji/:shortcode](#get-apiv1emojishortcode)
    - [PUT /api/v1/emoji/:shortcode](#put-apiv1emojishortcode)
 8. [Presence](#8-presence)
+9. [Admin Service](#9-admin-service)
+10. [Botplatform Service](#10-botplatform-service)
+    - [10.1 POST /api/v1/login](#101-http--post-apiv1login-bot-sdk-direct) · [10.2 POST /api/v1/auth/validate](#102-http--post-apiv1authvalidate)
 
 ---
 
@@ -171,14 +174,17 @@ The exact event subjects a client may receive as a result of an RPC are listed u
 **Endpoint:** `POST /api/v1/auth`
 **Reply:** synchronous HTTP response
 
-Exchanges an SSO token for a signed NATS user JWT. The returned JWT is what the client uses to connect to NATS (see §2.1).
+Exchanges either an OIDC SSO token (humans) or a botplatform session token (bots/admins) for a signed NATS user JWT. The returned JWT is what the client uses to connect to NATS (see §2.1). The server auto-routes by which token field is present — exactly one of `ssoToken` / `authToken` must be supplied.
 
 #### Request body
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `ssoToken` | string | yes | OIDC-issued SSO token. |
+| `ssoToken` | string | one-of | OIDC-issued SSO token. Set this for the SSO (human) path; leave `authToken` empty. |
+| `authToken` | string | one-of | Botplatform session token from §10.1 / §10.2. Set this for the bot/admin path; leave `ssoToken` empty. |
 | `natsPublicKey` | string | yes | The client's NATS user public NKey (must pass `nkeys.IsValidPublicUserKey`). |
+
+Exactly one of `ssoToken` / `authToken` must be set: both → `400 ambiguous_token`; neither → `400 missing_token`. The scope of the returned JWT is derived server-side from the principal's roles (admin > bot > user); the client never declares a role.
 
 ```json
 {
@@ -223,11 +229,15 @@ See [Error envelope](#6-error-envelope-reference). HTTP statuses:
 
 | Status | `code` | `reason` | Example body |
 |---|---|---|---|
-| 400 | `bad_request` | — | `{ "code": "bad_request", "error": "ssoToken and natsPublicKey are required" }` |
-| 400 | `bad_request` | — | `{ "code": "bad_request", "error": "invalid natsPublicKey format" }` |
+| 400 | `bad_request` | `missing_fields` | `{ "code": "bad_request", "reason": "missing_fields", "error": "natsPublicKey is required" }` |
+| 400 | `bad_request` | `invalid_nkey` | `{ "code": "bad_request", "reason": "invalid_nkey", "error": "invalid natsPublicKey format" }` |
+| 400 | `bad_request` | `ambiguous_token` | `{ "code": "bad_request", "reason": "ambiguous_token", "error": "set exactly one of ssoToken / authToken" }` |
+| 400 | `bad_request` | `missing_token` | `{ "code": "bad_request", "reason": "missing_token", "error": "set exactly one of ssoToken / authToken" }` |
 | 400 | `bad_request` | — | `{ "code": "bad_request", "error": "account must be a single NATS subject token (no '.', '*', '>' or whitespace)" }` — the account becomes a NATS subject token, so separator/wildcard/whitespace characters are refused. |
 | 401 | `unauthenticated` | `sso_token_expired` | `{ "code": "unauthenticated", "reason": "sso_token_expired", "error": "SSO token has expired, please re-login" }` |
 | 401 | `unauthenticated` | `invalid_sso_token` | `{ "code": "unauthenticated", "reason": "invalid_sso_token", "error": "invalid SSO token" }` |
+| 401 | `unauthenticated` | `invalid_token` | `{ "code": "unauthenticated", "reason": "invalid_token", "error": "session token invalid" }` — botplatform session token failed validation. |
+| 503 | `unavailable` | `upstream_unavailable` | `{ "code": "unavailable", "reason": "upstream_unavailable", "error": "botplatform unavailable" }` — auth-service cannot reach botplatform to validate a session token. |
 | 500 | `internal` | — | `{ "code": "internal", "error": "internal error" }` — the real cause is logged server-side and never sent to the client. |
 
 The returned `natsJwt` has a server-configured lifetime (default 2h). Clients should re-call `POST /api/v1/auth` to refresh before it expires.
@@ -253,7 +263,7 @@ The returned `natsJwt` has a server-configured lifetime (default 2h). Clients sh
 **Endpoint:** `GET /api/userInfo?account={account}`
 **Reply:** synchronous HTTP response
 
-Site discovery — called once per login, **before** §2.2. Looks the account up in the portal's in-memory directory (loaded from the HR employee feed at startup and refreshed daily), confirms the account is provisioned in the `users` collection (the canonical user record), and returns the home site's connection coordinates. The client then calls `POST {authServiceUrl}/api/v1/auth` (§2.2) and connects to `natsUrl` (§2.1). JWT renewal does **not** re-query the portal — site assignment is stable within a session.
+Site discovery — called once per login, **before** §2.2. Looks the account up in the portal's in-memory directory, which is **users-primary**: every account in the `users` collection (the canonical user record) is loaded, left-joined against the HR-owned `hr_employee` collection (refreshed daily) for enrichment fields. A cache hit therefore means the account is provisioned in `users` — bot/admin accounts resolve too, just without `hr_employee` enrichment — and returns the home site's connection coordinates. The client then calls `POST {baseUrl}/api/v1/auth` (§2.2) and connects to `natsUrl` (§2.1). JWT renewal does **not** re-query the portal — site assignment is stable within a session.
 
 **Discovery only — no token is validated here.** The endpoint serves non-secret directory data keyed by `account`. The client supplies the account directly: derived from the SSO token's `preferred_username` claim in production, or the dev login form in dev mode. The authoritative check is auth-service (§2.2), which validates the SSO token before minting a JWT — an account that resolves here still cannot obtain a NATS JWT or connect without a valid token at that step.
 
@@ -269,14 +279,18 @@ GET /api/userInfo?account=alice
 
 #### Success response
 
-`HTTP 200`
+`HTTP 200`. The response shape is **role-aware**:
+
+- For regular SSO users (account NOT carrying `bot` or `admin` in `users.roles`): the existing rich employee shape below.
+- For **bot/admin** accounts: a minimal 4-field shape that omits `employeeId` and only carries the URL bundle the SDK / admin UI needs to bootstrap.
+
+##### Rich shape (SSO users — default)
 
 | Field | Type | Notes |
 |---|---|---|
 | `account` | string | The `{account}` used in every NATS subject. |
 | `employeeId` | string | From the portal directory; informational. |
-| `authServiceUrl` | string | Base URL of the home site's auth-service — call `POST {authServiceUrl}/api/v1/auth` next. |
-| `baseUrl` | string | Base URL of the user's home site itself (site-scoped HTTP origin) — a distinct URL, not the auth-service URL. |
+| `baseUrl` | string | Home-site unified backend origin — the Traefik gateway (`:7777`), fronting auth-service, upload-service, and media-service under `/api/v1/*`. The client calls `POST {baseUrl}/api/v1/auth` next. Portal login (§2.5) is portal-direct and is NOT routed through this gateway. |
 | `natsUrl` | string | WebSocket URL of the home site's NATS. |
 | `siteId` | string | The user's home site; scopes site-suffixed NATS subjects. |
 
@@ -284,12 +298,26 @@ GET /api/userInfo?account=alice
 {
   "account": "alice",
   "employeeId": "E12345",
-  "authServiceUrl": "https://auth.site-a.example.com",
   "baseUrl": "https://site-a.example.com",
   "natsUrl": "wss://nats.site-a.example.com",
   "siteId": "site-a"
 }
 ```
+
+##### Minimal shape (bot/admin accounts)
+
+When `users.roles` contains `bot` or `admin`, the response omits `employeeId`. All four remaining fields are exactly as documented above.
+
+```json
+{
+  "account": "p_admin",
+  "baseUrl": "https://site-a.example.com",
+  "natsUrl": "wss://nats.site-a.example.com",
+  "siteId": "site-a"
+}
+```
+
+Note: bot account names that contain `.` (e.g. `name.shortcode.bot`) cannot be served through this endpoint — the existing single-NATS-token validator refuses dotted accounts. Bot SDKs do not call this endpoint; they hit botplatform `/api/v1/login` directly (§10.1).
 
 #### Error response
 
@@ -299,8 +327,78 @@ See [Error envelope](#6-error-envelope-reference). HTTP statuses:
 |---|---|---|---|
 | 400 | `bad_request` | `missing_fields` | `{ "code": "bad_request", "reason": "missing_fields", "error": "account is required" }` |
 | 400 | `bad_request` | — | `{ "code": "bad_request", "error": "account must be a single NATS subject token (no '.', '*', '>' or whitespace)" }` — same account rule as §2.2. |
-| 403 | `forbidden` | `account_not_ready` | `{ "code": "forbidden", "reason": "account_not_ready", "error": "account not ready for chat" }` — the account is not usable for chat: either absent from the portal's HR directory (fed by a daily sync), or present there but not yet provisioned in the `users` collection. |
+| 403 | `forbidden` | `account_not_ready` | `{ "code": "forbidden", "reason": "account_not_ready", "error": "account not ready for chat" }` — the account is absent from the portal's `users` directory cache. `hr_employee` is an enrichment left-join, not a gate — a human account missing only its `hr_employee` row still resolves. |
 | 500 | `internal` | — | `{ "code": "internal", "error": "internal error" }` |
+
+#### Triggered events — success path
+
+`None — HTTP-only.`
+
+#### Triggered events — error path
+
+`None.`
+
+---
+
+### 2.5 HTTP — POST /api/v1/login (portal-service)
+
+**Endpoint:** `POST /api/v1/login`
+**Reply:** synchronous HTTP response
+
+Password login for bot/admin accounts via portal-service, called by web / mobile / desktop / admin-UI clients. Portal looks up the user's home site, forwards `{username, password}` to botplatform `/api/v1/login` (§10.1) over the cluster-internal endpoint, and returns a merged 7-field response so the client has both the session token and the home-site URL bundle in one round trip. **Regular SSO users do not use this endpoint** — they use the existing SSO flow (§2.3 + §2.2).
+
+Bot SDKs do not call portal — they hit botplatform `/api/v1/login` directly (§10.1).
+
+#### Request body
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `username` | string | yes | Account name (matches `users.account`). Must hold the `bot` or `admin` role; SSO-only users get a uniform `401 invalid_credentials`. |
+| `password` | string | yes | Plaintext password. Verified server-side using `bcrypt(sha256_hex(plaintext))` per the legacy recipe. |
+
+```json
+{
+  "username": "p_admin",
+  "password": "<secret>"
+}
+```
+
+#### Success response
+
+`HTTP 200`
+
+| Field | Type | Notes |
+|---|---|---|
+| `userId` | string | Canonical 17-char user identifier from botplatform. |
+| `authToken` | string | 43-char base64url session token. Use as the `authToken` field in `POST /api/v1/auth` (§2.2) to obtain a NATS JWT. |
+| `account` | string | The `{account}` used in every NATS subject; same as `username`. |
+| `siteId` | string | The user's home site; informational. |
+| `baseUrl` | string | Home-site unified backend origin — the Traefik gateway (`:7777`), fronting auth-service, upload-service, and media-service under `/api/v1/*`. The client calls `POST {baseUrl}/api/v1/auth` next. Portal login (§2.5) is portal-direct and is NOT routed through this gateway. |
+| `natsUrl` | string | Home-site NATS WebSocket URL. |
+| `requirePasswordChange` | boolean | First-login flag from the user doc. When `true`, the client should route to a password-update page before normal app use. The session token is still valid. |
+
+```json
+{
+  "userId": "abcdef1234567890x",
+  "authToken": "<43-char base64url>",
+  "account": "p_admin",
+  "siteId": "site-a",
+  "baseUrl": "https://site-a.example.com",
+  "natsUrl": "wss://nats.site-a.example.com",
+  "requirePasswordChange": false
+}
+```
+
+#### Error response
+
+See [Error envelope](#6-error-envelope-reference). HTTP statuses:
+
+| Status | `code` | `reason` | Notes |
+|---|---|---|---|
+| 400 | `bad_request` | `missing_fields` | `username` or `password` empty. |
+| 401 | `unauthenticated` | `invalid_credentials` | Uniform rejection covering unknown account, wrong password, AND SSO-only accounts attempting password login. Body is byte-identical across the three arms to prevent enumeration. |
+| 500 | `internal` | `site_unknown` | The user's `siteId` is missing from `PORTAL_SITE_URLS`. Server misconfiguration. |
+| 503 | `unavailable` | `upstream_unavailable` | Portal cannot reach the home-site botplatform. |
 
 #### Triggered events — success path
 
@@ -1011,6 +1109,8 @@ For **channel** rooms, the first messages (`type: "room_created"`, then `type: "
 
 This is an **async-job RPC**: the synchronous reply only confirms acceptance. The actual member adds run asynchronously in `room-worker`, which publishes the events listed under "Triggered events" below. To receive the `AsyncJobResult` event, the client **must** set an `X-Request-ID` NATS header on the original request (see [Request-ID propagation](#request-id-propagation)).
 
+Platform admins (`model.UserRoleAdmin`, same site) bypass the room owner/member check — an admin need not be a room member to add members.
+
 ##### Request body
 
 | Field | Type | Required | Notes |
@@ -1141,6 +1241,8 @@ A `members_added` system message also flows through the message pipeline and arr
 
 This is an **async-job RPC**: the synchronous reply only confirms acceptance. The actual member removal runs asynchronously in `room-worker`, which publishes the events listed under "Triggered events" below. To receive the `AsyncJobResult` event, the client **must** set an `X-Request-ID` NATS header on the original request (see [Request-ID propagation](#request-id-propagation)).
 
+Platform admins (`model.UserRoleAdmin`, same site) bypass the room owner/member check — an admin need not be a room member to remove members.
+
 ##### Request body
 
 | Field | Type | Required | Notes |
@@ -1239,6 +1341,8 @@ A `member_left` / `member_removed` system message also flows through the message
 - `{siteID}` must be the room's **origin `siteID`** (the site that owns the room), not the caller's own site.
 
 This is a **synchronous RPC**. `room-service` validates the request, applies the role change atomically, emits the event below, and only then returns the reply. There is no async job, no `AsyncJobResult`, and no `chat.user.{requesterAccount}.response.{requestID}` event for this RPC.
+
+Platform admins (`model.UserRoleAdmin`, same site) bypass the room owner/member check — an admin need not be a room member to update roles.
 
 ##### Request body
 
@@ -1720,7 +1824,7 @@ See [Error envelope](#6-error-envelope-reference). Common errors:
 
 ##### Triggered events — success path
 
-**1. `chat.user.{account}.event.subscription.update`** — emitted once for the reader (non-bot only) on the success path (best-effort, core NATS), `action: "read"`. See the [subscription.update schema](#subscriptionupdate-event). The embedded `Subscription` carries the updated `lastSeenAt` and `alert`. Not fired on the early-return paths (empty room or reader already past `lastMsgAt`).
+**1. `chat.user.{account}.event.subscription.update`** — emitted once for the reader (non-bot only) on the success path (best-effort, core NATS), `action: "read"`. See the [subscription.update schema](#subscriptionupdate-event). The embedded `Subscription` carries the updated `lastSeenAt` and `alert`, plus the read-cleared derived flags `hasMention: false` and `hasGroupMention: false` (reading the room clears both). Not fired on the early-return paths (empty room or reader already past `lastMsgAt`).
 
 **2. Floor advance events** — emitted **only when the room read floor (`Room.MinUserLastSeenAt`) changes** (best-effort, core NATS):
 
@@ -1940,6 +2044,8 @@ When the requester's home site differs from the room's site, `room-service` emit
 - `{siteID}` must be the room's **origin `siteID`** (the site that owns the room), not the caller's own site.
 
 A **synchronous, sender-only** RPC. Returns the list of users on the local site whose `subscription.lastSeenAt` is at or after the target message's `createdAt`. Only the message author may call it. The author is excluded from the result.
+
+For a **thread-only reply** (a threaded reply not mirrored to the channel, i.e. not `tshow`), readers are resolved from **thread** read-state (`thread_subscriptions.lastSeenAt`) rather than the room's: the reply never appears in the channel, so a member's channel read-position is not evidence they saw it. Channel messages and `tshow` replies (which do appear in the channel) continue to use room read-state. This keeps the receipt consistent with the thread's `minUserLastSeenAt`.
 
 ##### Request body
 
@@ -3368,7 +3474,7 @@ Toggles a reaction on a message. Any subscribed room member may react — the se
 | Field | Type | Required | Notes |
 |---|---|---|---|
 | `messageId` | string | yes | The message to react to. |
-| `shortcode` | string | yes | The bare reaction shortcode without surrounding colons (e.g. `thumbsup`, `acme_party`). Must match `^[a-z0-9_+-]{1,32}$` after NFC normalisation. The server accepts a built-in set of standard emoji (gemoji/GitHub-style shortcodes — `thumbsup`, `+1`, `heart`, etc.) without any per-site setup, then falls back to the per-site `custom_emojis` collection for additional shortcodes. |
+| `shortcode` | string | yes | The bare reaction shortcode without surrounding colons (e.g. `thumbsup`, `acme_party`). Must match `^[a-z0-9_+-]{1,32}$` after NFC normalisation. The server validates **format only** — it does not check the shortcode against the standard-emoji set or the site's registered custom emoji. Clients are expected to offer only shortcodes from their picker (built-in standard set + the local site's [`emoji.list`](#emojilist--list-a-sites-custom-emoji)). |
 
 ```json
 {
@@ -3397,7 +3503,7 @@ Toggles a reaction on a message. Any subscribed room member may react — the se
 
 ##### Error response
 
-See [Error envelope](#6-error-envelope-reference). Common errors: `"messageId is required"`, `"shortcode is required"`, `"invalid reaction shortcode"` (malformed: fails `^[a-z0-9_+-]{1,32}$` after NFC), `"unknown reaction shortcode"` (well-formed but neither a built-in standard emoji nor a registered custom emoji for this site), `"message not found"` (also returned when attempting to _add_ a reaction to a soft-deleted message), `"not subscribed to room"`, `"failed to add reaction"`, `"failed to remove reaction"`.
+See [Error envelope](#6-error-envelope-reference). Common errors: `"messageId is required"`, `"shortcode is required"`, `"invalid reaction shortcode"` (malformed: fails `^[a-z0-9_+-]{1,32}$` after NFC), `"message not found"` (also returned when attempting to _add_ a reaction to a soft-deleted message), `"not subscribed to room"`, `"failed to add reaction"`, `"failed to remove reaction"`.
 
 ##### Triggered events — success path
 
@@ -3934,7 +4040,7 @@ Additional legacy fields may be present, mirroring the `GET /api/v3/users` respo
 
 ### 3.4 user-service
 
-`user-service` exposes 13 NATS request/reply endpoints over **core NATS** (no JetStream consumers). Subjects follow the pattern `chat.user.{account}.request.user.{siteID}.<area>.<action>`, except `me`, which is a single-token self-lookup (`chat.user.{account}.request.user.{siteID}.me`).
+`user-service` exposes 14 NATS request/reply endpoints over **core NATS** (no JetStream consumers). Subjects follow the pattern `chat.user.{account}.request.user.{siteID}.<area>.<action>`, except `me`, which is a single-token self-lookup (`chat.user.{account}.request.user.{siteID}.me`).
 
 > **Events:** these endpoints emit no client-facing events. (`status.set` triggers a server-side cross-site federation update, which is internal and not delivered to clients.)
 
@@ -3951,6 +4057,7 @@ Additional legacy fields may be present, mirroring the `GET /api/v3/users` respo
 | `chat.user.{account}.request.user.{siteID}.subscription.count` | [`subscription.count`](#subscriptioncount) |
 | `chat.user.{account}.request.user.{siteID}.subscription.setAppSubscription` | [`subscription.setAppSubscription`](#subscriptionsetappsubscription) |
 | `chat.user.{account}.request.user.{siteID}.apps.list` | [`apps.list`](#appslist) |
+| `chat.user.{account}.request.user.{siteID}.apps.categories` | [`apps.categories`](#appscategories) |
 | `chat.user.{account}.request.user.{siteID}.thread.list` | [List User Threads](#list-user-threads) |
 | `chat.user.{account}.request.user.{siteID}.thread.unread.summary` | [Get Thread Unread Summary](#get-thread-unread-summary) |
 
@@ -4646,6 +4753,48 @@ Optional — an empty body returns the first page with defaults.
 
 ---
 
+#### apps.categories
+
+**Subject:** `chat.user.{account}.request.user.{siteID}.apps.categories`
+**Reply subject:** auto-generated `_INBOX.>` (NATS request/reply)
+
+Returns the full fab-domain → site mapping used to group apps in the UI, sorted by `name` ascending (rows sharing a `name` are ordered by `id`, so ordering is deterministic across calls). Global, slow-changing reference data — no filtering, no pagination. The mapping is populated out-of-band (legacy migration); a site whose collection is unpopulated returns `{ "categories": [] }`.
+
+##### Request body
+
+None — send an empty payload.
+
+##### Success response
+
+| Field | Type | Notes |
+|---|---|---|
+| `categories` | [AppCategory](#appcategory)[] | All mappings, sorted by `name` ascending then `id` ascending. Always an array — `[]` when empty, never `null`. |
+
+###### AppCategory
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | string | Mapping ID — the hex form of the Mongo ObjectID, exposed under the `id` key per the API-wide `_id`→`id` convention. (Unlike `apps.list` ids, which are plain strings.) |
+| `name` | string | Fab/domain name; the array is sorted by this field. |
+| `siteId` | string | Site the fab/domain belongs to. |
+
+```json
+{
+  "categories": [
+    { "id": "64226446224a1b2c3d4e5f61", "name": "F14", "siteId": "00700000" },
+    { "id": "64226446224a1b2c3d4e5f60", "name": "F22", "siteId": "00600000" }
+  ]
+}
+```
+
+##### Error response
+
+| Condition | `code` | Notes |
+|-----------|--------|-------|
+| Internal failure | `internal` | — |
+
+---
+
 #### List User Threads
 
 **Subject:** `chat.user.{account}.request.user.{siteID}.thread.list`
@@ -4818,7 +4967,7 @@ Empty object.
 **Subject:** `chat.user.{account}.request.emoji.{siteID}.list`
 **Reply subject:** auto-generated `_INBOX.>` (NATS request/reply)
 
-**Auth:** the `{account}` in the subject is the authenticated identity. `{siteID}` is the **target site whose emoji set you want** — for a room's emoji picker, pass the room's origin `siteId` (a room's usable custom emoji are always its origin site's set; see [React to Message](#react-to-message)). The supercluster routes the request to that site's media-service.
+**Auth:** the `{account}` in the subject is the authenticated identity. `{siteID}` is the **target site whose emoji set you want** — in v1 the FE fetches only its **local** site's list (non-local shortcodes are not rendered). The supercluster routes the request to that site's media-service.
 
 ##### Request body
 
@@ -4835,22 +4984,20 @@ Empty. Send `{}` or no payload.
 | Field | Type | Notes |
 |---|---|---|
 | `shortcode` | string | Bare shortcode (no colons), `^[a-z0-9_+-]{1,32}$`. |
-| `imageUrl` | string | Relative serve path `/api/v1/emoji/{shortcode}?siteid={siteID}` — resolve against your media-service base URL; the `?siteid=` param is self-describing (the FE only ever fetches the local site's list in v1) and defaults to local when absent; append `&v={etag}` to cache-bust. |
+| `imageUrl` | string | Bare relative serve path `/api/v1/emoji/{shortcode}` — resolve against the media-service base URL of the site the list came from (no `?siteid=`; the serve endpoint defaults to its own cluster's site). Append `?v={etag}` to cache-bust. |
 | `contentType` | string | `image/png`, `image/jpeg`, or `image/gif` (GIFs may be animated). |
 | `etag` | string | Storage ETag of the current image. |
-| `createdBy` | string | Account that first uploaded the shortcode (audit; unauthenticated in v1). |
-| `updatedAt` | number | Epoch ms (UTC) of the last upload. |
+| `updatedAt` | string (RFC 3339) | Time of the last upload (UTC). |
 
 ```json
 {
   "emojis": [
     {
       "shortcode": "acme_party",
-      "imageUrl": "/api/v1/emoji/acme_party?siteid=site-a",
+      "imageUrl": "/api/v1/emoji/acme_party",
       "contentType": "image/gif",
       "etag": "9a0364b9e99bb480dd25e1f0284c8555",
-      "createdBy": "alice",
-      "updatedAt": 1746518900000
+      "updatedAt": "2025-05-06T08:08:20Z"
     }
   ]
 }
@@ -4902,7 +5049,7 @@ See [Error envelope](#6-error-envelope-reference).
 { "shortcode": "acme_party", "deleted": true }
 ```
 
-Existing reactions that reference the deleted shortcode are not rewritten; the reaction validator stops accepting new uses within its cache TTL (≤ 60 s by default).
+Existing reactions that reference the deleted shortcode are not rewritten. Reactions validate shortcode **format only** (no registration check), so a deleted shortcode technically remains reactable — the FE stops offering it once its emoji list refresh no longer includes it, and its image URL returns `404`.
 
 ##### Error response
 
@@ -5012,6 +5159,7 @@ Delivered on `chat.user.{account}.response.{requestId}`. The body is the persist
 | `content` | string | The message body, exactly as sent. |
 | `createdAt` | string | RFC 3339. Server-assigned send time (UTC). |
 | `threadParentMessageId` | string | Present only for a thread reply (echoes the request). |
+| `threadParentMessageCreatedAt` | string | Optional. RFC 3339. Server-resolved best-effort for a thread reply; absent when the parent's createdAt could not be resolved at send time. |
 | `tshow` | boolean | Present only when the request set `tshow: true` on a thread reply (absent when the flag was normalized away on a non-thread send). |
 | `quotedParentMessage` | [QuotedParentMessage](#quotedparentmessage) | Present only for a quoted send — the server-fetched snapshot of the quoted parent. |
 
@@ -5098,6 +5246,7 @@ The canonical broadcast message (distinct from the history [Message schema](#mes
 | `editedAt` | string | Optional. RFC 3339. |
 | `updatedAt` | string | Optional. RFC 3339. |
 | `threadParentMessageId` | string | Optional. Set for a thread reply. |
+| `threadParentMessageCreatedAt` | string | Optional. RFC 3339. Server-resolved best-effort; absent when unresolved at send time. |
 | `tshow` | boolean | Optional. Whether a thread reply is also shown in the parent room. |
 | `type` | string | Optional. System-message type when set. |
 | `sysMsgData` | string | Optional. Base64-encoded JSON payload for system messages; shape depends on `type` (see [System-message `sysMsgData` payloads](#system-message-sysmsgdata-payloads)). |
@@ -5443,6 +5592,8 @@ Every error response — NATS reply subjects, JetStream async results, and HTTP 
 | `invalid_dm_target` | bad_request | user-service `subscription.getDM` (target is a bot or platform account) |
 | `subscription_not_found` | not_found | user-service `subscription.getDM` (no DM subscription exists for the account pair) |
 | `response_too_large` | internal | any RPC whose reply would exceed the transport `max_payload` (most often large history reads — retry with a smaller `limit`) |
+| `not_admin` | forbidden | admin-service (valid session, but caller does not hold the `admin` role or the session site does not match) |
+| `account_exists` | conflict | admin-service `POST /v1/admin/users` (account already exists in the users collection) |
 | `emoji_shortcode_reserved` | bad_request | media-service `PUT /api/v1/emoji/…` (shortcode collides with a built-in standard emoji) |
 | `emoji_delete_disabled` | forbidden | media-service `emoji.delete` (kill-switch `EMOJI_DELETE_ENABLED=false`, the default) |
 
@@ -5595,7 +5746,7 @@ On success, the custom image takes effect immediately: subsequent `GET /api/v1/a
 
 ### GET /api/v1/emoji/:shortcode
 
-Serves a custom emoji image. The path no longer carries siteID: v1's FE only ever fetches the local site's emoji list and never renders non-local shortcodes, so the endpoint defaults to this cluster's site. An optional lowercase `?siteid=` query param (matching the avatar endpoints' `?siteid=` hint) names a specific site — absent or equal to this cluster's site serves locally; a known remote site 307-redirects to its owning cluster. Clients normally just use the `imageUrl` returned by [`emoji.list`](#emojilist--list-a-sites-custom-emoji) as-is; append `&v={etag}` to cache-bust after re-uploads.
+Serves a custom emoji image. The path no longer carries siteID: v1's FE only ever fetches the local site's emoji list and never renders non-local shortcodes, so the endpoint defaults to this cluster's site. An optional lowercase `?siteid=` query param (matching the avatar endpoints' `?siteid=` hint) names a specific site — absent or equal to this cluster's site serves locally; a known remote site 307-redirects to its owning cluster. Clients normally just use the `imageUrl` returned by [`emoji.list`](#emojilist--list-a-sites-custom-emoji) as-is (it is a bare `/api/v1/emoji/{shortcode}` path, resolved against the base URL of the site the list came from); append `?v={etag}` to cache-bust after re-uploads.
 
 #### Response
 
@@ -5642,7 +5793,7 @@ Raw image bytes as the body. PNG, JPEG, or GIF (animated GIFs are stored and ser
 | `etag` | string | New storage ETag — use as the `?v=` cache-buster. |
 | `contentType` | string | Detected type (`image/png`, `image/jpeg`, `image/gif`). |
 | `size` | int | Stored size in bytes. |
-| `updatedAt` | number | Epoch ms (UTC). |
+| `updatedAt` | string (RFC 3339) | Time of this upload (UTC). |
 
 ```json
 {
@@ -5650,11 +5801,11 @@ Raw image bytes as the body. PNG, JPEG, or GIF (animated GIFs are stored and ser
   "etag": "9a0364b9e99bb480dd25e1f0284c8555",
   "contentType": "image/gif",
   "size": 20480,
-  "updatedAt": 1746518900000
+  "updatedAt": "2025-05-06T08:08:20Z"
 }
 ```
 
-A newly uploaded emoji becomes reactable once the reaction validator's per-site cache expires (≤ 60 s by default).
+A newly uploaded emoji is usable immediately — it appears in the next [`emoji.list`](#emojilist--list-a-sites-custom-emoji) fetch and its image serves right away; reactions validate shortcode format only, so no registration propagation delay applies.
 
 ## 8. Presence
 
@@ -5839,3 +5990,487 @@ in the `siteId` payload field.
 **Subscribe before you snapshot.** To avoid missing a transition between the
 snapshot and the subscription, subscribe to the state subject(s) **first**, then
 send the §8.6 batch query for current values.
+
+---
+
+## 9. Admin Service
+
+HTTP REST endpoints served by `admin-service`. All `/v1/admin/…` routes require a valid admin session token in the `Authorization: Bearer <authToken>` header (the `authToken` returned by `POST /api/v1/login` at botplatform-service or portal-service). The token is validated by `requireAdmin` middleware, which checks that the session exists, the session holds the `admin` role, and the session's `siteId` matches the admin-service's configured `SITE_ID`. Callers that fail any of these checks receive `403 not_admin` (role/site mismatch) or `401 invalid_token` (missing or unknown token).
+
+The `userView` returned by all user endpoints is a projected subset — the `services` / bcrypt field is never included.
+
+### Common error table (admin-service)
+
+| Status | `code` | `reason` | Notes |
+|---|---|---|---|
+| 401 | `unauthenticated` | `invalid_token` | Token missing, unknown, or session not found. |
+| 403 | `forbidden` | `not_admin` | Valid session, but caller lacks the `admin` role or the session `siteId` does not match. |
+| 404 | `not_found` | `user_not_found` | Target user ID not found (get, update, set-password). |
+| 409 | `conflict` | `account_exists` | Account already exists (create only). |
+| 400 | `bad_request` | `missing_fields` | Required fields absent or body not valid JSON. |
+| 500 | `internal` | — | Server-side fault; cause is logged server-side only. |
+
+### 9.1 List users
+
+**Endpoint:** `GET /v1/admin/users`
+**Auth:** `Authorization: Bearer <authToken>`, admin role + same-site required.
+
+Returns a paged list of users scoped to the admin's site.
+
+#### Query parameters
+
+| Parameter | Type | Notes |
+|---|---|---|
+| `q` | string | Optional free-text search. Empty returns all users. |
+| `page` | integer | Page number, 1-based. Defaults to `1`. |
+| `limit` | integer | Page size. Defaults to `20`. |
+
+#### Success response
+
+`HTTP 200`
+
+| Field | Type | Notes |
+|---|---|---|
+| `users` | [UserView](#userview)[] | Projected user records for this page. |
+| `total` | integer | Total matching users (across all pages). |
+
+```json
+{
+  "users": [
+    {
+      "id": "01970a4f8c2d7c9a01970a4f8c2d7c9a",
+      "account": "alice",
+      "siteId": "site-a",
+      "engName": "Alice",
+      "chineseName": "愛麗絲",
+      "roles": ["admin"],
+      "deactivated": false,
+      "requirePasswordChange": false
+    }
+  ],
+  "total": 1
+}
+```
+
+### 9.2 Create user
+
+**Endpoint:** `POST /v1/admin/users`
+**Auth:** `Authorization: Bearer <authToken>`, admin role + same-site required.
+
+Creates a new user account. The `siteId` is always forced to the admin-service's configured `SITE_ID` — the caller cannot set it.
+
+#### Request body
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `account` | string | yes | Login account name. Must be unique within the site. |
+| `engName` | string | no | English display name. Recommended but not required. |
+| `chineseName` | string | no | Chinese display name. |
+| `password` | string | yes | Plaintext password; stored as bcrypt of SHA-256 hex. |
+| `roles` | string[] | no | Initial roles, e.g. `["admin"]`. Defaults to empty. |
+| `requirePasswordChange` | boolean | no | Whether the user must change password on first login. Defaults to `true` when omitted. |
+
+```json
+{
+  "account": "bob",
+  "engName": "Bob",
+  "chineseName": "鮑勃",
+  "password": "s3cr3t!",
+  "roles": [],
+  "requirePasswordChange": true
+}
+```
+
+#### Success response
+
+`HTTP 201` — the created [UserView](#userview).
+
+```json
+{
+  "id": "01970a4f8c2d7c9b01970a4f8c2d7c9b",
+  "account": "bob",
+  "siteId": "site-a",
+  "engName": "Bob",
+  "chineseName": "鮑勃",
+  "roles": [],
+  "deactivated": false,
+  "requirePasswordChange": true
+}
+```
+
+### 9.3 Get user
+
+**Endpoint:** `GET /v1/admin/users/:account`
+**Auth:** `Authorization: Bearer <authToken>`, admin role + same-site required.
+
+Returns a single [UserView](#userview) by account. The account is resolved within the admin-service's configured site.
+
+#### Success response
+
+`HTTP 200` — a [UserView](#userview).
+
+```json
+{
+  "id": "01970a4f8c2d7c9a01970a4f8c2d7c9a",
+  "account": "alice",
+  "siteId": "site-a",
+  "engName": "Alice",
+  "chineseName": "愛麗絲",
+  "roles": ["admin"],
+  "deactivated": false,
+  "requirePasswordChange": false
+}
+```
+
+### 9.4 Update user
+
+**Endpoint:** `PATCH /v1/admin/users/:account`
+**Auth:** `Authorization: Bearer <authToken>`, admin role + same-site required.
+
+Applies partial updates to a user. All fields are optional; omitting a field leaves it unchanged. When `deactivated` is set to `true`, all active sessions for the user are revoked immediately.
+
+#### Request body
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `engName` | string | no | New English display name. |
+| `chineseName` | string | no | New Chinese display name. |
+| `roles` | string[] | no | Replaces the user's roles array. |
+| `deactivated` | boolean | no | Set to `true` to deactivate (all sessions revoked); `false` to reactivate. |
+
+```json
+{ "roles": ["admin"], "deactivated": false }
+```
+
+#### Success response
+
+`HTTP 200`
+
+```json
+{ "status": "ok" }
+```
+
+### 9.5 Set password
+
+**Endpoint:** `POST /v1/admin/users/:account/password`
+**Auth:** `Authorization: Bearer <authToken>`, admin role + same-site required.
+
+Replaces the user's password and revokes all active sessions (forcing re-login).
+
+#### Request body
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `password` | string | yes | New plaintext password. |
+| `requirePasswordChange` | boolean | no | Whether to force a password change on next login. Defaults to `true` when omitted. |
+
+```json
+{ "password": "newS3cr3t!", "requirePasswordChange": false }
+```
+
+#### Success response
+
+`HTTP 200`
+
+```json
+{ "status": "ok" }
+```
+
+### 9.6 List sessions
+
+**Endpoint:** `GET /v1/admin/sessions?account=<account>`
+**Auth:** `Authorization: Bearer <authToken>`, admin role + same-site required.
+
+Lists all active sessions for the given account (required `account` query parameter). Returns only the projected [SessionView](#sessionview) fields — roles are excluded from the response. A missing `account` query parameter returns `400 missing_fields`.
+
+#### Success response
+
+`HTTP 200`
+
+| Field | Type | Notes |
+|---|---|---|
+| `sessions` | [SessionView](#sessionview)[] | Active sessions for the account. |
+
+```json
+{
+  "sessions": [
+    {
+      "id": "sess_01970a4f8c2d7c9a",
+      "userId": "01970a4f8c2d7c9a01970a4f8c2d7c9a",
+      "account": "bob",
+      "siteId": "site-a",
+      "issuedAt": 1746518400000
+    }
+  ]
+}
+```
+
+### 9.7 Revoke all sessions
+
+**Endpoint:** `DELETE /v1/admin/sessions?account=<account>`
+**Auth:** `Authorization: Bearer <authToken>`, admin role + same-site required.
+
+Revokes all active sessions for the given account (required `account` query parameter) and appends a `session.revoke_all` audit entry. A missing `account` query parameter returns `400 missing_fields`.
+
+#### Success response
+
+`HTTP 200`
+
+```json
+{ "status": "ok" }
+```
+
+### 9.8 Revoke single session
+
+**Endpoint:** `DELETE /v1/admin/sessions/:sessionId?account=<account>`
+**Auth:** `Authorization: Bearer <authToken>`, admin role + same-site required.
+
+Revokes a single session scoped to the given account (required `account` query parameter) and appends a `session.revoke` audit entry. A missing `account` query parameter returns `400 missing_fields`.
+
+#### Success response
+
+`HTTP 200`
+
+```json
+{ "status": "ok" }
+```
+
+### 9.9 List audit log
+
+**Endpoint:** `GET /v1/admin/audit`
+**Auth:** `Authorization: Bearer <authToken>`, admin role + same-site required.
+
+Returns audit entries for the admin's site, newest-first, with optional filtering.
+
+#### Query parameters
+
+| Parameter | Type | Notes |
+|---|---|---|
+| `targetAccount` | string | Optional. Filter by the affected user's account. |
+| `actor` | string | Optional. Filter by actor account. |
+| `action` | string | Optional. Filter by action string (e.g. `user.create`, `session.revoke_all`). |
+| `page` | integer | Page number, 1-based. Defaults to `1`. |
+| `limit` | integer | Page size. Defaults to `20`. |
+
+#### Success response
+
+`HTTP 200`
+
+| Field | Type | Notes |
+|---|---|---|
+| `entries` | [AuditEntry](#auditentry)[] | Matching entries, newest-first. |
+| `total` | integer | Total matching entries across all pages. |
+
+```json
+{
+  "entries": [
+    {
+      "id": "01970a4f8c2d7c9c",
+      "actorUserId": "01970a4f8c2d7c9a01970a4f8c2d7c9a",
+      "actorAccount": "alice",
+      "action": "user.create",
+      "targetAccount": "bob",
+      "details": { "account": "bob" },
+      "siteId": "site-a",
+      "timestamp": 1746518400000
+    }
+  ],
+  "total": 1
+}
+```
+
+### UserView
+
+Projected user record returned by all admin user endpoints. The `services` / bcrypt field is never included.
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | string | Internal user ID (32-char UUIDv7 hex). |
+| `account` | string | Login account name. |
+| `siteId` | string | Owning site ID. |
+| `sectId` | string | Section (org unit) ID. Omitted when empty. |
+| `sectName` | string | Section name. Omitted when empty. |
+| `sectTCName` | string | Section traditional-Chinese name. Omitted when empty. |
+| `sectDescription` | string | Section description. Omitted when empty. |
+| `deptId` | string | Department ID. Omitted when empty. |
+| `deptName` | string | Department name. Omitted when empty. |
+| `deptTCName` | string | Department traditional-Chinese name. Omitted when empty. |
+| `deptDescription` | string | Department description. Omitted when empty. |
+| `engName` | string | English display name. Omitted when empty. |
+| `chineseName` | string | Chinese display name. Omitted when empty. |
+| `employeeId` | string | Employee ID. Omitted when empty. |
+| `statusIsShow` | boolean | Whether the user's status text is visible. Always present. |
+| `statusText` | string | Custom status text. Omitted when empty. |
+| `roles` | string[] | Role tags, e.g. `["admin"]`. Omitted when empty. |
+| `requirePasswordChange` | boolean | First-login password-change flag. Omitted when `false`. |
+| `deactivated` | boolean | Whether the account is deactivated. Omitted when `false`. |
+
+### SessionView
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | string | Session ID. |
+| `userId` | string | Internal user ID. |
+| `account` | string | Account the session belongs to. |
+| `siteId` | string | Site the session was issued for. |
+| `issuedAt` | integer | Epoch ms (UTC) when the session was created. |
+
+### AuditEntry
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | string | Audit entry ID. |
+| `actorUserId` | string | Internal user ID of the admin who performed the action. |
+| `actorAccount` | string | Account of the admin. |
+| `action` | string | Action string, e.g. `user.create`, `user.update`, `user.password.set`, `session.revoke_all`, `session.revoke`. |
+| `targetUserId` | string | Internal ID of the affected user. Omitted when not applicable. |
+| `targetAccount` | string | Account of the affected user. Omitted when not applicable. |
+| `details` | map<string, string> | Non-secret context for the action (e.g. `{"account":"bob"}`). Omitted when empty. Never contains passwords, hashes, or tokens. |
+| `siteId` | string | Site the action was performed on. |
+| `timestamp` | integer | Epoch ms (UTC) when the action occurred. |
+
+---
+
+## 10. Botplatform Service
+
+HTTP REST endpoints served by `botplatform-service` — the authoritative password-login and session-token store for bot/admin accounts. Any user may authenticate against any cluster (there is no home-site gate). Sessions are permanent (no TTL); the per-user cap is `SESSIONS_MAX_PER_ACCOUNT` (default 100), FIFO-evicted by `issuedAt` on overflow.
+
+### 10.1 HTTP — POST /api/v1/login (bot SDK direct)
+
+**Endpoint:** `POST /api/v1/login`
+**Reply:** synchronous HTTP response
+
+Direct bot-SDK login at botplatform-service. Returns the **legacy Rocket.Chat 3-field shape** `{userId, authToken, me}` so existing bot SDKs need no code changes. The portal response (§2.5) is for web/mobile/desktop/admin clients only.
+
+#### Request body
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `username` | string | yes | Account name (matches `users.account`). Must hold the `bot` or `admin` role. |
+| `password` | string | yes | Plaintext password. |
+
+```json
+{
+  "username": "name.shortcode.bot",
+  "password": "<secret>"
+}
+```
+
+#### Success response
+
+`HTTP 200`
+
+| Field | Type | Notes |
+|---|---|---|
+| `status` | string | Always `"success"` on the 200 path (legacy envelope shape). |
+| `data.userId` | string | 17-char user identifier; mirrored in the `X-User-Id` header that the client sends on subsequent calls. |
+| `data.authToken` | string | 43-char base64url opaque session token (wire-identical to legacy Rocket.Chat — no `bp_` prefix). Sent on subsequent calls as the `X-Auth-Token` header. |
+| `data.me` | object | The legacy `me` block; see [Me](#me-botplatform) below. |
+
+##### Me (botplatform)
+
+| Field | Type | Notes |
+|---|---|---|
+| `_id` | string | Same as `data.userId`. |
+| `username` | string | Same as the request's `username`. |
+| `name` | string | Display name. |
+| `active` | boolean | Always `true` on a successful login. |
+| `roles` | string[] | Role tags (e.g. `["bot"]`, `["admin"]`). |
+| `requirePasswordChange` | boolean | First-login flag, mirrored from the user doc. |
+
+```json
+{
+  "status": "success",
+  "data": {
+    "userId": "abcdef1234567890x",
+    "authToken": "<43-char base64url>",
+    "me": {
+      "_id": "abcdef1234567890x",
+      "username": "name.shortcode.bot",
+      "name": "FOD Bot",
+      "active": true,
+      "roles": ["bot"],
+      "requirePasswordChange": false
+    }
+  }
+}
+```
+
+#### Error response
+
+See [Error envelope](#6-error-envelope-reference). HTTP statuses:
+
+| Status | `code` | `reason` | Notes |
+|---|---|---|---|
+| 400 | `bad_request` | `missing_fields` | `username` or `password` empty. |
+| 401 | `unauthenticated` | `invalid_credentials` | Uniform: unknown account, wrong password, or account without `bot`/`admin` role. |
+| 500 | `internal` | — | Mongo failure; cause logged server-side. |
+
+#### Triggered events — success path
+
+`None — HTTP-only.`
+
+#### Triggered events — error path
+
+`None.`
+
+---
+
+### 10.2 HTTP — POST /api/v1/auth/validate
+
+**Endpoint:** `POST /api/v1/auth/validate`
+**Reply:** synchronous HTTP response
+
+Validates a session `authToken` and returns the associated principal. Called by auth-service (§2.2) when minting a NATS JWT for a session-token holder, and by the gateway during request routing. Validation is local-DB only — cross-site routing is the caller's responsibility.
+
+This endpoint is intended for **server-to-server use**; bot SDKs do not call it directly.
+
+#### Request body
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `authToken` | string | yes | The 43-char raw token returned by `/api/v1/login`. |
+
+```json
+{ "authToken": "<43-char base64url>" }
+```
+
+#### Success response
+
+`HTTP 200`
+
+| Field | Type | Notes |
+|---|---|---|
+| `valid` | boolean | `true` on a session match. |
+| `principal.userId` | string | 17-char user identifier. |
+| `principal.account` | string | The `{account}` used in NATS subjects. |
+| `principal.siteId` | string | The user's home site. |
+| `principal.roles` | string[] | Roles at the time the session was issued (denormalized). |
+
+```json
+{
+  "valid": true,
+  "principal": {
+    "userId": "abcdef1234567890x",
+    "account": "name.shortcode.bot",
+    "siteId": "site-a",
+    "roles": ["bot"]
+  }
+}
+```
+
+#### Error response
+
+| Status | `code` | `reason` | Notes |
+|---|---|---|---|
+| 400 | `bad_request` | `missing_fields` | `authToken` empty. |
+| 401 | `unauthenticated` | `invalid_token` | Token hash not found. Body carries `{"valid": false, ...}`. |
+| 500 | `internal` | — | Mongo failure. |
+
+#### Triggered events — success path
+
+`None — HTTP-only.`
+
+#### Triggered events — error path
+
+`None.`
