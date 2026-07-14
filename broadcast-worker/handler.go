@@ -228,7 +228,7 @@ func (h *Handler) handleThreadCreated(ctx context.Context, evt *model.MessageEve
 	// the recipient set.
 	var fanOut []string
 	if meta.Type == model.RoomTypeChannel {
-		fanOut, err = h.channelThreadFanOut(ctx, msg.RoomID, evt.SiteID, parentMsgID, msg.UserAccount, parsed.Accounts)
+		fanOut, err = h.channelThreadFanOut(ctx, msg.RoomID, evt.SiteID, parentMsgID, msg.UserAccount, parsed.Accounts, msg.ThreadParentMessageCreatedAt, evt.ThreadParentSenderAccount)
 		if err != nil {
 			return fmt.Errorf("channel thread fan-out for parent %s: %w", parentMsgID, err)
 		}
@@ -328,7 +328,7 @@ func (h *Handler) handleThreadUpdated(ctx context.Context, evt *model.MessageEve
 	switch room.Type {
 	case model.RoomTypeChannel:
 		parsed := mention.Parse(msg.Content)
-		fanOut, err := h.channelThreadFanOut(ctx, room.ID, room.SiteID, parentMsgID, msg.UserAccount, parsed.Accounts)
+		fanOut, err := h.channelThreadFanOut(ctx, room.ID, room.SiteID, parentMsgID, msg.UserAccount, parsed.Accounts, msg.ThreadParentMessageCreatedAt, evt.ThreadParentSenderAccount)
 		if err != nil {
 			return fmt.Errorf("channel thread fan-out for thread update of parent %s: %w", parentMsgID, err)
 		}
@@ -381,7 +381,7 @@ func (h *Handler) handleThreadDeleted(ctx context.Context, evt *model.MessageEve
 		// receive the delete. Only the channel path uses mentions; the DM path
 		// fans out to all members.
 		parsed := mention.Parse(msg.Content)
-		fanOut, err := h.channelThreadFanOut(ctx, room.ID, room.SiteID, parentMsgID, msg.UserAccount, parsed.Accounts)
+		fanOut, err := h.channelThreadFanOut(ctx, room.ID, room.SiteID, parentMsgID, msg.UserAccount, parsed.Accounts, msg.ThreadParentMessageCreatedAt, evt.ThreadParentSenderAccount)
 		if err != nil {
 			return fmt.Errorf("channel thread fan-out for thread delete of parent %s: %w", parentMsgID, err)
 		}
@@ -1019,14 +1019,26 @@ func (h *Handler) allowedThreadMentions(ctx context.Context, roomID string, ment
 
 // channelThreadFanOut builds the deduplicated channel recipient set: the reply sender
 // + the parent author (both included for multi-device sync / thread ownership, race-free)
-// + the parent's thread followers + history-gated @-mentions, bots excluded. The parent
-// is fetched from history-service (authoritative CreatedAt for the gate + author account);
-// a fetch error is returned so the caller NAKs and JetStream redelivers. The gate lives
-// here so no thread handler can bypass it.
-func (h *Handler) channelThreadFanOut(ctx context.Context, roomID, siteID, parentMsgID, sender string, mentions []string) ([]string, error) {
-	parent, err := h.parentFetcher.FetchParent(ctx, sender, roomID, siteID, parentMsgID)
-	if err != nil {
-		return nil, fmt.Errorf("fetch thread parent %s: %w", parentMsgID, err)
+// + the parent's thread followers + history-gated @-mentions, bots excluded.
+//
+// The parent's CreatedAt (gate) and author account (recipient) come from the event
+// when the gatekeeper resolved them on the send path (eventParentCreatedAt != nil &&
+// eventParentSenderAccount != "") — skipping the history-service round-trip. When either
+// is absent (edit/delete canonical events bypass the gatekeeper, or a gatekeeper
+// soft-fail) both are fetched from history-service; a fetch error is returned so the
+// caller NAKs and JetStream redelivers. The gate lives here so no thread handler can
+// bypass it.
+func (h *Handler) channelThreadFanOut(ctx context.Context, roomID, siteID, parentMsgID, sender string, mentions []string, eventParentCreatedAt *time.Time, eventParentSenderAccount string) ([]string, error) {
+	parent := &ParentMessageInfo{}
+	if eventParentCreatedAt != nil && eventParentSenderAccount != "" {
+		parent.CreatedAt = *eventParentCreatedAt
+		parent.SenderAccount = eventParentSenderAccount
+	} else {
+		fetched, err := h.parentFetcher.FetchParent(ctx, sender, roomID, siteID, parentMsgID)
+		if err != nil {
+			return nil, fmt.Errorf("fetch thread parent %s: %w", parentMsgID, err)
+		}
+		parent = fetched
 	}
 	allowed, err := h.allowedThreadMentions(ctx, roomID, mentions, &parent.CreatedAt)
 	if err != nil {

@@ -2049,7 +2049,7 @@ func TestHandler_processMessage_ThreadParentCreatedAt_ResolvedViaFetch(t *testin
 	parentCreatedAt := time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
 	fetcher.EXPECT().
 		FetchQuotedParent(gomock.Any(), "alice", "room-1", "site-a", parentID).
-		Return(&cassandra.QuotedParentMessage{MessageID: parentID, CreatedAt: parentCreatedAt}, nil)
+		Return(&cassandra.QuotedParentMessage{MessageID: parentID, CreatedAt: parentCreatedAt, Sender: cassandra.Participant{Account: "bob"}}, nil)
 
 	req := model.SendMessageRequest{
 		ID:                    idgen.GenerateMessageID(),
@@ -2070,6 +2070,7 @@ func TestHandler_processMessage_ThreadParentCreatedAt_ResolvedViaFetch(t *testin
 	require.NoError(t, json.Unmarshal((*published)[0].data, &evt))
 	require.NotNil(t, evt.Message.ThreadParentMessageCreatedAt, "resolved createdAt must ride the canonical event")
 	assert.True(t, evt.Message.ThreadParentMessageCreatedAt.Equal(parentCreatedAt))
+	assert.Equal(t, "bob", evt.ThreadParentSenderAccount, "resolved parent sender account must ride the canonical event")
 }
 
 func TestHandler_processMessage_ThreadParentCreatedAt_FetchFails_StillPublishes(t *testing.T) {
@@ -2096,6 +2097,7 @@ func TestHandler_processMessage_ThreadParentCreatedAt_FetchFails_StillPublishes(
 	var evt model.MessageEvent
 	require.NoError(t, json.Unmarshal((*published)[0].data, &evt))
 	assert.Nil(t, evt.Message.ThreadParentMessageCreatedAt)
+	assert.Empty(t, evt.ThreadParentSenderAccount, "soft-fail ships without the parent sender account")
 }
 
 func TestHandler_processMessage_ThreadParentCreatedAt_NilSnapshot_StillPublishes(t *testing.T) {
@@ -2117,6 +2119,7 @@ func TestHandler_processMessage_ThreadParentCreatedAt_NilSnapshot_StillPublishes
 	var evt model.MessageEvent
 	require.NoError(t, json.Unmarshal((*published)[0].data, &evt))
 	assert.Nil(t, evt.Message.ThreadParentMessageCreatedAt)
+	assert.Empty(t, evt.ThreadParentSenderAccount, "nil snapshot ships without the parent sender account")
 }
 
 func TestHandler_processMessage_ThreadParentCreatedAt_ReusesVerifiedQuoteSnapshot(t *testing.T) {
@@ -2132,6 +2135,7 @@ func TestHandler_processMessage_ThreadParentCreatedAt_ReusesVerifiedQuoteSnapsho
 			MessageID: parentID,
 			RoomID:    "room-1",
 			CreatedAt: parentCreatedAt,
+			Sender:    cassandra.Participant{Account: "bob"},
 			Msg:       "the parent",
 		}, nil).
 		Times(1)
@@ -2150,6 +2154,7 @@ func TestHandler_processMessage_ThreadParentCreatedAt_ReusesVerifiedQuoteSnapsho
 	require.NoError(t, json.Unmarshal((*published)[0].data, &evt))
 	require.NotNil(t, evt.Message.ThreadParentMessageCreatedAt)
 	assert.True(t, evt.Message.ThreadParentMessageCreatedAt.Equal(parentCreatedAt))
+	assert.Equal(t, "bob", evt.ThreadParentSenderAccount, "verified quote snapshot's Sender account must be reused")
 }
 
 func TestHandler_processMessage_NonThreadMessage_NoParentFetch(t *testing.T) {

@@ -2243,6 +2243,61 @@ func TestMessageEvent_QuotedParentUnverified_JSON(t *testing.T) {
 	})
 }
 
+func TestMessageEvent_ThreadParentSenderAccount_JSON(t *testing.T) {
+	t.Run("account round-trips when set", func(t *testing.T) {
+		evt := model.MessageEvent{
+			Event:                     model.EventCreated,
+			Message:                   model.Message{ID: "m1", RoomID: "r1"},
+			SiteID:                    "site-a",
+			Timestamp:                 123,
+			ThreadParentSenderAccount: "alice",
+		}
+		data, err := json.Marshal(&evt)
+		require.NoError(t, err)
+
+		var raw map[string]any
+		require.NoError(t, json.Unmarshal(data, &raw))
+		assert.Equal(t, "alice", raw["threadParentSenderAccount"])
+
+		var dst model.MessageEvent
+		require.NoError(t, json.Unmarshal(data, &dst))
+		assert.Equal(t, "alice", dst.ThreadParentSenderAccount)
+	})
+
+	t.Run("omitted when empty", func(t *testing.T) {
+		evt := model.MessageEvent{
+			Event:     model.EventCreated,
+			Message:   model.Message{ID: "m1", RoomID: "r1"},
+			SiteID:    "site-a",
+			Timestamp: 123,
+		}
+		data, err := json.Marshal(&evt)
+		require.NoError(t, err)
+		var raw map[string]any
+		require.NoError(t, json.Unmarshal(data, &raw))
+		_, present := raw["threadParentSenderAccount"]
+		assert.False(t, present, "threadParentSenderAccount should be omitted when empty")
+	})
+
+	t.Run("never persisted to BSON (envelope-only)", func(t *testing.T) {
+		evt := model.MessageEvent{
+			Event:                     model.EventCreated,
+			Message:                   model.Message{ID: "m1", RoomID: "r1"},
+			SiteID:                    "site-a",
+			Timestamp:                 123,
+			ThreadParentSenderAccount: "alice",
+		}
+		data, err := bson.Marshal(&evt)
+		require.NoError(t, err)
+		var raw bson.M
+		require.NoError(t, bson.Unmarshal(data, &raw))
+		_, present := raw["threadParentSenderAccount"]
+		assert.False(t, present, "threadParentSenderAccount must be excluded from BSON (bson:\"-\")")
+		_, present = raw["threadparentsenderaccount"]
+		assert.False(t, present, "ThreadParentSenderAccount must not be BSON-encoded under the default (lowercase) field name")
+	})
+}
+
 func TestMessage_QuotedParentMessage_JSON(t *testing.T) {
 	parentTS := time.Date(2026, 1, 1, 11, 0, 0, 0, time.UTC)
 	threadParentTS := time.Date(2026, 1, 1, 8, 0, 0, 0, time.UTC)

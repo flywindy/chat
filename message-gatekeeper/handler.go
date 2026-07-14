@@ -330,10 +330,11 @@ func (h *Handler) processMessage(ctx context.Context, account, roomID, siteID st
 		slog.DebugContext(ctx, "gatekeeper quote resolved", "request_id", req.RequestID, "quoted_id", req.QuotedParentMessageID, "unverified", quotedUnverified)
 	}
 
-	// Resolve the thread parent's createdAt server-side, best-effort: a fetch
-	// failure ships the event without the value (each consumer falls back to a
-	// store it owns), so a Cassandra outage never blocks the send path.
-	threadParentCreatedAt := h.resolveThreadParentCreatedAt(ctx, account, roomID, siteID, req, quotedSnapshot, quotedUnverified)
+	// Resolve the thread parent's createdAt + sender account server-side,
+	// best-effort: a fetch failure ships the event without the values (each
+	// consumer falls back to a store it owns), so a Cassandra outage never blocks
+	// the send path. Both ride the same fetch.
+	threadParentCreatedAt, threadParentSenderAccount := h.resolveThreadParent(ctx, account, roomID, siteID, req, quotedSnapshot, quotedUnverified)
 
 	// Compose the sender's render-ready display name once at write time so every
 	// downstream consumer (notification-worker, future search-sync-worker) reads
@@ -377,7 +378,7 @@ func (h *Handler) processMessage(ctx context.Context, account, roomID, siteID st
 	// envelope (not the persisted Message) so message-worker knows to re-project
 	// the authoritative snapshot before the durable write when the gatekeeper had
 	// to fall back to the untrusted client snapshot.
-	evt := model.MessageEvent{Event: model.EventCreated, Message: msg, SiteID: siteID, Timestamp: now.UnixMilli(), QuotedParentUnverified: quotedUnverified}
+	evt := model.MessageEvent{Event: model.EventCreated, Message: msg, SiteID: siteID, Timestamp: now.UnixMilli(), QuotedParentUnverified: quotedUnverified, ThreadParentSenderAccount: threadParentSenderAccount}
 	evtData, err := sonic.Marshal(evt)
 	if err != nil {
 		return nil, fmt.Errorf("marshal message event: %w", err)
@@ -395,39 +396,40 @@ func (h *Handler) processMessage(ctx context.Context, account, roomID, siteID st
 	return sonic.Marshal(msg)
 }
 
-// resolveThreadParentCreatedAt resolves the thread parent's createdAt
-// server-side, returning nil for a non-thread reply. It reuses the quote
-// snapshot's CreatedAt when the parent is also the verified quoted message
-// (the unverified placeholder carries a synthetic timestamp), otherwise
-// fetches by ID. Best-effort: any failure logs a warning and returns nil —
-// downstream consumers fall back to their own stores.
-func (h *Handler) resolveThreadParentCreatedAt(
+// resolveThreadParent resolves the thread parent's createdAt and sender account
+// server-side, returning (nil, "") for a non-thread reply. It reuses the quote
+// snapshot when the parent is also the verified quoted message (the unverified
+// placeholder carries a synthetic timestamp), otherwise fetches by ID. Both
+// values come from the same snapshot in one fetch. Best-effort: any failure logs
+// a warning and returns (nil, "") — downstream consumers fall back to their own
+// stores.
+func (h *Handler) resolveThreadParent(
 	ctx context.Context,
 	account, roomID, siteID string,
 	req *model.SendMessageRequest,
 	quotedSnapshot *cassandra.QuotedParentMessage,
 	quotedUnverified bool,
-) *time.Time {
+) (*time.Time, string) {
 	if req.ThreadParentMessageID == "" {
-		return nil
+		return nil, ""
 	}
 	if quotedSnapshot != nil && !quotedUnverified && req.QuotedParentMessageID == req.ThreadParentMessageID {
 		t := quotedSnapshot.CreatedAt.UTC()
-		return &t
+		return &t, quotedSnapshot.Sender.Account
 	}
 	if h.parentFetcher == nil {
-		return nil
+		return nil, ""
 	}
 	snap, err := h.parentFetcher.FetchQuotedParent(ctx, account, roomID, siteID, req.ThreadParentMessageID)
 	if err != nil || snap == nil {
-		slog.WarnContext(ctx, "thread parent createdAt resolution failed, publishing without it",
+		slog.WarnContext(ctx, "thread parent resolution failed, publishing without it",
 			"error", err,
 			"parent_message_id", req.ThreadParentMessageID,
 			"request_id", req.RequestID)
-		return nil
+		return nil, ""
 	}
 	t := snap.CreatedAt.UTC()
-	return &t
+	return &t, snap.Sender.Account
 }
 
 // resolveQuoteSnapshot resolves the quoted parent into a snapshot, preferring the
