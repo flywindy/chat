@@ -25,6 +25,7 @@ func TestNewMetrics(t *testing.T) {
 	m.onExhausted(context.Background(), "update", "rocketchat_room")
 	m.onUserSeed(context.Background(), "insert")
 	m.onResolveMiss(context.Background(), "user")
+	m.onWrite(context.Background(), "company_room_members", "upsert")
 }
 
 func TestMetrics_NilSafe(t *testing.T) {
@@ -37,6 +38,7 @@ func TestMetrics_NilSafe(t *testing.T) {
 		m.onExhausted(context.Background(), "update", "rocketchat_room")
 		m.onUserSeed(context.Background(), "present")
 		m.onResolveMiss(context.Background(), "thread_room")
+		m.onWrite(context.Background(), "company_room_members", "delete_noop")
 	})
 }
 

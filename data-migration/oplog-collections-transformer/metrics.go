@@ -19,6 +19,7 @@ type metrics struct {
 	exhausted   metric.Int64Counter
 	userSeed    metric.Int64Counter
 	resolveMiss metric.Int64Counter
+	writes      metric.Int64Counter
 }
 
 func newMetrics() (*metrics, error) {
@@ -54,13 +55,18 @@ func newMetrics() (*metrics, error) {
 		return nil, fmt.Errorf("user seed counter: %w", err)
 	}
 	resolveMiss, err := m.Int64Counter("oplog_collections_transformer_resolve_miss_total",
-		metric.WithDescription("foreign-key resolution misses (thread-sub user/thread_room), by kind"))
+		metric.WithDescription("foreign-key resolution misses (thread-sub user/thread_room, room-member user), by kind"))
 	if err != nil {
 		return nil, fmt.Errorf("resolve miss counter: %w", err)
 	}
+	writes, err := m.Int64Counter("oplog_collections_transformer_writes_total",
+		metric.WithDescription("direct target writes, by collection+action"))
+	if err != nil {
+		return nil, fmt.Errorf("writes counter: %w", err)
+	}
 	return &metrics{
 		processed: processed, naks: naks, terms: terms, skipped: skipped,
-		exhausted: exhausted, userSeed: userSeed, resolveMiss: resolveMiss,
+		exhausted: exhausted, userSeed: userSeed, resolveMiss: resolveMiss, writes: writes,
 	}, nil
 }
 
@@ -123,4 +129,13 @@ func (m *metrics) onResolveMiss(ctx context.Context, kind string) {
 		return
 	}
 	m.resolveMiss.Add(ctx, 1, metric.WithAttributes(attribute.String("kind", kind)))
+}
+
+// onWrite records a direct target write (room-member upsert/delete), labelled by collection and
+// action ("upsert", "delete", or "delete_noop" for a delete that matched no row).
+func (m *metrics) onWrite(ctx context.Context, collection, action string) {
+	if m == nil {
+		return
+	}
+	m.writes.Add(ctx, 1, metric.WithAttributes(attribute.String("collection", collection), attribute.String("action", action)))
 }

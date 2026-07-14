@@ -486,3 +486,72 @@ func TestEndToEnd_ThreadSub_NakThenResolve(t *testing.T) {
 	assert.Equal(t, model.InboxThreadSubscriptionUpserted, outboxEvt.Type)
 	assert.Equal(t, site, outboxEvt.SiteID)
 }
+
+func TestMongoTargetStore_RoomMemberUpsertAndDelete(t *testing.T) {
+	db := testutil.MongoDB(t, "collxform-rm")
+	store := NewMongoTargetStore(db)
+	ctx := context.Background()
+
+	rm := model.RoomMember{
+		ID: "legacyRandomId17ch", RoomID: "GENERAL",
+		Ts:     time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC),
+		Member: model.RoomMemberEntry{ID: "org-123", Type: model.RoomMemberOrg},
+	}
+	require.NoError(t, store.UpsertRoomMember(ctx, rm))
+	var got model.RoomMember
+	require.NoError(t, db.Collection("room_members").FindOne(ctx, bson.M{"_id": rm.ID}).Decode(&got))
+	assert.Equal(t, "GENERAL", got.RoomID)
+	assert.Equal(t, model.RoomMemberOrg, got.Member.Type)
+
+	// Redelivery-idempotent: same _id replaced, still one doc.
+	require.NoError(t, store.UpsertRoomMember(ctx, rm))
+	n, err := db.Collection("room_members").CountDocuments(ctx, bson.M{"_id": rm.ID})
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), n)
+
+	deleted, err := store.DeleteRoomMember(ctx, rm.ID)
+	require.NoError(t, err)
+	assert.True(t, deleted)
+	n, err = db.Collection("room_members").CountDocuments(ctx, bson.M{"_id": rm.ID})
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), n)
+
+	// Delete of a never-migrated id is a no-op, not an error.
+	deleted, err = store.DeleteRoomMember(ctx, "ghost")
+	require.NoError(t, err)
+	assert.False(t, deleted)
+}
+
+func TestRoomMembers_EndToEnd_InsertThenDelete(t *testing.T) {
+	db := testutil.MongoDB(t, "collxform-rm-e2e")
+	store := NewMongoTargetStore(db)
+	ctx := context.Background()
+
+	// Seed the user the individual entry resolves against.
+	_, err := db.Collection("users").InsertOne(ctx, bson.M{"_id": "newU1", "account": "jdoe"})
+	require.NoError(t, err)
+
+	h := &handler{
+		siteID:          "site1",
+		roomMembersColl: "company_room_members",
+		target:          store,
+		lookups:         map[string]migration.SourceLookup{},
+	}
+
+	ins := oplogEvent{Op: "insert", Collection: "company_room_members",
+		DocumentKey:  json.RawMessage(`{"_id":"srcE2E"}`),
+		FullDocument: json.RawMessage(`{"_id":"srcE2E","rid":"GENERAL","member":{"type":"individual","id":"legacyU9","username":"jdoe"},"ts":{"$date":"2026-07-04T00:00:00Z"}}`)}
+	require.NoError(t, h.handle(ctx, ins))
+
+	var got model.RoomMember
+	require.NoError(t, db.Collection("room_members").FindOne(ctx, bson.M{"_id": "srcE2E"}).Decode(&got))
+	assert.Equal(t, "newU1", got.Member.ID)
+	assert.Equal(t, "jdoe", got.Member.Account)
+
+	del := oplogEvent{Op: "delete", Collection: "company_room_members",
+		DocumentKey: json.RawMessage(`{"_id":"srcE2E"}`)}
+	require.NoError(t, h.handle(ctx, del))
+	n, err := db.Collection("room_members").CountDocuments(ctx, bson.M{"_id": "srcE2E"})
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), n)
+}

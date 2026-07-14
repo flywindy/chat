@@ -206,3 +206,108 @@ Handled by **`oplog-direct-transfer`**: copied verbatim (whole doc, same `_id`) 
 new-stack collection, mirroring insert/update/replace/delete. Metadata only — the actual file/blob
 bytes for `rocketchat_uploads`/`ufsTokens`/`rocketchat_avatar` (UFS/GridFS) are a separate owner's
 concern. See `docs/superpowers/specs/2026-07-01-oplog-direct-transfer-design.md`.
+
+## 7. `company_room_members` — open questions (room-member migration)
+
+> For the source engineers / migration owner. Destination: new-stack `room_members`
+> (`{_id, rid, ts, member:{id, type: individual|org, account}}`), written **directly** by
+> `oplog-collections-transformer` (decision: no room-worker involvement). Please answer inline
+> under each question; a few pasted sample documents are worth more than prose.
+
+**Q1 — Document shape.** Is `company_room_members` one document per (room, member), or one document
+per room containing a members array? What are the exact field names for the room id, the member
+id, and the member kind? Please paste 2–3 real (redacted) sample docs — ideally one org entry and
+one individual entry if both exist.
+
+**Answer:**
+it is one document per (room, member) pair
+_id, rid, member: {type: , id:, }ts federation: {origin:  }
+
+key fields:  rid (room id), member.type org|individual|app|user member.id _id or HR org ID member.username (individual only) and ts
+
+
+**Q2 — `_id` format.** What does `_id` look like, and is it deterministic/composite (e.g.
+`{rid}:{orgId}`) or opaque (ObjectId/random)? Context: a change-stream `delete` carries only the
+`_id` of the already-deleted doc — if the natural key `(rid, member kind, member id)` can be
+derived from `_id`, deletes map directly; if not, we must persist the source `_id` on each target
+doc to route deletes.
+
+**Answer:**
+Opaque, both code paths use RandomID()
+no deterministic composition
+must persist the source _id on target docs to resolve deletes, without showExpandedEvents: true you lose the triple on hard delete
+
+
+
+**Q3 — Contents: orgs only, or individuals too?** Does the collection hold only org/department
+memberships, or also individual user entries? Context: the new-stack reader
+(`room-service.ListRoomMembers`) returns *only* `room_members` rows once a room has any — the
+subscriptions fallback then stops. If the source is org-only, rooms would lose their individual
+members from the member list after migration unless individual entries are synthesized; if the
+source holds both, a faithful copy is complete as-is.
+
+**Answer:**
+both org and individuals
+.member.type helps here
+
+
+**Q4 — Org member id semantics.** For an org entry, what exactly is the member identifier (HR
+org/dept id?), and does it match the ids used by `company_hr_acct_org` / the HR org sync? (The
+new-stack enrichment joins `member.id` against the HR org data — the ids must line up.)
+
+**Answer:**
+identical to company_hr_acct_org.orgs[].id no mapping or transfromation is applied.
+
+**Q5 — Mutation pattern.** How does the legacy app maintain this collection — insert/delete only,
+or in-place updates too? Are removals hard deletes, or a soft-delete flag? Any TTL/out-of-band
+cleanup that would bypass the change stream?
+
+**Answer:**
+insert/delete only, hard deletes
+insert + hard delete only . no in-plce updates. No soft-delete flag.
+
+no updateone/updatemany calls
+change stream: we see insert and delete events only no updates
+
+
+**Q6 — Timestamp.** Which source field (if any) records when the member was added? The target's
+`ts` drives the member-list sort order.
+
+**Answer:**
+ts filed. set at insert time. insertation timestamp no seperate updated timestamp. 
+
+
+
+**Q7 — Bulk-migration mapping.** The bulk owner will populate `room_members` for state ≤ the
+checkpoint. What mapping will they apply (field mapping, `_id` strategy, org/individual handling)?
+Our CDC tail must apply the **identical** mapping or the data diverges at the checkpoint boundary.
+
+**Answer:**
+do we need this answer?
+Bulk is not our job.
+
+
+**Q8 — Volume/churn.** Rough doc count and change rate (events/day)? Only used to sanity-check
+that the sequential consumer is sufficient.
+
+**Answer:**
+will see later. This question can be asked about any collection we handle, we dont need this answer.
+
+### §7 finding — `member.type` value-set mismatch (decision recorded 2026-07-13)
+
+**Finding:** the legacy collection carries **four** `member.type` values — `org | individual | app | user` —
+while the new-stack `room_members` schema defines exactly **two** (`individual | org`). The semantics of
+legacy `app` and `user` entries are not yet confirmed (they come from two different legacy code paths).
+
+**Decision:** the transformer maps ONLY the two types whose meaning is known — `org` and `individual`.
+**Any other `member.type` value** (the known `app`/`user`, or anything unexpected) is **error-logged and
+skipped** (Ack + `skipped` metric with a distinct reason label, so the volume is visible) — a catch-all
+rule, not an enumerated skip-list. These entries are NOT migrated for now; where `app`/`user` map will be
+decided in a follow-up once their semantics are confirmed. Anyone reading counts: skipped ≠ lost — the events remain
+in the source collection and can be re-migrated once mapped.
+
+**Individual-entry mapping (code-anchored, for the record):** target `member.account` ← legacy
+`member.username` (the reader's enrichment joins individuals on `account`); target `member.id` ← the
+**new-stack** user `_id` resolved via the transformer's existing `FindUserID(account)` (room-worker's
+dedup queries match `member.id` against new-stack user ids — carrying the legacy user `_id` would break
+them). Unresolvable user at event time ⇒ Nak-retry until the user is seeded (thread-subs precedent).

@@ -153,3 +153,18 @@ func TestParseConfig_WhitespaceSourceMongoURI_Errors(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "SOURCE_MONGO_URI must be non-empty")
 }
+
+func TestParseConfig_RoomMembersCollectionDefault(t *testing.T) {
+	setRequiredEnv(t)
+	cfg, err := parseConfig()
+	require.NoError(t, err)
+	assert.Equal(t, "company_room_members", cfg.RoomMembersCollection)
+}
+
+func TestParseConfig_RoomMembersCollectionBlankFails(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("ROOM_MEMBERS_COLLECTION", "   ")
+	_, err := parseConfig()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ROOM_MEMBERS_COLLECTION")
+}

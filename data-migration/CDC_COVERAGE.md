@@ -68,8 +68,35 @@ the destination adopts the source `_id`, **delete is actionable** (unlike the re
 
 Collections: `rocketchat_avatar`, `company_apps_v`, `company_bot_cmd_men`, `company_tsso_tokens`,
 `rocketchat_uploads`, `company_bot_authorization`, `ufsTokens`, `user_devices`.
+
 **Metadata only** — file/blob bytes (UFS/GridFS) are out of scope. No destination indexes or TTL
 (removal is CDC-driven). Design: `docs/superpowers/specs/2026-07-01-oplog-direct-transfer-design.md`.
+
+## `company_room_members` coverage (oplog-collections-transformer)
+
+Migrated by **oplog-collections-transformer** (`roommembers.go`) — field-**mapped**, not a verbatim
+copy. Target `_id` is adopted from the source `_id`, but the document itself is remapped (member type
+narrowed, `member.id` re-keyed for individuals — see below), so this collection is covered by the
+collections-transformer, not `oplog-direct-transfer`.
+
+**member.type mapping:** source `member.type` has four values (`org` | `individual` | `app` | `user`);
+target schema admits exactly two (`org` | `individual`). Per SOURCE_DATA §7 decision:
+
+- `org` and `individual` entries → mapped and upserted into target `room_members`: `_id` adopted from
+  source `_id`; `member.account` ← source `member.username`; `ts` copied
+- **Individual member resolution:** target `member.id` = new-stack user id, **re-keyed** via
+  `FindUserID(account)` — not copied verbatim; unresolved → Nak-retry (thread-subs precedent)
+- **Org member:** target `member.id` = legacy org id (identical to HR org data; no transformation)
+- `app` / `user` / unexpected values → error-logged and **skipped** with metric reason
+  `room_member_type_unmapped`, Ack (not Nak) — skipped ≠ lost; re-migration is possible once
+  semantics are confirmed
+
+| Op | Handling |
+|---|---|
+| `insert` / `replace` | map + upsert by adopted `_id` (see mapping above) |
+| `update` | n/a per source contract — source is insert + hard-delete only; handled defensively: re-read full current doc + upsert, `Warn`-logged as unexpected |
+| `delete` | ✅ actionable — delete by `_id` (destination adopts source `_id`); no-op for entries whose type was never migrated (skipped-type, e.g. `app`/`user`) |
+| collection-level (`drop`/`rename`/`invalidate`) | ⚠️ out of scope, deferred |
 
 ## inbox-worker handler coverage
 

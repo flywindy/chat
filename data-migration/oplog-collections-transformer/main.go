@@ -95,9 +95,11 @@ func main() {
 		cfg.SubscriptionsCollection: migration.NewMongoSourceLookup(sourceDB.Collection(cfg.SubscriptionsCollection, options.Collection().SetReadPreference(rp))),
 		cfg.ThreadSubsCollection:    migration.NewMongoSourceLookup(sourceDB.Collection(cfg.ThreadSubsCollection, options.Collection().SetReadPreference(rp))),
 		cfg.UsersCollection:         migration.NewMongoSourceLookup(sourceDB.Collection(cfg.UsersCollection, options.Collection().SetReadPreference(rp))),
+		cfg.RoomMembersCollection:   migration.NewMongoSourceLookup(sourceDB.Collection(cfg.RoomMembersCollection, options.Collection().SetReadPreference(rp))),
 	}
 
-	// Target new-stack per-site Mongo: user insert-if-absent + thread_room/user FK resolution.
+	// Target new-stack per-site Mongo: user insert-if-absent, thread_room/user FK resolution, and
+	// room-member direct writes.
 	targetClient, err := mongoutil.Connect(ctx, cfg.TargetMongoURI, cfg.TargetUsername, cfg.TargetPassword)
 	if err != nil {
 		slog.Error("target mongo connect failed", "error", err)
@@ -137,17 +139,18 @@ func main() {
 	}
 
 	h := &handler{
-		siteID:         cfg.SiteID,
-		allSiteIDs:     cfg.AllSiteIDs,
-		roomsColl:      cfg.RoomsCollection,
-		subsColl:       cfg.SubscriptionsCollection,
-		threadSubsColl: cfg.ThreadSubsCollection,
-		usersColl:      cfg.UsersCollection,
-		pub:            &jetstreamPublisher{publish: js.PublishMsg},
-		target:         target,
-		lookups:        lookups,
-		metrics:        m,
-		now:            nowMs,
+		siteID:          cfg.SiteID,
+		allSiteIDs:      cfg.AllSiteIDs,
+		roomsColl:       cfg.RoomsCollection,
+		subsColl:        cfg.SubscriptionsCollection,
+		threadSubsColl:  cfg.ThreadSubsCollection,
+		usersColl:       cfg.UsersCollection,
+		roomMembersColl: cfg.RoomMembersCollection,
+		pub:             &jetstreamPublisher{publish: js.PublishMsg},
+		target:          target,
+		lookups:         lookups,
+		metrics:         m,
+		now:             nowMs,
 	}
 
 	streamName := stream.MigrationOplog(cfg.SiteID).Name
@@ -163,6 +166,7 @@ func main() {
 			subject.MigrationOplog(cfg.SiteID, cfg.SubscriptionsCollection, "*"),
 			subject.MigrationOplog(cfg.SiteID, cfg.ThreadSubsCollection, "*"),
 			subject.MigrationOplog(cfg.SiteID, cfg.UsersCollection, "*"),
+			subject.MigrationOplog(cfg.SiteID, cfg.RoomMembersCollection, "*"),
 		},
 	})
 	if err != nil {
@@ -199,6 +203,15 @@ func main() {
 	)
 }
 
+// deliverCapFor selects the redelivery cap. Deletes get the short deleteMaxDeliver (their race
+// converges in seconds) — except room-member deletes, which really write and must survive a target outage.
+func (h *handler) deliverCapFor(op, collection string, maxDeliver, deleteMaxDeliver int) int {
+	if op == "delete" && collection != h.roomMembersColl {
+		return deleteMaxDeliver
+	}
+	return maxDeliver
+}
+
 // processOne decodes one event and maps its outcome to a JetStream disposition: Ack on success,
 // Term on poison, Nak-with-delay on transient up to maxDeliver, then Term-with-metric (not silent drop).
 func processOne(ctx context.Context, h *handler, m jetstream.Msg, mtr *metrics, maxDeliver, deleteMaxDeliver int) {
@@ -219,12 +232,7 @@ func processOne(ctx context.Context, h *handler, m jetstream.Msg, mtr *metrics, 
 		dispose("term", m.Term)
 		return
 	}
-	// Hard deletes get a shorter cap: a foreign-origin one can't be recognised (no doc) and would
-	// otherwise churn to the global MaxDeliver; the local race needs only seconds to converge.
-	deliverCap := maxDeliver
-	if ev.Op == "delete" {
-		deliverCap = deleteMaxDeliver
-	}
+	deliverCap := h.deliverCapFor(ev.Op, ev.Collection, maxDeliver, deleteMaxDeliver)
 	// Resolve delivery count; a Metadata error prefers Nak over a premature Term.
 	var numDelivered uint64
 	if meta, err := m.Metadata(); err == nil {

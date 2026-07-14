@@ -43,6 +43,18 @@ type fakeTarget struct {
 	upserted []model.User
 	inserted bool
 	err      error
+
+	roomMemberUpserts []model.RoomMember
+	roomMemberDeletes []string
+	roomMemberErr     error
+	// deleteNoop makes DeleteRoomMember report deleted=false (row already absent), like a delete
+	// for an id that was never mapped/upserted.
+	deleteNoop bool
+
+	// userIDs maps account -> new-stack user id for FindUserID resolution; absent key ⇒ not found.
+	userIDs map[string]string
+	// findUserErr, when set, makes FindUserID return it instead of consulting userIDs.
+	findUserErr error
 }
 
 //nolint:gocritic // signature pinned by the targetStore interface.
@@ -58,8 +70,29 @@ func (f *fakeTarget) FindThreadRoom(_ context.Context, _ string) (string, string
 	return "", "", "", false, nil
 }
 
-func (f *fakeTarget) FindUserID(_ context.Context, _ string) (string, bool, error) {
-	return "", false, nil
+func (f *fakeTarget) FindUserID(_ context.Context, account string) (string, bool, error) {
+	if f.findUserErr != nil {
+		return "", false, f.findUserErr
+	}
+	id, found := f.userIDs[account]
+	return id, found, nil
+}
+
+//nolint:gocritic // signature pinned by the targetStore interface.
+func (f *fakeTarget) UpsertRoomMember(_ context.Context, rm model.RoomMember) error {
+	if f.roomMemberErr != nil {
+		return f.roomMemberErr
+	}
+	f.roomMemberUpserts = append(f.roomMemberUpserts, rm)
+	return nil
+}
+
+func (f *fakeTarget) DeleteRoomMember(_ context.Context, id string) (bool, error) {
+	if f.roomMemberErr != nil {
+		return false, f.roomMemberErr
+	}
+	f.roomMemberDeletes = append(f.roomMemberDeletes, id)
+	return !f.deleteNoop, nil
 }
 
 const (
@@ -72,19 +105,21 @@ const (
 
 func newTestHandler(pub inboxPublisher, target targetStore, lookup migration.SourceLookup) *handler {
 	return &handler{
-		siteID:         testSiteID,
-		allSiteIDs:     []string{testSiteID, "s2"},
-		roomsColl:      roomsColl,
-		subsColl:       subsColl,
-		threadSubsColl: threadSubColl,
-		usersColl:      usersColl,
-		pub:            pub,
-		target:         target,
+		siteID:          testSiteID,
+		allSiteIDs:      []string{testSiteID, "s2"},
+		roomsColl:       roomsColl,
+		subsColl:        subsColl,
+		threadSubsColl:  threadSubColl,
+		usersColl:       usersColl,
+		roomMembersColl: rmColl,
+		pub:             pub,
+		target:          target,
 		lookups: map[string]migration.SourceLookup{
 			roomsColl:     lookup,
 			subsColl:      lookup,
 			threadSubColl: lookup,
 			usersColl:     lookup,
+			rmColl:        lookup,
 			"":            lookup, // bare resolveDoc tests that don't set Collection
 		},
 		now: func() int64 { return 1700000000000 },
